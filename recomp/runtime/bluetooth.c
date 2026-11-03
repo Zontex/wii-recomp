@@ -8,7 +8,7 @@
 
 #include "bluetooth.h"
 #include "cpu.h"
-#include "game.h"
+#include "title.h"
 #include "ios.h"
 #include "wii_remote.h"
 
@@ -68,7 +68,7 @@ static void find_devices(void) {
   if (found) return;
   found = 1;
   devices[0].present = 1;
-  devices[BLUETOOTH_BOARD].present = game_calibration_flag != 0;
+  devices[BLUETOOTH_BOARD].present = title->calibration_flag != 0;
   for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
     static const uint8_t base[6] = {0x01, 0x00, 0x1f, 0x19, 0x00, 0x00};
     memcpy(devices[i].address, base, sizeof base);

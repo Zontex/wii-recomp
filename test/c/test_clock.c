@@ -3,7 +3,7 @@
 #include <unistd.h>
 #include "../harness.h"
 void debug_poll(uint64_t s) {}
-const int game_virtual_bluetooth = 0;
+const Title *title = &(Title){0};
 void bluetooth_update(uint64_t now) {}
 void stage_add(int s, uint64_t t) {}
 void video_retrace(void) {}

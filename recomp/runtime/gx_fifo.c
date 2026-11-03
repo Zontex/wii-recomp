@@ -14,7 +14,7 @@
 
 #include "cpu.h"
 #include "debug.h"
-#include "game.h"
+#include "title.h"
 #include "gx.h"
 #include "hardware.h"
 
@@ -327,11 +327,11 @@ static void pump(void) {
   }
   uint32_t read = read_pair(CP_FIFO_READ), write = read_pair(CP_FIFO_WRITE);
   uint32_t limit = ring_limit(end);
-  if (game_fifo_breakpoints) check_fifo_marks(control, read_pair(CP_FIFO_READ), read_pair(CP_FIFO_WRITE), limit - base);
-  int breaking = game_fifo_breakpoints && (control & CONTROL_BREAK_ENABLE);
+  if (title->fifo_breakpoints) check_fifo_marks(control, read_pair(CP_FIFO_READ), read_pair(CP_FIFO_WRITE), limit - base);
+  int breaking = title->fifo_breakpoints && (control & CONTROL_BREAK_ENABLE);
   uint32_t breakpoint = read_pair(CP_BREAKPOINT);
   if (at_breakpoint || held_at_token || resume_state != RUNNING) return;  // Bursts from the CPU land here too.
-  if (threaded < 0) threaded = !game_fifo_breakpoints && !getenv("WII_RECOMP_GX_INLINE") && start_commands_thread();
+  if (threaded < 0) threaded = !title->fifo_breakpoints && !getenv("WII_RECOMP_GX_INLINE") && start_commands_thread();
   if (threaded) {
     while (read != write) {
       uint32_t stop = read < write ? write : limit, count = stop - read;
@@ -351,7 +351,7 @@ static void pump(void) {
   stage_add(STAGE_STREAM, time_base() - stream_start);
   // Games that keep several frames in the FIFO stop the chip here, and its handler
   // moves the breakpoint on to the next frame.
-  if (game_fifo_breakpoints) check_fifo_marks(control, read, write, limit - base);
+  if (title->fifo_breakpoints) check_fifo_marks(control, read, write, limit - base);
   if (breaking && reached_breakpoint(read, breakpoint, base, limit)) {
     at_breakpoint = 1;
     if (control & CONTROL_INTERRUPT_ENABLE) {

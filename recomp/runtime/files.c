@@ -8,7 +8,7 @@
 
 #include "bluetooth.h"
 #include "wii_camera.h"
-#include "game.h"
+#include "title.h"
 #include "cpu.h"
 #include "ios.h"
 
@@ -94,7 +94,7 @@ int files_open(const char *path) {
     handle->changed = 0;
     snprintf(handle->path, sizeof handle->path, "%s", path);
     fread(handle->data, 1, (size_t)handle->size, file);
-    if (game_virtual_bluetooth && !strcmp(path, SETTINGS_FILE)) {
+    if (title->virtual_bluetooth && !strcmp(path, SETTINGS_FILE)) {
       bluetooth_register_remote(handle->data, (size_t)handle->size);
       camera_set_bar_above(settings_byte(handle->data, (size_t)handle->size, "BT.BAR") == 1);
     }

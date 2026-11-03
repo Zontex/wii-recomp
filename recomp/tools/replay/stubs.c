@@ -1,11 +1,12 @@
 // What the graphics files expect of the rest of the runtime. With no game running there
 // are no hardware registers, interrupts or clocks to answer them.
 #include "cpu.h"
-#include "game.h"
+#include "title.h"
 #include "gx.h"
 #include "hardware.h"
 
-const int game_fifo_breakpoints = 0;
+static const Title no_title;  // No game, so no FIFO breakpoints.
+const Title *title = &no_title;
 
 uint64_t time_base(void) { return 0; }
 uint32_t hw_read(uint32_t address, int bytes) { (void)address; (void)bytes; return 0; }

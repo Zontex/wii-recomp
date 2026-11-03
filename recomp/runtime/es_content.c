@@ -4,7 +4,7 @@
 
 #include "cpu.h"
 #include "es.h"
-#include "game.h"
+#include "title.h"
 #include "ios.h"
 #include "titles.h"
 
@@ -52,7 +52,7 @@ static OpenContent *handle_at(const IosVectors *vectors) {
 // A content of the running title.
 static int open_own_content(const IosVectors *vectors) {
   uint32_t in = ios_in_sized(vectors, 0, 4);
-  return in ? open_content((uint64_t)game_title_high << 32 | game_title_low, rd32(in)) : ES_EINVAL;
+  return in ? open_content((uint64_t)title->title_high << 32 | title->title_low, rd32(in)) : ES_EINVAL;
 }
 
 // A content of any title, with its ticket view.

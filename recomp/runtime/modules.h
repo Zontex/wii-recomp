@@ -34,9 +34,6 @@ typedef struct {
   uint32_t *code, *sections, *import_addresses;  // Filled in once the module is found.
 } Module;
 
-extern const Module *const game_modules[];
-extern const int game_module_count;
-
 // Called with an address nothing is translated for. Returns 1 if it lies in a linked
 // module, which is then checked and its functions made ready, and 0 if not.
 int modules_bind(uint32_t address);

@@ -131,9 +131,32 @@ static void choose_physical_device(void) {
 void vk_create_device(void) {
   choose_physical_device();
   vk.queue_family = (uint32_t)find_queue_family(vk.physical);
-  float priority = 1;
-  VkDeviceQueueCreateInfo queue = {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = vk.queue_family,
-                                   .queueCount = 1, .pQueuePriorities = &priority};
+  // The window's queue: a second one in the same family, or else another family that
+  // draws and shows. On the Mac, main.c asks for the extra families, each its own Metal queue.
+  uint32_t family_count = 0;
+  vkGetPhysicalDeviceQueueFamilyProperties(vk.physical, &family_count, 0);
+  VkQueueFamilyProperties *families = calloc(family_count, sizeof *families);
+  vkGetPhysicalDeviceQueueFamilyProperties(vk.physical, &family_count, families);
+  int own_show_queue = vk.surface && vk_window_wants_own_queue();
+  uint32_t show_family = vk.queue_family;
+  if (own_show_queue && families[vk.queue_family].queueCount < 2) {
+    own_show_queue = 0;
+    for (uint32_t i = 0; i < family_count && !own_show_queue; i++) {
+      VkBool32 presents = VK_FALSE;
+      vkGetPhysicalDeviceSurfaceSupportKHR(vk.physical, i, vk.surface, &presents);
+      if (i != vk.queue_family && (families[i].queueFlags & VK_QUEUE_GRAPHICS_BIT) && presents) {
+        show_family = i;
+        own_show_queue = 1;
+      }
+    }
+  }
+  free(families);
+  float priorities[2] = {1, 1};
+  int same_family = own_show_queue && show_family == vk.queue_family;
+  VkDeviceQueueCreateInfo queues[2] = {
+    {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = vk.queue_family, .queueCount = same_family ? 2 : 1, .pQueuePriorities = priorities},
+    {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = show_family, .queueCount = 1, .pQueuePriorities = priorities},
+  };
   const char *extensions[3];
   uint32_t extension_count = 0;
   if (vk.surface) extensions[extension_count++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
@@ -146,7 +169,7 @@ void vk_create_device(void) {
   wanted.dualSrcBlend = available.dualSrcBlend;
   vk.dual_source = available.dualSrcBlend == VK_TRUE;
   if (!vk.dual_source) fprintf(stderr, "vulkan: no dual-source blending, so constant alpha will blend slightly wrong\n");
-  VkDeviceCreateInfo info = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .queueCreateInfoCount = 1, .pQueueCreateInfos = &queue,
+  VkDeviceCreateInfo info = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .queueCreateInfoCount = own_show_queue && !same_family ? 2 : 1, .pQueueCreateInfos = queues,
                              .enabledExtensionCount = extension_count, .ppEnabledExtensionNames = extensions, .pEnabledFeatures = &wanted};
   // Vulkan on Metal leaves some things out, and using what's left must be declared.
   VkPhysicalDevicePortabilitySubsetFeaturesKHR portability = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR};
@@ -159,6 +182,9 @@ void vk_create_device(void) {
   }
   vk_check(vkCreateDevice(vk.physical, &info, 0, &vk.device), "creating the device");
   vkGetDeviceQueue(vk.device, vk.queue_family, 0, &vk.queue);
+  if (own_show_queue) vkGetDeviceQueue(vk.device, show_family, same_family ? 1 : 0, &vk.show_queue);
+  vk.show_family = show_family;
+  if (own_show_queue) fprintf(stderr, "vulkan: pictures shown on a queue of their own\n");
   if (pushes_textures) vk.push_descriptors = (PFN_vkCmdPushDescriptorSetKHR)vkGetDeviceProcAddr(vk.device, "vkCmdPushDescriptorSetKHR");
   VkFormatProperties depth;
   vkGetPhysicalDeviceFormatProperties(vk.physical, DEPTH_FORMAT, &depth);
@@ -190,9 +216,18 @@ static VkDeviceMemory allocate(VkMemoryRequirements needs, VkMemoryPropertyFlags
 
 void vk_create_image(VkFormat format, VkImageUsageFlags usage, uint32_t width, uint32_t height, uint32_t levels,
                      VkImage *image, VkDeviceMemory *memory) {
+  vk_create_shared_image(format, usage, width, height, levels, 0, image, memory);
+}
+
+void vk_create_shared_image(VkFormat format, VkImageUsageFlags usage, uint32_t width, uint32_t height, uint32_t levels, int shared,
+                            VkImage *image, VkDeviceMemory *memory) {
+  uint32_t both[2] = {vk.queue_family, vk.show_family};
+  int concurrent = shared && vk.show_family != vk.queue_family;
   VkImageCreateInfo info = {.sType = VK_STRUCTURE_TYPE_IMAGE_CREATE_INFO, .imageType = VK_IMAGE_TYPE_2D, .format = format,
                             .extent = {width, height, 1}, .mipLevels = levels, .arrayLayers = 1, .samples = VK_SAMPLE_COUNT_1_BIT,
-                            .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = usage, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED};
+                            .tiling = VK_IMAGE_TILING_OPTIMAL, .usage = usage, .initialLayout = VK_IMAGE_LAYOUT_UNDEFINED,
+                            .sharingMode = concurrent ? VK_SHARING_MODE_CONCURRENT : VK_SHARING_MODE_EXCLUSIVE,
+                            .queueFamilyIndexCount = concurrent ? 2 : 0, .pQueueFamilyIndices = both};
   vk_check(vkCreateImage(vk.device, &info, 0, image), "creating an image");
   VkMemoryRequirements needs;
   vkGetImageMemoryRequirements(vk.device, *image, &needs);

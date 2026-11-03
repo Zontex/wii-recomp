@@ -8,7 +8,7 @@
 #include <stdlib.h>
 
 #include "audio.h"
-#include "game.h"
+#include "title.h"
 #include "cpu.h"
 #include "debug.h"
 #include "hardware.h"
@@ -139,5 +139,5 @@ void audio_dsp_mail(uint32_t mail) {
   stage_add(STAGE_AUDIO, time_base() - started);
   push_frame(frame);
   if (wave) save_frame(frame);
-  dispatch(game_ax_frame_done);
+  dispatch(title->ax_frame_done);
 }

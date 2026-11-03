@@ -14,6 +14,8 @@ This project is licensed under the GNU General Public License, version 2 or late
   - Attachment encryption (`recomp/runtime/wii_attachment_key.c` and `wii_attachment_tables.h`): making the two tables from the key a game writes, by trying each of the seven indexes and falling back for a key none matches, and the first-party tables themselves, are taken from `Source/Core/Core/HW/WiimoteEmu/Encryption.cpp`, itself based on work by Hector Martin. The tables header is generated from that file by a script.
   - IR camera (`recomp/runtime/wii_camera.c`): the register layout, the tracking switch and the basic and extended dot formats follow `Source/Core/Core/HW/WiimoteEmu/Camera.cpp` and `Camera.h`.
   - Paired devices (`recomp/runtime/bluetooth.c`, `bluetooth_register_remote`): the layout of the settings' BT.DINF, with the board in the fifth active record, follows `Source/Core/Core/IOS/USB/Bluetooth/BTEmu.cpp` and `BTEmu.h`.
+  - Serial interface (`recomp/runtime/si.c`): the communication and status register bits, and an empty port's transfer ending with a communication error and "no response", follow `Source/Core/Core/HW/SI/SI.cpp` and `SI.h`.
+  - Disc drive (`recomp/runtime/dvd.c`, `drive.c`): the drive request numbers, the open-partition buffers, and the unencrypted area's layout of partition table and region follow `Source/Core/Core/IOS/DI/DI.cpp` and `Source/Core/DiscIO/VolumeWii.cpp`.
 - [Hector Martin (marcan)](https://github.com/marcan) and others documented the Wii Remote and its attachments.
 - [WiiBrew](https://wiibrew.org) and YAGCD document the hardware.
 

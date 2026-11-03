@@ -2,10 +2,13 @@
 // test_recomp_runtime.py writes. argv: storage folder, save folder, disc system folder.
 #include "harness.h"
 #include "ios.h"
+#include "title.h"
+#include "drive.h"
 #include <stddef.h>
 #include <string.h>
-const int game_virtual_bluetooth = 0;
-const uint32_t game_title_high = 1, game_title_low = 2;
+int console_running(void) { return 0; }
+void console_restart(int boot_disc) { exit(99); }
+const Title *title = &(Title){.title_high = 1, .title_low = 2};
 void bluetooth_register_remote(uint8_t *settings, size_t bytes) {}
 void camera_set_bar_above(int above) {}
 uint32_t hw_read(uint32_t a, int n) { return 0; }
@@ -35,7 +38,7 @@ static void put_title(int i, uint64_t title) { wr32(buffer(i), (uint32_t)(title 
 int main(int count, char **arguments) {
   memory_start();
   files_start(arguments[1]);
-  dvd_start(arguments[3]);
+  drive_insert(arguments[3]);
 
   CHECK_EQ(ioctlv(0x0e, 0, 1, (uint32_t[]){4}), 0);
   CHECK_EQ(rd32(buffer(0)), 3);

@@ -17,7 +17,6 @@ from pathlib import Path
 from decode import Program, name_of
 import modules
 from functions import add_starts, add_unreached_code, branch_target, find_functions, read_starts, signed
-from remote_tables import find_remote_tables
 from signatures import load_entries, resolve
 
 FUNCTIONS_PER_FILE = 150
@@ -559,6 +558,9 @@ def emit_function(program, start, body, starts):
             before, test = condition(word)
             if word & 1:  # blrl calls the address in the link register, then carries on here.
                 lines.append(f"{before} if ({test}) {{ uint32_t target = cpu.lr; cpu.lr = {address_text(following)}; dispatch(target); }}")
+            elif (target := constant_link(program, address, body)) is not None and test == "1":
+                # The link register was just set to a fixed address: a jump there, not a return.
+                lines.append(f"{before} {tail_text(target, starts)}")
             else:
                 lines.append(f"{before} if ({test}) {{ return; }}")
         elif name == "bcctr":
@@ -598,6 +600,22 @@ def tail_text(destination, starts):
     return f"dispatch({address_text(destination)}); return;"
 
 
+def constant_link(program, address, body):
+    """The address `lis rS; addi/ori rS, rS; mtlr rS` just before this blr put in the link
+    register, or None. Code returns through a stub elsewhere this way."""
+    if not all(a in body for a in (address - 12, address - 8, address - 4)):
+        return None
+    high, low, move = (program.word(a) for a in (address - 12, address - 8, address - 4))
+    source = move >> 21 & 31
+    if move & 0xfc1fffff != 0x7c0803a6 or high >> 26 != 15 or high >> 16 & 31 or high >> 21 & 31 != source:
+        return None
+    if low >> 26 == 14 and low >> 21 & 31 == source and low >> 16 & 31 == source:
+        return ((high & 0xffff) << 16) + (low & 0xffff) - (0x10000 if low & 0x8000 else 0) & 0xffffffff
+    if low >> 26 == 24 and low >> 21 & 31 == source and low >> 16 & 31 == source:
+        return (high & 0xffff) << 16 | low & 0xffff
+    return None
+
+
 def call_text(destination, starts):
     return f"{function_name(destination)}();" if destination in starts else f"dispatch({address_text(destination)});"
 
@@ -609,20 +627,82 @@ def check_replaced(starts):
         raise SystemExit("REPLACED addresses are not function starts: " + ", ".join(f"0x{a:08x}" for a in missing))
 
 
-def game_settings(tmd, values, tables):
-    """What the runtime needs to know about this game, as C."""
-    blocks, add, exclusive = tables or (0, 0, 0)
+def fnv1a64(data):
+    """The check the console makes on the program before running this title's code."""
+    value = 0xcbf29ce484222325
+    for byte in data:
+        value = ((value ^ byte) * 0x100000001b3) & 0xffffffffffffffff
+    return value
+
+
+def program_length(data):
+    """A program file's size from its section table, without padding: the console checks this much."""
+    reach = [struct.unpack_from(">I", data, i * 4)[0] + struct.unpack_from(">I", data, 0x90 + i * 4)[0]
+             for i in range(18) if struct.unpack_from(">I", data, 0x90 + i * 4)[0]]
+    return max([0x100] + reach)
+
+
+APPLOADER_AT = 0x81200000  # Where every Wii apploader is loaded and run.
+
+
+def emit_apploader(system, out, program):
+    """The disc's apploader, which the Wii Menu runs to load the game, as native code.
+
+    Writes apploader.c and returns (code bytes, check, function count). A title with no
+    apploader, such as the Wii Menu itself, gets an empty list.
+    """
+    path = system / "apploader.img"
+    if not path.is_file():
+        write_if_changed(out / "apploader.c", '#include "../../runtime/title.h"\nconst TitleFunction title_apploader[] = {{0, 0}};\n')
+        return 0, 0, 0
+    data = path.read_bytes()
+    entry, size = struct.unpack_from(">II", data, 0x10)
+    code = data[0x20:0x20 + size]
+    if any(program.is_code(a) for a in (APPLOADER_AT, APPLOADER_AT + size - 4)):
+        raise SystemExit("the apploader overlaps the program's code")
+    header = bytearray(0x100)
+    struct.pack_into(">I", header, 0, 0x100)
+    struct.pack_into(">I", header, 0x48, APPLOADER_AT)
+    struct.pack_into(">I", header, 0x90, len(code))
+    struct.pack_into(">I", header, 0xe0, entry)
+    apploader = Program(bytes(header) + code)
+    functions, _ = find_functions(apploader)
+    add_unreached_code(apploader, functions)  # Its init, main and close are only ever stored.
+    saved = dict(REPLACED), dict(IDLE_LOOPS)  # The game's own rules don't apply to it.
+    REPLACED.clear()
+    IDLE_LOOPS.clear()
+    try:
+        addresses = sorted(functions)
+        starts = set(addresses)
+        parts = ['#include "../../runtime/title.h"'] + [f"void {function_name(a)}(void);" for a in addresses]
+        for start in addresses:
+            text, _, _ = emit_function(apploader, start, functions[start], starts)
+            parts.append(text)
+    finally:
+        REPLACED.update(saved[0])
+        IDLE_LOOPS.update(saved[1])
+    parts.append("const TitleFunction title_apploader[] = {" + ",".join(f"{{0x{a:x}u,{function_name(a)}}}" for a in addresses) + "};")
+    write_if_changed(out / "apploader.c", "\n".join(parts) + "\n")
+    print(f"apploader: {len(addresses)} functions")
+    return len(code), fnv1a64(code), len(addresses)
+
+
+def title_description(program_bytes, tmd, values, function_count, module_count, apploader):
+    """What the console needs to know about this title, as the one symbol its library exports."""
     high = int.from_bytes(tmd[TITLE_ID_OFFSET:TITLE_ID_OFFSET + 4], "big")
     low = int.from_bytes(tmd[TITLE_ID_OFFSET + 4:TITLE_ID_OFFSET + 8], "big")
-    return ('#include "../../runtime/game.h"\n'
-            f"const uint32_t game_ax_frame_done = 0x{values['ax_frame_done']:x}u;\n"
-            f"const uint32_t game_calibration_flag = 0x{values.get('calibration_flag', 0):x}u;\n"
-            f"const uint32_t game_title_high = 0x{high:08x}u, game_title_low = 0x{low:08x}u;\n"
-            f'const char game_data_folder[] = "/title/{high:08x}/{low:08x}/data";\n'
-            f"const uint32_t game_ios_version = {int.from_bytes(tmd[IOS_OFFSET + 4:IOS_OFFSET + 8], 'big')};\n"
-            f"const uint32_t game_remote_blocks = 0x{blocks:x}u, game_attachment_add = 0x{add:x}u, game_attachment_xor = 0x{exclusive:x}u;\n"
-            f"const int game_fifo_breakpoints = {int('--fifo-breakpoints' in sys.argv)};\n"
-            f"const int game_virtual_bluetooth = {int('--virtual-bluetooth' in sys.argv)};\n")
+    ios = int.from_bytes(tmd[IOS_OFFSET + 4:IOS_OFFSET + 8], "big")
+    return ('#include "../../runtime/title.h"\n'
+            "extern const TitleFunction title_functions[];\n"
+            "extern const Module *const title_modules[];\n"
+            "extern const TitleFunction title_apploader[];\n"
+            "__attribute__((visibility(\"default\"))) const Title wii_recomp_title = {\n"
+            f"  TITLE_INTERFACE, 0x{fnv1a64(program_bytes[:program_length(program_bytes)]):016x}ull, 0x{high:08x}u, 0x{low:08x}u, {ios},\n"
+            f"  0x{values['ax_frame_done']:x}u, 0x{values.get('calibration_flag', 0):x}u,\n"
+            f"  {int('--virtual-bluetooth' in sys.argv)}, {int('--fifo-breakpoints' in sys.argv)},\n"
+            f"  title_functions, {function_count}, title_modules, {module_count},\n"
+            f"  0x{APPLOADER_AT if apploader[0] else 0:x}u, 0x{apploader[0]:x}u, 0x{apploader[1]:016x}ull, title_apploader, {apploader[2]},\n"
+            "};\n")
 
 
 # Each module's code stands in at MODULE_BASE + n * MODULE_SPACING, and its imports 16 MiB
@@ -746,8 +826,8 @@ def write_modules(system, out, exports):
                 for number, path in enumerate(sorted((system / "modules").glob("*.rso")))]
     write_if_changed(out / "modules.c", '#include "../../runtime/modules.h"\n'
                      + "".join(f"extern const Module {prefix}_module;\n" for prefix in prefixes)
-                     + f"const Module *const game_modules[] = {{{', '.join(f'&{p}_module' for p in prefixes) or '0'}}};\n"
-                     f"const int game_module_count = {len(prefixes)};\n")
+                     + f"const Module *const title_modules[] = {{{', '.join(f'&{p}_module' for p in prefixes) or '0'}}};\n")
+    return len(prefixes)
 
 
 def main():
@@ -763,7 +843,7 @@ def main():
                     if entry[1] not in DIRECT_INPUT and "Bluetooth" not in entry[0] and not entry[0].startswith("KPADRead")}
     REPLACED.update(replaced)
     IDLE_LOOPS.update(idle_loops)
-    write_if_changed(out / "game.c", game_settings((dol.parent.parent / "tmd.bin").read_bytes(), values, find_remote_tables(program, functions)))
+    (out / "game.c").unlink(missing_ok=True)  # Written by earlier versions, before titles were libraries.
     # After resolving, as finding a function can depend on counting its neighbours.
     if "--all-code" in sys.argv:
         add_unreached_code(program, functions)
@@ -795,14 +875,15 @@ def main():
     table = ",\n".join(f"{{0x{a:x}u, {function_name(a)}}}" for a in addresses)
     write_if_changed(
         out / "table.c",
-        '#include "functions.h"\n'
-        "typedef struct { uint32_t address; GuestFunction run; } Entry;\n"
-        f"const Entry function_table[] = {{\n{table}\n}};\n"
-        f"const int function_count = {len(addresses)};\n",
+        '#include "functions.h"\n#include "../../runtime/title.h"\n'
+        f"const TitleFunction title_functions[] = {{\n{table}\n}};\n",
     )
     print(f"{len(addresses)} functions in {files} files")
     print("not yet translated:", unknown.most_common(40))
-    write_modules(dol.parent, out, exports)
+    module_count = write_modules(dol.parent, out, exports)
+    apploader = emit_apploader(dol.parent, out, program)
+    write_if_changed(out / "title.c", title_description(dol.read_bytes(), (dol.parent.parent / "tmd.bin").read_bytes(), values,
+                                                        len(addresses), module_count, apploader))
 
 
 if __name__ == "__main__":

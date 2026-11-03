@@ -57,6 +57,8 @@ typedef struct {
   VkDevice device;
   uint32_t queue_family;
   VkQueue queue;
+  VkQueue show_queue;  // Shows pictures in the window, where it has its own. See gx_vulkan_window.c.
+  uint32_t show_family;
   VkPhysicalDeviceLimits limits;
   PFN_vkCmdPushDescriptorSetKHR push_descriptors;  // Null where the driver lacks them.
   int depth_filters_linear, dual_source;
@@ -100,6 +102,9 @@ void vk_create_swapchain(void);
 int vk_swapchain_matches_window(void);
 void vk_create_image(VkFormat format, VkImageUsageFlags usage, uint32_t width, uint32_t height, uint32_t levels,
                      VkImage *image, VkDeviceMemory *memory);
+// The same, readable from the window's queue as well when that's in another family.
+void vk_create_shared_image(VkFormat format, VkImageUsageFlags usage, uint32_t width, uint32_t height, uint32_t levels, int shared,
+                            VkImage *image, VkDeviceMemory *memory);
 VkImageView vk_create_view(VkImage image, VkFormat format, VkImageAspectFlags aspect, uint32_t levels, VkComponentMapping channels);
 void vk_retire(VkImage image, VkImageView view, VkDeviceMemory memory);
 // Space in a ring, or -1 if this frame's share has run out.
@@ -107,6 +112,15 @@ VkDeviceSize vk_ring_take(Ring *ring, VkDeviceSize bytes, VkDeviceSize alignment
 void vk_frame_begin(Frame *frame);
 void vk_frame_submit(Frame *frame, VkSemaphore wait, VkSemaphore signal);
 VkCommandBuffer vk_upload_commands(void);
+
+// gx_vulkan_window.c
+int vk_window_wants_own_queue(void);
+void vk_window_test_stall(VkCommandBuffer commands);
+void vk_window_start(uint32_t picture_width, uint32_t picture_height);  // Does nothing without a show queue.
+int vk_window_take_slot(void);  // -1 while the window is still busy with earlier pictures.
+void vk_window_copy_picture(VkCommandBuffer commands, int slot, VkImage picture);
+VkSemaphore vk_window_copied(int slot);
+int vk_window_show(int slot, const VkOffset3D from[2], const VkOffset3D to[2]);
 
 // gx_vulkan_pipeline.c
 void vk_pipelines_start(const GxAttribute *attributes, int attribute_count, size_t vertex_bytes);

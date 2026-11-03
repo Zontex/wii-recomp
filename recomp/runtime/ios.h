@@ -23,7 +23,6 @@ void ios_complete(uint32_t request, int result);
 void ios_trace(const char *device, uint32_t command, uint32_t request, int result);
 int ios_trace_all(void);
 
-void dvd_start(const char *extracted_system_folder);
 int dvd_request(uint32_t command, uint32_t request);
 int es_request(uint32_t command, uint32_t request);
 int stm_immediate(uint32_t command, uint32_t request);
@@ -33,8 +32,8 @@ int net_kd_time(uint32_t command, uint32_t request);
 int net_ncd_manage(uint32_t command, uint32_t request);
 int sdio_request(uint32_t command, uint32_t request);
 void wc24_request_user_id(uint8_t *out);
+int console_setting(const char *name, char *out, size_t limit);  // From setting.txt; 0 if it isn't there.
 // The disc's ticket, beside the extracted system folder. Returns 0 if there's none.
-int dvd_ticket(uint8_t *out, unsigned long limit);
 
 void files_start(const char *folder);
 void files_save_path(const char *path, char *out, unsigned long size);

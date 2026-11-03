@@ -4,13 +4,12 @@
 #include <stdlib.h>
 
 #include "cpu.h"
+#include "apploader.h"
+#include "console.h"
 #include "dispatch.h"
 #include "interp.h"
 #include "modules.h"
-
-typedef struct { uint32_t address; GuestFunction run; } Entry;
-extern const Entry function_table[];
-extern const int function_count;
+#include "title.h"
 
 void unimplemented(uint32_t address, const char *name) {
   fprintf(stderr, "stop: %s at %08x, return address %08x\n", name, address, cpu.lr);
@@ -23,18 +22,18 @@ void unimplemented(uint32_t address, const char *name) {
 static void (*code_slots[CODE_WORDS])(void);
 
 void fill_code_slots(void) {
-  for (int i = 0; i < function_count; i++) {
-    uint32_t word = (function_table[i].address - CODE_START) >> 2;
-    if (word < CODE_WORDS) code_slots[word] = function_table[i].run;
+  for (int i = 0; i < title->function_count; i++) {
+    uint32_t word = (title->functions[i].address - CODE_START) >> 2;
+    if (word < CODE_WORDS) code_slots[word] = title->functions[i].run;
   }
 }
 
 static GuestFunction search_table(uint32_t address) {
-  int low = 0, high = function_count - 1;
+  int low = 0, high = title->function_count - 1;
   while (low <= high) {
     int middle = (low + high) / 2;
-    uint32_t found = function_table[middle].address;
-    if (found == address) return function_table[middle].run;
+    uint32_t found = title->functions[middle].address;
+    if (found == address) return title->functions[middle].run;
     if (found < address) low = middle + 1; else high = middle - 1;
   }
   return 0;
@@ -80,13 +79,15 @@ void dispatch_register(uint32_t address, GuestFunction run) {
 }
 
 static __attribute__((noinline)) void run_untranslated(uint32_t address) {
-  if (modules_bind(address)) {  // A module the program just linked, translated ahead of time.
+  // A module the program just linked, or a disc's apploader, translated ahead of time.
+  if (modules_bind(address) || apploader_bind(address)) {
     GuestFunction run = translated_at(address);
     if (run) {
       run();
       return;
     }
   }
+  console_hand_over(address);  // The Wii Menu starting the disc's game.
   if (getenv("WII_RECOMP_NATIVE_ONLY")) {
     fprintf(stderr, "stop: no native code at %08x (return address %08x), and the interpreter is off\n", address, cpu.lr);
     exit(4);

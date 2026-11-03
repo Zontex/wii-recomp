@@ -143,7 +143,7 @@ uint32_t hw_read(uint32_t address, int bytes) {
   uint32_t value = get(address, bytes);
   if (address == PI_CAUSE) value = cause;
   else if (address == AUDIO_SAMPLE_COUNTER) value = (uint32_t)(time_base() / TIME_BASE_TICKS_PER_AUDIO_SAMPLE);
-  else if (!ipc_read(address, &value)) graphics_read(address, &value);
+  else if (!si_read(address, &value) && !ipc_read(address, &value)) graphics_read(address, &value);
   first_touch("read ", address, value);
   return value;
 }
@@ -158,7 +158,7 @@ void hw_write(uint32_t address, uint32_t value, int bytes) {
     cause &= ~value;
     return;
   }
-  if (ipc_write(address, value) || graphics_write(address, value, bytes)) return;
+  if (si_write(address, value) || ipc_write(address, value) || graphics_write(address, value, bytes)) return;
   // These finish at once, so their busy bits clear themselves.
   if (address == EXI_CONTROL_A || address == EXI_CONTROL_B || address == EXI_CONTROL_C) value &= ~1u;
   if (address == DSP_CONTROL) {

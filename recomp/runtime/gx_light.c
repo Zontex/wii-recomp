@@ -40,6 +40,14 @@ void gx_light_read(VertexKey *key, int channel) {
   read_control(gx.xf[XF_ALPHA_CHANNEL + channel], &key->alpha[channel]);
 }
 
+// Whether a channel, unlit, gives the vertex's own color and alpha or a white material, so
+// a white vertex means white out.
+int gx_light_plain(int channel) {
+  uint32_t color = gx.xf[XF_COLOR_CHANNEL + channel], alpha = gx.xf[XF_ALPHA_CHANNEL + channel], material = gx.xf[XF_MATERIAL + channel];
+  if ((color | alpha) & CONTROL_LIT) return 0;
+  return ((color & CONTROL_VERTEX_BASE) || (material & 0xffffff00) == 0xffffff00) && ((alpha & CONTROL_VERTEX_BASE) || (material & 0xff) == 0xff);
+}
+
 void gx_light_read_colors(float material[2][4], float ambient[2][4]) {
   for (int channel = 0; channel < 2; channel++) {
     unpack_color(gx.xf[XF_MATERIAL + channel], material[channel]);

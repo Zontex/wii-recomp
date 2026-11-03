@@ -2,7 +2,8 @@
 #include "../../recomp/runtime/gx_fifo.c"
 #include "../harness.h"
 void stage_add(int s, uint64_t t) {}
-const int game_fifo_breakpoints = 0;
+const Title *title = &(Title){0};
+void poll_interrupts(void) {}
 void stage_frame(float g) {}
 static uint8_t regs[0x10000];
 uint32_t hw_peek(uint32_t a, int n) { uint32_t v = 0; for (int i = 0; i < n; i++) v = v << 8 | regs[(a + i) & 0xffff]; return v; }

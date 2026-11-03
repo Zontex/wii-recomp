@@ -5,6 +5,7 @@
 #include <stdlib.h>
 
 #include "modules.h"
+#include "title.h"
 
 enum { SECTION_TABLE = 0x0c, SECTION_COUNT = 0x08, HEADER_TABLE_AT = 0x58 };
 
@@ -76,8 +77,8 @@ static int try_code(const Module *module, uint32_t code) {
 }
 
 int modules_bind(uint32_t address) {
-  for (int m = 0; m < game_module_count; m++) {
-    const Module *module = game_modules[m];
+  for (int m = 0; m < title->module_count; m++) {
+    const Module *module = title->modules[m];
     for (int i = 0; i < module->export_count; i++) {
       if (try_code(module, address - module->exports[i])) return 1;
     }

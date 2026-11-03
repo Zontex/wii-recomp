@@ -192,7 +192,9 @@ static float xf_value(int address) {
 }
 
 // Whether fog adds nothing anywhere between two depths, from 0 to 1. Its distance only
-// rises or only falls across them, so the ends decide, with room for rounding.
+// rises or only falls across them, so the ends decide, with room for rounding. The shader
+// mixes by the fog rounded to 256ths, so under half of one leaves every pixel as it was;
+// the curves all rise with the distance and are no more than 8 ln 2 times as steep.
 int gx_fog_none_between(double low, double high) {
   uint32_t a = gx.bp[BP_FOG_A], c = gx.bp[BP_FOG_C];
   int type = (int)((c >> FOG_TYPE_SHIFT) & 7);
@@ -217,7 +219,10 @@ int gx_fog_none_between(double low, double high) {
     }
     if (distance > most) most = distance;
   }
-  return most - fog_c < -1e-3;
+  // Linear fog reaches the shader's half step at 1/512, and the curves sooner, by at most
+  // 8 ln 2 (EXP), with a tenth of a step to spare.
+  double half_step = 0.4 / 256 / (type == FOG_LINEAR ? 1 : 8 * 0.6931471805599453);
+  return most - fog_c < half_step;
 }
 
 // Fog mixes the picture toward a color by how far each pixel is, worked out from its depth

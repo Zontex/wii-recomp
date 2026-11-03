@@ -36,68 +36,141 @@ It started with one game, Wii Fit Plus. The second, The Last Story, showed that 
 
 ## Stages
 
-Status: **done**, **in progress** or **planned**.
+Each stage is **done**, **in progress** or **planned**, and each item is ticked when it's done.
 
 ### 0. Stable base (done)
 
-License and credits, a general benchmark tool, and Wii Fit Plus holding 60 fps on the benchmark.
+- [x] License and credits
+- [x] A general benchmark tool
+- [x] Wii Fit Plus holding 60 fps on the benchmark
 
 ### 1. Inventory (done)
 
-[`docs/hardware_inventory.md`](docs/hardware_inventory.md) lists every instruction, register, mode, format, IOS request and audio program, from Dolphin's source and WiiBrew, with a status for each and the gaps ordered by what real titles use.
+- [x] [`docs/hardware_inventory.md`](docs/hardware_inventory.md): every instruction, register, mode, format, IOS request and audio program, from Dolphin's source and WiiBrew, with a status for each
+- [x] The gaps ordered by what real titles use
 
 ### 2. Tools to measure with (done)
 
-- **Draw inspector** (`WII_RECOMP_GX_INSPECT`): lists every draw of one frame with its formats, textures and stage setup, and can skip any range of draws to show which one paints what.
-- **FIFO replay** (`recomp/tools/replay`): plays a Dolphin FIFO Player recording through our renderer with no game running, and saves each frame.
-- **Picture comparison** (`recomp/tools/compare_frames.py`): a numeric difference and a difference image per frame.
-- **CPU test harness** (`test/test_recomp_differential.py`): runs every instruction family through both the translator and the interpreter and compares the registers.
+- [x] **Draw inspector** (`WII_RECOMP_GX_INSPECT`): lists every draw of one frame with its formats, textures and stage setup, and can skip any range of draws to show which one paints what
+- [x] **FIFO replay** (`recomp/tools/replay`): plays a Dolphin FIFO Player recording through our renderer with no game running, and saves each frame
+- [x] **Picture comparison** (`recomp/tools/compare_frames.py`): a numeric difference and a difference image per frame
+- [x] **CPU test harness** (`test/test_recomp_differential.py`): runs every instruction family through both the translator and the interpreter and compares the registers
+- [x] **Menu benchmark** (`recomp/tools/menu_bench.py`): tours 16 Wii Menu screens and reports frame rate and the worst frame for each
 
 ### 3. CPU complete (in progress)
 
-- Done: a PowerPC interpreter that runs any address with no translated code, instead of stopping, and logs it so the translator can pick it up.
-- Planned: every instruction form with exact floating-point behaviour, modules loaded at run time (`.rel`, `.rso`) translated ahead of time, self-modifying code sent to the interpreter, BAT and page-table mapping, running the disc's real apploader, and the `--all-code` sweep on by default.
+- [x] A PowerPC interpreter that runs any address with no translated code, instead of stopping, and logs it
+- [x] Code the interpreter ran is translated on the next build
+- [x] Modules loaded at run time (`.rso`, such as the Wii Menu's web library) found in the title's contents and translated ahead of time, used only if their code in memory matches
+- [x] The disc's own apploader, translated with the game and run natively when the Wii Menu starts a disc
+- [ ] Every instruction form with exact floating-point behaviour
+- [ ] `.rel` modules translated ahead of time
+- [ ] Self-modifying code sent to the interpreter
+- [ ] BAT and page-table mapping
+- [ ] The `--all-code` sweep on by default
 
 ### 4. Graphics model (in progress)
 
-- **4a. The chip as its own thread** on every platform, with real FIFO behaviour: high and low marks, breakpoints, tokens, draw done and idle, timed as the SDK expects. Planned.
-- **4b. The complete feature list.** Done: the final color register, stages with no texture, picture copies only reused while they match memory, every color stage comparison mode, texture coordinate generation, indirect stages, Dolphin's vertex loading, stored mip levels with bias, clamp and filters, fog, logic operations, lines and points, the viewport depth range and destination alpha. Still logged as missing: anisotropy, level of detail from diagonals, converting the picture when its pixel format changes, and textures preloaded into texture memory.
-- **4c. Reliability and speed.** Planned: shaders compiled ahead of time and saved per title, so a first run doesn't stutter, and lower cost per draw, aimed at heavy scenes of 150,000 draws a second.
+**4a. The chip as its own thread**
+
+- [x] Commands on their own thread on Linux, except in games using FIFO breakpoints
+- [ ] The same on every platform, with real FIFO behaviour: high and low marks, breakpoints, tokens, draw done and idle, timed as the SDK expects
+
+**4b. The complete feature list**
+
+- [x] The final color register, stages with no texture, and every color stage comparison mode
+- [x] Picture copies only reused while they match memory
+- [x] Texture coordinate generation and indirect stages
+- [x] Dolphin's vertex loading
+- [x] Stored mip levels with bias, clamp and filters
+- [x] Fog, logic operations, lines and points
+- [x] The viewport depth range and destination alpha
+- [ ] Anisotropy
+- [ ] Level of detail from diagonals
+- [ ] Converting the picture when its pixel format changes
+- [ ] Textures preloaded into texture memory
+
+**4c. Reliability and speed**
+
+- [x] Vulkan as the default renderer, with OpenGL as a fallback
+- [x] Compiled shaders and pipelines kept between runs, so a scene stutters only the first time it's ever drawn
+- [x] On the Mac, pictures reach the window on a queue of their own, so macOS holding the window's pictures skips pictures instead of freezing the game for up to a second
+- [ ] Shaders compiled ahead of time from the disc, so even a first run doesn't stutter
+- [ ] Lower cost per draw, aimed at heavy scenes of 150,000 draws a second
 
 Done when every graphics row is done or marked not needed, and recordings from every available title match Dolphin within a set limit.
 
 ### 5. Sound (planned)
 
-Identify a game's audio program by its contents and support the main ones, AX in all its versions and the Zelda family, with a DSP interpreter as the fallback for unknown ones. Streamed disc audio, THP video sound and ADPCM. Muting must not change the game's timing.
+- [ ] Identify a game's audio program by its contents
+- [ ] AX in all its versions, and the Zelda family
+- [ ] A DSP interpreter as the fallback for unknown programs
+- [ ] Streamed disc audio, THP video sound and ADPCM
+- [ ] Muting leaves the game's timing unchanged
 
 ### 6. Remaining hardware (planned)
 
-Video modes including PAL, 480p and interlaced, memory card, SRAM and clock, GameCube controller ports, region and language from SYSCONF, and widescreen.
+- [x] GameCube controller ports, answering "no controller"
+- [ ] Video modes including PAL, 480p and interlaced
+- [ ] Memory card, SRAM and clock
+- [ ] Region and language from SYSCONF
+- [ ] Widescreen
 
-### 7. Native IOS (planned)
+### 7. Native IOS (in progress)
 
-[`docs/native_ios.md`](docs/native_ios.md) Stages 0 to 2: a device table, request tracing and strict mode, titles, ES, and storage that behaves like a NAND, in a private console folder. Every game's direct start goes through the same path, and replacements of Nintendo's own library code shrink as the hardware and IOS models take their place.
+From [`docs/native_ios.md`](docs/native_ios.md) Stages 0 to 2.
+
+- [x] Request tracing, and unknown requests answered with an error and a log line, never a fake success
+- [x] Titles, tickets and ES requests as the Wii Menu uses them
+- [x] A private console folder holding its own copy of the Wii storage, the Wii Menu and a drive slot (`recomp/tools/prepare_console.py`)
+- [x] Clean "no network" answers for WiiConnect24, the SD card slot and sockets
+- [ ] Storage that behaves like a NAND: open modes, owners and permissions, real usage, and writes a power cut can't corrupt
+- [ ] Every game's direct start through the same path
+- [ ] Fewer replacements of Nintendo's own library code, as the hardware and IOS models take their place
 
 ### 8. Real controllers (in progress)
 
-- Done: a virtual Bluetooth chip with a simulated Wii Remote and Classic Controller, driven by each game's own Bluetooth code, including attachment encryption.
-- Planned: real Wii Remotes and the Balance Board by passing their reports straight through to the game, on Linux and on macOS if it allows raw access. Switch Pro Controllers and Joy-Cons through SDL2, mapped as a Classic Controller or a Wii Remote and Nunchuk, with motion as tilt and the gyro as the pointer. Four players, and a settings file with sensible defaults.
+- [x] A virtual Bluetooth chip, driven by each game's own Bluetooth code, with four remote slots and the Balance Board's
+- [x] A simulated Wii Remote with an IR camera for the pointer, a Classic Controller with attachment encryption, and a simulated Balance Board
+- [ ] Real Wii Remotes and the Balance Board, their reports passed straight through to the game, on Linux and on macOS if it allows raw access
+- [ ] Switch Pro Controllers and Joy-Cons through SDL2, as a Classic Controller or a Wii Remote and Nunchuk, with motion as tilt and the gyro as the pointer
+- [ ] Four players, and a settings file with sensible defaults
 
-### 9. The Wii Menu (planned)
+### 9. The Wii Menu (in progress)
 
-[`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7: menu input, launching titles, the disc channel, region free, and a clean no-network state. One native program per title, handed over with `exec`. Done when the menu, disc channel, a game and back works 20 times in a row with real controllers.
+From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 
-### 10. Disc image in, game out (planned)
+- [x] The menu's own Wii Remote code takes input
+- [x] The health warning, first-time setup, the channel grid, Wii Options, Wii Settings, Data Management and the message board
+- [x] 60 fps on every one of 16 screens on an Intel Mac
+- [x] A recompiled disc image in the drive shows its banner, and Start hands over to the game, running natively
+- [x] Region free, without changing the disc
+- [ ] Back to the menu from a game: built, not yet tried end to end
+- [ ] Launching channels
+- [ ] The real clock
+- [ ] Menu, disc channel, a game and back, 20 times in a row with real controllers
 
-`recomp/tools/add_game.py <image>`: extract, translate with discovery on, find system functions by content, compile, compile shaders ahead of time, and add the title to the console folder. A first run of a new disc can start under the interpreter while compiling continues behind it.
+### 10. Disc image in, game out (in progress)
+
+- [x] One console program for every title, loading each title's translated code as a library
+- [x] Recompiled disc images (`recomp/tools/make_disc.py`): the disc with its native code for each platform, in one file
+- [ ] `recomp/tools/add_game.py <image>`: extract, translate with discovery on, find system functions by content, compile, compile shaders ahead of time, and add the title to the console folder, in one command
+- [ ] A first run of a new disc starts under the interpreter while compiling continues behind it
 
 ### 11. Frame rate (in progress)
 
-Every test scene holds its designed rate with no second below it. Already done for the Wii Fit benchmark on an Intel Mac, and 1080p on the Raspberry Pi 5 through tile-friendly passes. A 60 fps option for 30 fps games, kept per title only where movement, animation and cutscene timing match at both rates.
+- [x] Wii Fit Plus at a steady 60 fps on the benchmark on an Intel Mac
+- [x] The Wii Menu at 60 fps across 16 screens on an Intel Mac
+- [x] A covered window no longer slowed to 10 fps by macOS
+- [x] 1080p on the Raspberry Pi 5, through tile-friendly passes
+- [ ] Every Wii Fit Plus scene at 60 fps on the Pi: the step-off screen holds 48 and the Body Test 55 to 60
+- [ ] A 60 fps option for 30 fps games, kept per title only where movement, animation and cutscene timing match at both rates
 
 ### 12. Compatibility (planned)
 
-A list of titles, homebrew and SDK demos, each with an automatic script: boots, reaches gameplay, sound, picture comparison and frame rate, run on every change to shared code.
+- [ ] A list of titles, homebrew and SDK demos
+- [ ] An automatic script for each: boots, reaches gameplay, sound, picture comparison and frame rate
+- [ ] Run on every change to shared code
 
 ## Milestones so far
 
@@ -108,6 +181,8 @@ A list of titles, homebrew and SDK demos, each with an automatic script: boots, 
 - System functions are found by the hashes of their instructions, so a new game needs no address list.
 - The Last Story reached gameplay through a virtual Bluetooth chip, using the game's own Wii Remote code.
 - An interpreter now catches any code the translator missed, and a differential test checks both against each other for every instruction family.
+- The recompiled Wii Menu runs at 60 fps through its screens, and starts Wii Fit Plus natively from a recompiled disc image in its drive.
+- On the Mac, the game no longer freezes for a second when macOS holds on to the window's pictures.
 
 ## Out of scope
 

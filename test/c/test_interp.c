@@ -66,12 +66,11 @@ static void translated_calls_back(void) {
   cpu.r[3] += 100;
 }
 
-typedef struct { uint32_t address; GuestFunction run; } Entry;
-const Entry function_table[] = {{TRANSLATED_ADD, translated_add}, {TRANSLATED_CALLS_BACK, translated_calls_back}};
-const int function_count = 2;
-#include "modules.h"
-const Module *const game_modules[] = {0};
-const int game_module_count = 0;
+#include "title.h"
+static const TitleFunction functions_table[] = {{TRANSLATED_ADD, translated_add}, {TRANSLATED_CALLS_BACK, translated_calls_back}};
+int apploader_bind(uint32_t address) { return 0; }
+void console_hand_over(uint32_t address) {}
+const Title *title = &(Title){.functions = functions_table, .function_count = 2};
 
 static void reset(void) {
   memset(&cpu, 0, sizeof cpu);

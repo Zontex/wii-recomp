@@ -4,7 +4,7 @@
 
 #include "bluetooth.h"
 #include "cpu.h"
-#include "game.h"
+#include "title.h"
 #include "ios.h"
 
 typedef int (*IosHandler)(uint32_t command, uint32_t request);
@@ -20,7 +20,7 @@ static int unmodelled(uint32_t command, uint32_t request) { return IOS_UNHANDLED
 // The Bluetooth chip only replies when something happens. Without the virtual chip,
 // controllers come straight from input.c and nothing ever happens here.
 static int bluetooth(uint32_t command, uint32_t request) {
-  return game_virtual_bluetooth ? bluetooth_request(command, request) : IOS_NO_REPLY;
+  return title->virtual_bluetooth ? bluetooth_request(command, request) : IOS_NO_REPLY;
 }
 
 // Other USB devices, such as a keyboard, are never plugged in, so they never reply.

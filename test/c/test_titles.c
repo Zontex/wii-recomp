@@ -2,10 +2,11 @@
 // argv: storage folder, save folder.
 #include "harness.h"
 #include "ios.h"
+#include "title.h"
 #include "titles.h"
 #include <stddef.h>
 #include <string.h>
-const int game_virtual_bluetooth = 0;
+const Title *title = &(Title){0};
 void bluetooth_register_remote(uint8_t *settings, size_t bytes) {}
 void camera_set_bar_above(int above) {}
 uint32_t hw_read(uint32_t a, int n) { return 0; }

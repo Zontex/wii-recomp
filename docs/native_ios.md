@@ -9,7 +9,8 @@ Run the real Wii Menu and the games it launches on our own native IOS, on any ma
 - **The menu reaches its first-time setup.** It loads its web library, `wwwlib-rvl`, links it at run time and runs it under the interpreter. Code only that library calls is written to `discovered.txt` by the interpreter, and the next build translates it. With `--virtual-bluetooth` the menu's own Wii Remote code runs, and A on "Press A to continue" opens the language choice.
 - **The menu is usable with the pointer** on the Intel Mac with Vulkan: the health warning, first-time setup, the channel grid, Wii Options, and the disc channel's "Please insert a disc" screen all work. The simulated remote's IR camera is calibrated against the menu's cursor. It runs at about 30 fps: the web library runs under the interpreter, and translating modules ahead of time is the fix.
 - **60 fps across the menu on the Intel Mac.** `recomp/tools/menu_bench.py` tours 16 screens: health warning, grid, scrolling, disc channel, Wii Options, three Wii Settings pages, Data Management and the message board. With Vulkan and a translated web library, every one holds 60 fps at 2× scale, with no frame over 22 ms, even with the Mac heat-throttled to 62%. At 2.5× (1600 × 1140, the Pi's 1080p setting) every scene holds 59.2–60 fps, but the first draw of the grid and the disc channel costs 32–62 ms, because Vulkan pipelines are compiled again on each run until a disk cache exists. Most of the earlier 30 fps was the Mac's heat throttling and OpenGL, which was the Mac's default renderer: the menu is now built with Vulkan only.
-- **Next: a disc and launching.** Present a translated game as the inserted disc, then hand over to it from Start (Stages 4 and 5). The clock still shows 0:00 on Fri 01/01, so the real time isn't passed in yet.
+- **A disc from the drive starts from the menu.** The console is one program, and each title's native code is a library: Wii Fit Plus's is inside its recompiled disc image, with the disc. With the image in the console's drive slot, the menu shows the Wii Fit Plus banner on the grid and in the disc channel, runs the disc's apploader as native code, and on Start the console hands over and Wii Fit Plus runs, from its disc, natively. The disc is a US one on the European menu: the console is region free. The way back, Home then Wii Menu, is built but not yet tried end to end, because Wii Fit doesn't get past its strap screen with the simulated remote yet, started either way.
+- **Next:** the way back to the menu once Wii Fit takes input; a frame-rate check of the library build on a quiet Mac; the real clock (the menu shows 0:00 on Fri 01/01); and a real USB drive later.
 - The ES request numbers and the WiiConnect24 user ID follow Dolphin's sources (GPL-2.0+).
 
 ## Rules
@@ -53,26 +54,41 @@ Run the real Wii Menu and the games it launches on our own native IOS, on any ma
 | `net.c` | The `kd`, `ncd`, `wd`, `ip` and `ssl` devices, reporting "no network". |
 | `crypto.c`, `sdio.c` | SHA, AES and SD card, only if a trace shows they're needed. |
 
-### Decision: one program per title, handed over with exec
+### Decision: one console program, a native library per title, handed over with exec
 
-`ES_LaunchTitle` flushes storage, writes a small hand-over record to the console folder, and calls `execv` on the target title's own native program.
+`wii-recomp` is the console: IOS, graphics, sound, controllers and the drive, the same for every title. Each title's translated code is a library, `title.dylib` (`title.so` on Linux), which exports one `Title` description (`recomp/runtime/title.h`). Starting another title calls `execv` on the console itself, which then loads the next title's library.
 
-- **Why:** every title is compiled for the same guest addresses, so they can't share one `function_table`. Each program also keeps state in dozens of runtime statics. `exec` gives every title the clean start a real Wii gives it, with nothing to reset by hand and no way for one title to leak into the next.
-- **Cost:** the window closes and reopens, which looks like the black screen a real Wii shows. If that looks bad, a small parent process can own the window later without changing IOS.
-- **Rejected:** loading titles as shared libraries, because every runtime static would need a reset and any miss becomes a rare, confusing bug.
+- **Why a library:** a game's native code can travel inside its disc image (below), so the console never changes per game, and a real drive later is just another way to read the same image.
+- **Why exec:** every title is compiled for the same guest addresses, and the runtime keeps state in dozens of statics. Starting afresh gives every title the clean start a real Wii gives it, with nothing to reset by hand. The window closes and reopens, which looks like the black screen a real Wii shows.
+- **Safe by construction:** `build_file.py` hashes the headers the console and a title share (`cpu.h`, `title.h`, `modules.h`) into both, and a library built against another console is refused. A library also only runs the program it was translated from: the console checks the program file before running it.
+- **Rejected:** loading the next title into the running process, because every runtime static would need a reset and any miss becomes a rare, confusing bug.
 
-A title with no native program is refused with a clear message on the menu's side, never a crash. Channels and games must be translated ahead of time.
+A title with no native code is refused with a clear message, never a crash. Channels and games must be translated ahead of time.
 
 ### Decision: one private console folder
 
     console/
-      nand/                    writable copy of the Wii's storage
-      programs/<high>-<low>/   native program plus its disc folder
-      handover.bin             what the next program needs to know
+      nand/                          writable copy of the Wii's storage
+      titles/00000001-00000002/      the Wii Menu: main.dol, boot.bin, fst.bin, title.dylib
+      drive/                         a disc image here is a disc in the drive
+      cache/                         native code written out from discs, compiled shaders
 
-- `recomp/tools/prepare_console.py <NAND> <console folder>` copies the NAND once, then translates and builds each listed title with `prepare_title.py`, `emit.py`, `build_file.py` and `ninja`. The source NAND is only read.
+- `recomp/tools/prepare_console.py <NAND> <console folder> --menu recomp/build-menu` copies the NAND once and installs the menu built in that folder. The source NAND is only read.
+- `wii-recomp --console <console folder>` starts the Wii Menu; `--boot-disc` starts the disc in the drive instead.
+- Starting a game directly, `wii-recomp extracted/sys [storage]` or `wii-recomp game.wrd [storage]`, works as before.
 - **Why a copy:** today's split of "read from the NAND, write to saves" can't delete a file that exists only in the NAND. `fs.c` reports success and the file is still there. The menu deletes and renames constantly, so a real writable copy fixes this whole class of bug.
 - Wii Fit's direct start, with an optional storage folder, stays as it is.
+
+### Decision: recompiled disc images
+
+`recomp/tools/make_disc.py <extracted disc> <game.wrd> --native darwin-x86_64=<title library> [--native linux-aarch64=...]` packs one file: the disc's data partition at its own offsets, its unencrypted area (header and region), ticket, TMD and certificates, and the title's native code for each platform it was built for. Nothing in it is encrypted, and it needs no keys. The layout is in the tool's docstring.
+
+- `recomp/runtime/drive.c` reads an image, or an extracted folder while developing, as a list of pieces sorted by offset. `dvd.c` is only the `/dev/di` device on top of it.
+- The drive's slot is `console/drive/`: an image there is a disc in the drive. A burned DVD holding the same file, in a real drive, is the same thing to the console.
+- The image's native code is written once to `console/cache/native/`, named by its own check, and loaded from there.
+- **Region free,** in `dvd.c` only, and never by changing the disc: the region area says the console's region, every rating board that didn't rate the disc gets the youngest age one that did, and the TMD handed to the Wii Menu ends the game ID in A, as discs made for all regions do. The game itself still sees its own ID.
+- **The apploader** is disc code the Wii Menu runs to load the game, as soon as it accepts a disc. `emit.py` translates it with the game into the same library, and `apploader.c` hands it to dispatch once its bytes in memory match the disc's. No disc code is ever interpreted.
+- **Starting the game:** when the menu jumps to the disc's program entry, `console.c` starts the console again with `--boot-disc`. The game's `ES_LaunchTitle` of the Wii Menu goes back the same way.
 
 ### Decision: TMD drives the start-up state
 

@@ -177,6 +177,7 @@ void gx_transform_read(TevKey *tev, VertexKey *key);
 void gx_transform_write_shader(const VertexKey *key, ShaderText *text);
 void gx_transform_apply(const VertexKey *key);
 void gx_light_read(VertexKey *key, int channel);
+int gx_light_plain(int channel);
 void gx_light_read_colors(float material[2][4], float ambient[2][4]);
 void gx_light_send(void);
 void gx_light_write_functions(ShaderText *text);

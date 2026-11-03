@@ -42,8 +42,8 @@ static int write_file(const char *path, const uint8_t *data, size_t bytes) {
   return done && !rename(partial, full);  // A cut-off write never replaces the old file.
 }
 
-// A value such as AREA or MODEL from setting.txt, which is lightly scrambled.
-static int setting(const char *name, char *out, size_t limit) {
+// A value such as AREA, MODEL or GAME from setting.txt, which is lightly scrambled.
+int console_setting(const char *name, char *out, size_t limit) {
   uint8_t data[SETTINGS_BYTES + 1] = {0};
   if (!read_file(SETTINGS_PATH, data, SETTINGS_BYTES)) return 0;
   uint32_t key = 0x73b5dbfa;
@@ -120,7 +120,7 @@ void wc24_request_user_id(uint8_t *out) {
   uint32_t stage = get32(config + CONFIG_STAGE);
   if (stage == STAGE_INITIAL) {
     char area[16], model[16];
-    if (setting("AREA", area, sizeof area) && setting("MODEL", model, sizeof model)) {
+    if (console_setting("AREA", area, sizeof area) && console_setting("MODEL", model, sizeof model)) {
       uint64_t id;
       uint32_t generation = get32(config + CONFIG_GENERATION);
       result = make_user_id(&id, IOS_DEVICE_ID, (uint16_t)generation, hardware_model(model), area_code(area));

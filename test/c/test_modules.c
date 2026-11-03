@@ -23,9 +23,7 @@ static int ran_module, ran_import;
 static void module_function(void) { ran_module++; }
 static void imported(void) { ran_import++; }
 
-typedef struct { uint32_t address; GuestFunction run; } Entry;
-const Entry function_table[] = {{IMPORTED, imported}};
-const int function_count = 1;
+static const TitleFunction functions_table[] = {{IMPORTED, imported}};
 
 static uint32_t code_value, section_values[2], import_values[1];
 static const ModuleFunction functions[] = {{0, module_function}, {8, module_function}};
@@ -34,8 +32,10 @@ static const uint32_t relocated[] = {4};  // A bl the linker points at the impor
 static const ImportSite sites[] = {{1, 4, 0, 0, 0}};
 static Module test_module = {"test", 0xe0, 16, 2, 1, functions, 2, exports, 1, relocated, 1, 0, sites, 1,
                              &code_value, section_values, import_values};
-const Module *const game_modules[] = {&test_module};
-const int game_module_count = 1;
+static const Module *const test_modules[] = {&test_module};
+int apploader_bind(uint32_t address) { return 0; }
+void console_hand_over(uint32_t address) {}
+const Title *title = &(Title){.functions = functions_table, .function_count = 1, .modules = test_modules, .module_count = 1};
 
 static const uint32_t words[4] = {0x7c0802a6, 0, 0x38600001, 0x4e800020};
 

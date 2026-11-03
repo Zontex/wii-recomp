@@ -113,13 +113,13 @@ class Runtime(unittest.TestCase):
         saves.mkdir()
         (disc / "sys").mkdir(parents=True)
         (disc / "files").mkdir()
-        (disc / "sys/boot.bin").write_bytes(bytes(0x440))
+        (disc / "sys/boot.bin").write_bytes(b"SAAA01".ljust(0x440, b"\0"))  # A disc is in.
         (disc / "sys/fst.bin").write_bytes(struct.pack(">BBHII", 1, 0, 0, 0, 1) + b"\0")
         (disc / "sys/main.dol").write_bytes(bytes(0x100))
         disc_ticket = bytearray(ticket(0x0001000053414141))
         struct.pack_into(">I", disc_ticket, 0x1d0, 0x99887766)
         (disc / "ticket.bin").write_bytes(disc_ticket)
-        sources = ["test_es.c", "es.c", "es_titles.c", "es_content.c", "titles.c", "files.c", "dvd.c"]
+        sources = ["test_es.c", "es.c", "es_titles.c", "es_content.c", "titles.c", "files.c", "drive.c", "title.c"]
         self.build_and_run([HERE / "c" / sources[0]] + [RUNTIME / name for name in sources[1:]], storage, saves, disc / "sys")
 
 

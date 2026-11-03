@@ -8,7 +8,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 
-#include "game.h"
+#include "title.h"
 #include "cpu.h"
 #include "gx_inspect.h"
 #ifdef GX_WITH_VULKAN
@@ -168,7 +168,7 @@ static void fill_board(uint32_t out) {
 // KPADRead(channel, statuses, count): newest status first, returns how many.
 // Only a game built for the Balance Board has this flag. Others scan every channel
 // and shouldn't find a device they know nothing about.
-static int has_board(void) { return game_calibration_flag != 0; }
+static int has_board(void) { return title->calibration_flag != 0; }
 
 static int is_connected(int channel) { return channel == CHANNEL_REMOTE || (channel == CHANNEL_BOARD && has_board()); }
 
@@ -209,7 +209,7 @@ void input_board_sensors(void) {
 void input_board_calibration(void) {
   uint32_t buffer = cpu.r[4], bytes = cpu.r[6];
   for (uint32_t i = 0; i < bytes; i++) wr8(buffer + i, 0);
-  wr32(game_calibration_flag, 1);
+  wr32(title->calibration_flag, 1);
   cpu.r[3] = 0;
 }
 

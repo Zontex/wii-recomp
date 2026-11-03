@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 enum {
-  IRQ_EXI = 4, IRQ_AI = 5, IRQ_DSP = 6, IRQ_VI = 8, IRQ_PE_TOKEN = 9, IRQ_PE_FINISH = 10, IRQ_CP = 11, IRQ_IPC = 14,
+  IRQ_SI = 3, IRQ_EXI = 4, IRQ_AI = 5, IRQ_DSP = 6, IRQ_VI = 8, IRQ_PE_TOKEN = 9, IRQ_PE_FINISH = 10, IRQ_CP = 11, IRQ_IPC = 14,
 };
 
 void hardware_start(void);
@@ -18,6 +18,8 @@ uint32_t hw_peek(uint32_t address, int bytes);
 void hw_poke(uint32_t address, uint32_t value, int bytes);
 
 // Blocks claim the registers they handle, and return 1 if they did.
+int si_read(uint32_t address, uint32_t *value);
+int si_write(uint32_t address, uint32_t value);
 int ipc_read(uint32_t address, uint32_t *value);
 int ipc_write(uint32_t address, uint32_t value);
 void ipc_update(void);

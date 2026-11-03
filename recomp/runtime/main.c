@@ -7,15 +7,20 @@
 #endif
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
+#include <sys/stat.h>
 
 #include "audio.h"
+#include "console.h"
 #include "input.h"
 #include "cpu.h"
 #include "dispatch.h"
+#include "drive.h"
 #include "gx.h"
 #include "hardware.h"
 #include "ios.h"
 #include "loader.h"
+#include "title.h"
 
 Cpu cpu;
 uint8_t *mem1;
@@ -51,36 +56,68 @@ void guest_fatal(void) {
 
 void system_call(uint32_t address) { (void)address; }
 
-static const char *system_folder;
+static Boot boot;
 
 static void *run(void *unused) {
 #ifdef __APPLE__
   pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);  // A frame can't wait for the system's other work.
 #endif
   (void)unused;
-  static char path[1024];
-  snprintf(path, sizeof path, "%s/main.dol", system_folder);
   fill_code_slots();
-  uint32_t entry = load_program(path);
-  set_up_low_memory(system_folder);
+  uint32_t entry = load_program(&boot);
+  set_up_low_memory(&boot);
   fprintf(stderr, "running from %08x\n", entry);
   dispatch(entry);
   fprintf(stderr, "the program returned\n");
   return 0;
 }
 
-// Saves and compiled shaders live next to the program, so they don't depend on where
-// it was started from, and each title's build keeps its own.
-static void use_save_folder_beside(const char *program) {
-  char full[PATH_MAX], saves[PATH_MAX + 16], shaders[PATH_MAX + 16];
+#ifdef __APPLE__
+#define LIBRARY_SUFFIX "dylib"
+#else
+#define LIBRARY_SUFFIX "so"
+#endif
+
+// The title's native code: WII_RECOMP_NATIVE if set, or the library built beside the program.
+static void load_title_beside(const char *program) {
+  char full[PATH_MAX], path[PATH_MAX + 32];
+  const char *chosen = getenv("WII_RECOMP_NATIVE");
+  if (!chosen) {
+    if (!realpath(program, full)) { perror(program); exit(1); }
+    snprintf(path, sizeof path, "%s/title." LIBRARY_SUFFIX, dirname(full));
+    chosen = path;
+  }
+  title_load(chosen);
+}
+
+// A disc image carries its own native code, which is written out once to the cache.
+static void load_title_from_disc(void) {
+  char path[PATH_MAX];
+  if (!drive_native(getenv("WII_RECOMP_CACHE"), path, sizeof path)) {
+    fprintf(stderr, "stop: this disc has no native code for %s\n", drive_platform());
+    exit(10);
+  }
+  title_load(path);
+}
+
+// Saves, compiled shaders and the native code cache live next to the program, so they
+// don't depend on where it was started from.
+static void use_folders_beside(const char *program) {
+  char full[PATH_MAX], path[PATH_MAX + 16];
   if (!realpath(program, full)) return;
   const char *folder = dirname(full);  // Linux's changes `full`, so it's called once.
-  snprintf(saves, sizeof saves, "%s/saves", folder);
-  snprintf(shaders, sizeof shaders, "%s/shader-cache", folder);
-  setenv("WII_RECOMP_SAVES", saves, 0);
-  setenv("WII_RECOMP_SHADER_CACHE", shaders, 0);
-  snprintf(saves, sizeof saves, "%s/discovered.txt", folder);
-  setenv("WII_RECOMP_DISCOVERED", saves, 0);
+  const char *names[][2] = {{"WII_RECOMP_SAVES", "saves"}, {"WII_RECOMP_SHADER_CACHE", "shader-cache"},
+                            {"WII_RECOMP_DISCOVERED", "discovered.txt"}, {"WII_RECOMP_CACHE", "native-cache"}};
+  for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
+    snprintf(path, sizeof path, "%s/%s", folder, names[i][1]);
+    setenv(names[i][0], path, 0);
+  }
+}
+
+static int is_folder(const char *path) {
+  struct stat info;
+  if (stat(path, &info)) { perror(path); exit(1); }
+  return S_ISDIR(info.st_mode);
 }
 
 int main(int count, char **arguments) {
@@ -88,18 +125,32 @@ int main(int count, char **arguments) {
   // MoltenVK does that on its own thread with this off, so the game never stalls on it.
   // It reads this as it loads, which is before any window exists, so it's set first.
   setenv("MVK_CONFIG_SYNCHRONOUS_QUEUE_SUBMITS", "0", 0);
-  if (count < 2) {
-    fprintf(stderr, "usage: wii-recomp <folder holding main.dol, boot.bin and fst.bin> [Wii storage folder]\n");
+  // Extra queue families, each its own Metal queue, so the window can have one that the
+  // window server's waits don't hold the game's frames back on. See gx_vulkan_window.c.
+  setenv("MVK_CONFIG_SPECIALIZED_QUEUE_FAMILIES", "1", 0);
+  if (count < 2 || (!strcmp(arguments[1], "--console") && count < 3)) {
+    fprintf(stderr, "usage: wii-recomp <disc image, or folder holding main.dol, boot.bin and fst.bin> [Wii storage folder]\n"
+                    "       wii-recomp --console <console folder> [--boot-disc]\n");
     return 1;
   }
-  system_folder = arguments[1];
+  if (!strcmp(arguments[1], "--console")) {
+    console_start(arguments[0], arguments[2], count > 3 && !strcmp(arguments[3], "--boot-disc"), &boot);
+    count = 1;  // The console's storage is its own, never a separate folder.
+  } else if (!drive_insert(arguments[1])) {
+    return 1;
+  } else if (is_folder(arguments[1])) {  // An extracted disc or a system title, with its native code built beside the console.
+    load_title_beside(arguments[0]);
+    boot_from_folder(arguments[1], &boot);
+  } else {
+    load_title_from_disc();
+    boot_from_disc(&boot);
+  }
+  use_folders_beside(arguments[0]);
   mem1 = calloc(1, MEM1_SIZE);
   mem2 = calloc(1, MEM2_SIZE);
   time_start();
   hardware_start();
   audio_start();
-  dvd_start(system_folder);
-  use_save_folder_beside(arguments[0]);
   files_start(count > 2 ? arguments[2] : 0);
   pthread_attr_t attributes;
   pthread_attr_init(&attributes);

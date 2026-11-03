@@ -1,8 +1,9 @@
 // /dev/fs and open files, on two real folders. argv: storage folder, save folder.
 #include "harness.h"
 #include "ios.h"
+#include "title.h"
 #include <stddef.h>
-const int game_virtual_bluetooth = 0;
+const Title *title = &(Title){0};
 void bluetooth_register_remote(uint8_t *settings, size_t bytes) {}
 void camera_set_bar_above(int above) {}
 int files_request(int id, uint32_t command, uint32_t request);

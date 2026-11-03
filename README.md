@@ -12,7 +12,7 @@ This repo holds code only. You need your own copy of each game. Disc images, ext
 | --- | --- |
 | Wii Fit Plus (RFPE01) | Runs through setup and the Body Test with simulated controllers. Holds 60 fps on an Intel Mac. On a Raspberry Pi 5 at 1080p, the board scene holds 60 fps and the setup screens 45 to 58. |
 | The Last Story (SLSEXJ) | Boots to gameplay with a simulated Wii Remote and Classic Controller, through the game's own Bluetooth code. Some surfaces draw wrong, and heavy scenes are slow. |
-| Wii Menu 4.3 | Translates and runs to its own error screen, waiting on a native IOS. |
+| Wii Menu 4.3 | Runs natively at 60 fps through its health warning, setup, channel grid and settings on an Intel Mac. With a recompiled disc image in its drive, it shows the banner and starts the game natively. |
 
 Real controllers aren't supported yet, and this doesn't run every Wii game. Unsupported hardware features are logged by name, so they can be fixed once for all games.
 
@@ -24,6 +24,8 @@ Real controllers aren't supported yet, and this doesn't run every Wii game. Unsu
 4. **Run.** `recomp/runtime` models the hardware the game talks to: the graphics command stream and its timing, the Wii's color stages as shaders drawn with Vulkan or OpenGL, the AX sound mixer, IOS services for disc, storage and Bluetooth, and a simulated Wii Remote with attachments.
 
 The game's own code, including its operating system and thread scheduler, runs almost unchanged.
+
+The console is one program, `wii-recomp`, the same for every title. Each title's translated code is a library it loads, `title.dylib` (`title.so` on Linux), which can travel inside a recompiled disc image with the disc.
 
 ## Build and run
 
@@ -37,6 +39,8 @@ mkdir -p recomp/build/obj
 (cd recomp/build && ninja)
 recomp/build/wii-recomp extracted/sys path/to/Wii/NAND
 ```
+
+To play from one file instead, pack the disc and its native code with `recomp/tools/make_disc.py` and give the console the image; `recomp/README.md` has the steps, and how to start from the Wii Menu.
 
 `extract_disc.py` reads ISO, RVZ and WBFS images with [nodtool](https://github.com/encounter/nod), and downloads a pinned, checksummed copy if it isn't installed. The program's second argument is a Wii storage folder, such as Dolphin's NAND folder after its system update. It's only read. Saves go to `recomp/build/saves`. Without a storage folder, the console's settings files such as SYSCONF are missing, and games that need them won't start.
 

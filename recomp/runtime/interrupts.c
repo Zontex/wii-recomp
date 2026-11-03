@@ -9,7 +9,7 @@
 
 #include "audio.h"
 #include "bluetooth.h"
-#include "game.h"
+#include "title.h"
 #include "cpu.h"
 #include "debug.h"
 #include "hardware.h"
@@ -98,7 +98,7 @@ void poll_interrupts(void) {
     if (now >= next_retrace) next_retrace = now + RETRACE_TICKS;
     video_retrace();
   }
-  if (game_virtual_bluetooth) bluetooth_update(now);
+  if (title->virtual_bluetooth) bluetooth_update(now);
   ipc_update();
   graphics_update();
   audio_update(now);

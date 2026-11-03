@@ -2,6 +2,10 @@
 // drawing happens on the game's thread.
 #define GLFW_INCLUDE_NONE
 #include <GLFW/glfw3.h>
+#ifdef __APPLE__
+#include <objc/message.h>
+#include <objc/runtime.h>
+#endif
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -51,8 +55,24 @@ static void on_mouse_button(GLFWwindow *from, int button, int action, int mods) 
   if (button == GLFW_MOUSE_BUTTON_RIGHT) input_hold(BUTTON_B, action == GLFW_PRESS);
 }
 
+// A Mac slows down a program whose window is covered or out of sight, which stretches
+// the game's waits from milliseconds to a tenth of a second and drops it to 10 fps.
+// A game keeps its own time with sound playing, as a console does, so it says so.
+static void stay_awake(void) {
+#ifdef __APPLE__
+  // NSActivityUserInitiatedAllowingIdleSystemSleep and NSActivityLatencyCritical.
+  const unsigned long long ACTIVITY_USER_INITIATED = 0x00FFFFFFULL & ~(1ULL << 20), ACTIVITY_LATENCY_CRITICAL = 0xFF00000000ULL;
+  id info = ((id (*)(id, SEL))objc_msgSend)((id)objc_getClass("NSProcessInfo"), sel_registerName("processInfo"));
+  id reason = ((id (*)(id, SEL, const char *))objc_msgSend)((id)objc_getClass("NSString"), sel_registerName("stringWithUTF8String:"), "running a game");
+  id activity = ((id (*)(id, SEL, unsigned long long, id))objc_msgSend)(info, sel_registerName("beginActivityWithOptions:reason:"),
+                                                                       ACTIVITY_USER_INITIATED | ACTIVITY_LATENCY_CRITICAL, reason);
+  ((id (*)(id, SEL))objc_msgSend)(activity, sel_registerName("retain"));  // Held for as long as the program runs.
+#endif
+}
+
 void window_create(void) {
   if (!glfwInit()) { fprintf(stderr, "stop: no window system\n"); exit(10); }
+  stay_awake();
   gx_backend_choose();
   gx_backend->window_prepare();
   glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);  // The game draws 640x456; 4x the pixels adds cost, not detail.

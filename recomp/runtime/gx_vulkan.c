@@ -444,6 +444,7 @@ static void start(const GxAttribute *attributes, int attribute_count, size_t byt
   vk_create_frames();
   create_efb();
   if (vk.surface) vk_create_swapchain();
+  vk_window_start(EFB_PIXEL_WIDTH, EFB_PIXEL_HEIGHT);
   write_shape_indices();
   begin_frame(&vk.frames[0]);
   blank_efb(vk.frame->draw);
@@ -672,8 +673,9 @@ static struct { GxTexture *texture; uint32_t frame; } newest_copy;
 
 // Whether the color stages hand on the first texture exactly, color and alpha alike: one
 // plain stage times a white vertex, with nothing after it that changes a pixel, and no
-// fog unless it's proven to add nothing.
-static int passes_texture_through(const TevKey *key, const GxTexture *texture) {
+// fog unless it's proven to add nothing. The channels are those the copy is made with,
+// which a copy still waiting to be made doesn't hold yet.
+static int passes_texture_through(const TevKey *key, const GxChannels *c) {
   enum { SWAP_IDENTITY = 0 | 1 << 2 | 2 << 4 | 3 << 6 };
   const TevStage *s = &key->stage[0];
   if (key->stages != 1 || key->alpha_test || key->constant_alpha || key->logic_help || key->wrap_output || key->bump_alpha) return 0;
@@ -683,7 +685,8 @@ static int passes_texture_through(const TevKey *key, const GxTexture *texture) {
   if (s->color_bias || s->color_subtract || s->color_scale || s->color_target) return 0;
   if (s->alpha_bias || s->alpha_subtract || s->alpha_scale || s->alpha_target || s->map != 0 || s->coordinate != 0) return 0;
   if (s->indirect || !s->texture_on || s->texture_swap != SWAP_IDENTITY) return 0;
-  const GxChannels *c = &texture->channels;
+  // The raster must be the vertex color itself, unlit, for the white check to mean white.
+  if (!s->reads_raster || s->raster != 0 || s->raster_swap != SWAP_IDENTITY || !gx_light_plain(0)) return 0;
   return c->red == GX_CHANNEL_RED && c->green == GX_CHANNEL_GREEN && c->blue == GX_CHANNEL_BLUE && c->alpha == GX_CHANNEL_ALPHA;
 }
 
@@ -713,7 +716,7 @@ static int redraws_newest_copy(int count) {
   const TevKey *key = &gx_last_tev;
   if (off || in_strip || count != 4 || newest_copy.frame != frame_serial || bindings[0].texture != newest_copy.texture) return 0;
   if (!(waiting_clear.kind & CLEARS_COLOR) || pass_open || state_in_use.blend_on || !state_in_use.color_write || !state_in_use.alpha_write) return 0;
-  if (state_in_use.depth_write || state_in_use.depth_test_on || !passes_texture_through(key, newest_copy.texture)) return 0;
+  if (state_in_use.depth_write || state_in_use.depth_test_on || !passes_texture_through(key, &newest_copy.texture->channels)) return 0;
   return draws_copy_where_it_was(count);
 }
 
@@ -1072,10 +1075,30 @@ static void present(const GxRectangle *from) {
   end_pass();
   if (vk_picture_sink) read_picture_back(frame->draw, from);
   uint32_t image_index = 0;
+  int outdated = 0;
+  if (vk.show_queue && vk.swapchain) {
+    // The window gets a copy, shown on its own queue, so the game never waits for it.
+    // See gx_vulkan_window.c.
+    int slot = vk_window_take_slot();
+    if (slot >= 0) {
+      efb_color_to_source(frame->draw);
+      vk_window_copy_picture(frame->draw, slot, vk.efb_color);
+      efb_color_to_target(frame->draw);
+      vk_frame_submit(frame, VK_NULL_HANDLE, vk_window_copied(slot));
+      VkOffset3D source[2], target[2];
+      blit_areas(from, (int)vk.swap_extent.width, (int)vk.swap_extent.height, source, target);
+      outdated = vk_window_show(slot, source, target);
+    } else {
+      vk_frame_submit(frame, VK_NULL_HANDLE, VK_NULL_HANDLE);
+    }
+    mark("to window", 0, 0);
+    goto shown;
+  }
   VkResult acquired = vk.swapchain ? vkAcquireNextImageKHR(vk.device, vk.swapchain, ACQUIRE_TIMEOUT_NS, frame->image_ready, VK_NULL_HANDLE, &image_index) : VK_NOT_READY;
   int showing = acquired == VK_SUCCESS || acquired == VK_SUBOPTIMAL_KHR;
-  int outdated = acquired == VK_SUBOPTIMAL_KHR || acquired == VK_ERROR_OUT_OF_DATE_KHR;
+  outdated = acquired == VK_SUBOPTIMAL_KHR || acquired == VK_ERROR_OUT_OF_DATE_KHR;
   if (showing) {
+    vk_window_test_stall(frame->draw);
     blit_to_window(frame->draw, image_index, from);
     mark("to window", 0, 0);
     vk_frame_submit(frame, frame->image_ready, vk.swap_done[image_index]);
@@ -1086,6 +1109,7 @@ static void present(const GxRectangle *from) {
   } else {
     vk_frame_submit(frame, VK_NULL_HANDLE, VK_NULL_HANDLE);
   }
+shown:
   mark_report();
   if (vk_picture_sink) hand_picture_over(frame);
   if (vk.swapchain) {
@@ -1337,11 +1361,11 @@ static int reads_held(void) {
   return 0;
 }
 
-static int draws_straight_back(int count, GxTexture *texture) {
+static int draws_straight_back(int count, GxTexture *texture, const GxChannels *channels) {
   extern TevKey gx_last_tev;
   const TevKey *key = &gx_last_tev;
   if (count != 4 || bindings[0].texture != texture || state_in_use.blend_on || !state_in_use.color_write || !state_in_use.alpha_write) return 0;
-  if (state_in_use.depth_write || state_in_use.depth_test_on || !passes_texture_through(key, texture)) return 0;
+  if (state_in_use.depth_write || state_in_use.depth_test_on || !passes_texture_through(key, channels)) return 0;
   return draws_copy_where_it_was(count);
 }
 
@@ -1394,12 +1418,12 @@ static int layer_draw(int count) {
     return 0;
   }
   if (empty_layer.step == LAYER_SIDE && fits) return 0;
-  if (empty_layer.step == LAYER_SIDE_CLEARED && draws_straight_back(count, empty_layer.picture)) {
+  if (empty_layer.step == LAYER_SIDE_CLEARED && draws_straight_back(count, empty_layer.picture, &empty_layer.picture_channels)) {
     empty_layer.step = LAYER_PICTURE_BACK;
     empty_layer.real = 1;
     return 1;
   }
-  if (empty_layer.step == LAYER_CLEARED_AGAIN && draws_straight_back(count, empty_layer.picture)) {
+  if (empty_layer.step == LAYER_CLEARED_AGAIN && draws_straight_back(count, empty_layer.picture, &empty_layer.picture_channels)) {
     empty_layer.step = LAYER_PICTURE_BACK;
     return 1;
   }

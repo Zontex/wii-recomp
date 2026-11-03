@@ -29,3 +29,6 @@ recomp/build-*/
 
 # FIFO recordings hold the game's textures and models.
 *.dff
+
+# Recompiled disc images hold the whole game.
+*.wrd
