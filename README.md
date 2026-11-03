@@ -1,4 +1,16 @@
+<div align="center">
+
 # Wii Recomp
+
+**The Wii console, rebuilt as native software.**
+
+[![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue)](LICENSE)
+[![Platforms: macOS, Raspberry Pi 5](https://img.shields.io/badge/platforms-macOS%20%7C%20Raspberry%20Pi%205-lightgrey)](#build-and-run)
+[![Graphics: Vulkan](https://img.shields.io/badge/graphics-Vulkan-lightgrey)](recomp/README.md)
+
+[What runs today](#what-runs-today) · [How it works](#how-it-works) · [Build and run](#build-and-run) · [Roadmap](ROADMAP.md)
+
+</div>
 
 Wii Recomp is the Wii rebuilt as native software. The goal is a small computer, such as a Raspberry Pi 5, that works as a Wii console: the Wii Menu starts up, you put in a disc, and the game plays on Wii Remotes and the Balance Board, all as native code with no emulator in between.
 
@@ -21,6 +33,21 @@ Physical Wii Remotes and the Balance Board aren't supported yet. When a game use
 
 ## How it works
 
+```mermaid
+flowchart LR
+    disc["Disc image or<br/>Wii Menu title"] --> translate["Translator<br/>PowerPC to C"]
+    translate --> clang["clang"]
+    clang --> title["title.dylib<br/>the game, as native code"]
+    title --> console
+    subgraph console ["wii-recomp: the console"]
+        direction TB
+        gx["Graphics chip, drawn with Vulkan"]
+        audio["Sound: the AX mixer"]
+        ios["IOS: disc, storage, Bluetooth"]
+        pads["Wii Remote and Balance Board"]
+    end
+```
+
 1. **Find the code.** The translator follows branches and pointers from the program's entry point, so no symbols are needed. `--all-code` also sweeps for code that is reached only through tables built at run time.
 2. **Find system functions by their contents.** The few system functions the runtime replaces are matched by hashes of their instructions, so a game needs no address list. If a match is unclear, the build stops instead of guessing.
 3. **Write C.** Each PowerPC instruction becomes plain C, and clang does the optimizing. Any code the translator missed runs on a built-in PowerPC interpreter, and is logged so the next build translates it.
@@ -32,7 +59,26 @@ A build produces two files. `wii-recomp` is the console, the same program for ev
 
 ## Build and run
 
-You need `clang`, `ninja`, Python 3, GLFW, the Vulkan loader and shaderc. On a Mac, also MoltenVK. GLFW installs with `brew install glfw`.
+You need `clang`, `ninja`, Python 3, GLFW, the Vulkan loader and shaderc.
+
+<details>
+<summary>Installing them</summary>
+
+**macOS** (Xcode's command line tools provide clang):
+
+```sh
+brew install ninja glfw molten-vk vulkan-loader shaderc
+```
+
+Or install the LunarG Vulkan SDK and set `VULKAN_SDK` to its folder.
+
+**Raspberry Pi OS:**
+
+```sh
+sudo apt install clang ninja-build python3 libglfw3-dev libvulkan-dev mesa-vulkan-drivers libshaderc-dev libasound2-dev
+```
+
+</details>
 
 ```sh
 # Unpack your disc (ISO, RVZ or WBFS) into extracted/
