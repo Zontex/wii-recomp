@@ -48,6 +48,11 @@ struct GxTexture {
   uint32_t owed_frame;
 };
 static uint32_t frame_serial;
+// Whether the picture's depth is one value everywhere, as after a whole clear with
+// nothing written since. A copy of it is then that value, with no picture to store
+// and copy from.
+static struct { int known; float value; } flat_depth;
+
 static int in_strip, strip_rest;
 enum { LAYER_IDLE, LAYER_PICTURE_COPIED, LAYER_CLEARED, LAYER_EMPTY_COPIED, LAYER_CLEARED_AGAIN, LAYER_PICTURE_BACK, LAYER_DEPTH_COPIED, LAYER_DEPTH_CLEARED,
        LAYER_SIDE, LAYER_SIDE_COPIED, LAYER_SIDE_CLEARED };
@@ -221,6 +226,7 @@ static void begin_frame(Frame *frame) {
   }
   depth_use.last_shape = depth_use.shape;
   depth_use.shape = 0;
+  flat_depth.known = 0;
   cover.recorded_anything_lasting = 0;
   cover.bands = 0;
   cover.first_shader = cover.next_shader;
@@ -663,6 +669,7 @@ static void drop_recorded_commands(void) {
   waiting_clear.area = (VkRect2D){{0, 0}, {(uint32_t)(EFB_WIDTH * EFB_SCALE), (uint32_t)(VISIBLE_HEIGHT * EFB_SCALE)}};
   memset(waiting_clear.values, 0, sizeof waiting_clear.values);
   waiting_clear.values[1].depthStencil.depth = 0;  // What fell behind the page stays behind it.
+  flat_depth.known = 0;
   if (capturing) { vkCmdResetQueryPool(vk.frame->draw, mark_pool, 0, MARKS); marks = 0; mark_draws = gx_stats.draws; mark("start", 0, 0); }
 }
 
@@ -775,6 +782,7 @@ static void draw(int primitive, int count) {
     }
     route_work(strip);
   }
+  if (state_in_use.depth_write) flat_depth.known = 0;
   if (layer_draw(count)) return;
   { extern unsigned gx_used_maps;
     for (int m = 0; m < MAX_TEXTURE_MAPS; m++) {
@@ -847,6 +855,8 @@ static void clear_now(const GxClear *c) {
     VkRect2D wanted = clip_to_efb(&c->area);
     VkRect2D visible = {{0, 0}, {EFB_PIXEL_WIDTH, VISIBLE_HEIGHT * EFB_SCALE}};
     int all = rectangle_holds(&wanted, &visible), n = depth_use.number;
+    flat_depth.known = all;
+    flat_depth.value = (float)c->depth;
     // The frame opens with a whole clear, so the last pass of the one before kept nothing.
     if (all && !depth_use.frame_began && n == 0) depth_use.no_store[depth_use.last_in_frame] = 1;
     depth_use.frame_began = 1;
@@ -965,7 +975,8 @@ static void copy_color_now(GxTexture *to, const GxRectangle *from, int width, in
     mark("clear instead of copy", width, height);
     return;
   }
-  if (pass_open || from->y < VISIBLE_HEIGHT) end_pass();
+  // A clear of depth alone can go on waiting, as the copy only reads color.
+  if (pass_open || (from->y < VISIBLE_HEIGHT && waiting_clear.kind != CLEARS_DEPTH)) end_pass();
   VkCommandBuffer commands = vk.frame->draw;
   prepare_copy(to, width, height, COLOR_FORMAT, VK_IMAGE_ASPECT_COLOR_BIT, channels);
   efb_color_to_source(commands);
@@ -985,9 +996,23 @@ static void copy_color_now(GxTexture *to, const GxRectangle *from, int width, in
 
 static void copy_depth_now(GxTexture *to, const GxRectangle *from, int width, int height) {
   if (width <= 0 || height <= 0) return;
-  end_pass();
+  static int off = -1;
+  if (off < 0) off = getenv("WII_RECOMP_NO_FLAT_DEPTH") != 0;
   VkCommandBuffer commands = vk.frame->draw;
   GxChannels channels = {GX_CHANNEL_RED, GX_CHANNEL_RED, GX_CHANNEL_RED, GX_CHANNEL_ONE};
+  if (!off && flat_depth.known && from->x >= 0 && from->y >= 0 && from->x + from->width <= EFB_WIDTH && from->y + from->height <= VISIBLE_HEIGHT) {
+    // Every pixel copied holds the same value, which a clear of the copy gives exactly.
+    // A clear still waiting can go on waiting, but an open pass must end first.
+    if (pass_open) end_pass();
+    prepare_copy(to, width, height, DEPTH_FORMAT, VK_IMAGE_ASPECT_DEPTH_BIT, channels);
+    VkClearDepthStencilValue value = {flat_depth.value, 0};
+    VkImageSubresourceRange whole = {VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, 0, 1};
+    vkCmdClearDepthStencilImage(commands, to->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &value, 1, &whole);
+    finish_copy(to, VK_IMAGE_ASPECT_DEPTH_BIT);
+    mark("fill instead of depth copy", width, height);
+    return;
+  }
+  end_pass();
   prepare_copy(to, width, height, DEPTH_FORMAT, VK_IMAGE_ASPECT_DEPTH_BIT, channels);
   barrier(commands, vk.efb_depth, VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
           DEPTH_ATTACHMENT_STAGE, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
@@ -1135,7 +1160,8 @@ static void fill_copy(GxTexture *to, int width, int height, GxChannels channels,
   route_work(0);
   if (!in_strip) { to->copied_frame = frame_serial; cover.recorded_anything_lasting = 1; }
   to->strip_frame = frame_serial;
-  end_pass();
+  // Nothing of the picture is read, so a clear still waiting can go on waiting.
+  if (pass_open) end_pass();
   prepare_copy(to, width, height, COLOR_FORMAT, VK_IMAGE_ASPECT_COLOR_BIT, channels);
   VkClearColorValue value;
   memcpy(value.float32, color, sizeof value.float32);
@@ -1308,7 +1334,9 @@ static void side_to_picture(GxTexture *copied) {
 static void owe(GxTexture *t, int why) { t->owed = why; t->owed_frame = frame_serial; }
 
 // Runs what was held back. The picture's copy can be left out when it's about to be
-// copied again with nothing read in between.
+// copied again with nothing read in between. Once it has been drawn back, its only use
+// so far, it's left out too unless the draw at hand reads it (picture_needed 2), and a
+// later read of it is caught, as for a layer drawn apart.
 static void settle_layer(int picture_needed) {
   int step = empty_layer.step, real = empty_layer.real;
   empty_layer.step = LAYER_IDLE;
@@ -1336,7 +1364,10 @@ static void settle_layer(int picture_needed) {
   if (real) {
     if (picture_needed) owe(empty_layer.picture, 1 | 8);
   } else {
-    if (picture_needed) copy_color_now(empty_layer.picture, &empty_layer.from, empty_layer.width, empty_layer.height, empty_layer.picture_channels, 0);
+    static int keep = -1;
+    if (keep < 0) keep = getenv("WII_RECOMP_KEEP_DRAWN_BACK") != 0;
+    if (picture_needed == 2 || (picture_needed && keep)) copy_color_now(empty_layer.picture, &empty_layer.from, empty_layer.width, empty_layer.height, empty_layer.picture_channels, 0);
+    else if (picture_needed) owe(empty_layer.picture, 1 | 4);
     fill_copy(empty_layer.layer, empty_layer.width, empty_layer.height, empty_layer.layer_channels, empty_layer.clears[0].color);
   }
   if (step >= LAYER_DEPTH_COPIED) copy_depth_requested(empty_layer.depth, &empty_layer.from, empty_layer.depth_width, empty_layer.depth_height);
@@ -1438,7 +1469,10 @@ static int layer_draw(int count) {
     static int told;
     if (!told++) fprintf(stderr, "layer: laid over in a way not proven to change nothing (gx_vulkan.c:%d), so it is drawn\n", refused_at);
   }
-  give_up_layer();
+  extern unsigned gx_used_maps;
+  int reads_picture = 0;
+  for (int m = 0; m < MAX_TEXTURE_MAPS; m++) reads_picture |= (gx_used_maps & (1u << m)) && bindings[m].texture == empty_layer.picture;
+  settle_layer(reads_picture ? 2 : 1);
   return 0;
 }
 
