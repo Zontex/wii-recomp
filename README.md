@@ -1,52 +1,80 @@
 # Wii Recomp
 
-A static recompiler that runs Nintendo Wii games as ordinary native programs. It translates a game's PowerPC code to C ahead of time, compiles it with clang, and links it to a runtime that stands in for the console: CPU, graphics chip, sound, IOS and controllers.
+Wii Recomp is the Wii rebuilt as native software. The goal is a small computer, such as a Raspberry Pi 5, that works as a Wii console: the Wii Menu starts up, you put in a disc, and the game plays on Wii Remotes and the Balance Board, all as native code with no emulator in between.
 
-The goal is a complete native Wii: give it a disc image and it runs, from the real Wii Menu if you like, on real Wii Remotes or a Switch controller, at the game's own frame rate, on a Mac or a Raspberry Pi 5. It isn't there yet. See [`ROADMAP.md`](ROADMAP.md).
+Every program the console runs, the Wii Menu and each game alike, is recompiled ahead of time. Its PowerPC code is translated to C and compiled with clang. The hardware around it is rebuilt as software: the graphics chip, sound, IOS, storage, Bluetooth and the controllers.
 
-This repo holds code only. You need your own copy of each game. Disc images, extracted files, translated code, Wii storage and saves stay on your machine and must never be committed.
+The same system runs on macOS, which is where most of it is developed, with other platforms to follow. [`ROADMAP.md`](ROADMAP.md) tracks the way to a complete console.
 
-## Status
+> [!IMPORTANT]
+> This repository contains code only. Bring your own games. Disc images, extracted files, translated code, Wii storage and saves stay on your machine.
 
-| Title | State |
+## What runs today
+
+| Title | Where it stands |
 | --- | --- |
-| Wii Fit Plus (RFPE01) | Runs through setup and the Body Test with simulated controllers. Holds 60 fps on an Intel Mac. On a Raspberry Pi 5 at 1080p, the board scene holds 60 fps and the setup screens 45 to 58. |
-| The Last Story (SLSEXJ) | Boots to gameplay with a simulated Wii Remote and Classic Controller, through the game's own Bluetooth code. Some surfaces draw wrong, and heavy scenes are slow. |
-| Wii Menu 4.3 | Runs natively at 60 fps through its health warning, setup, channel grid and settings on an Intel Mac. With a recompiled disc image in its drive, it shows the banner and starts the game natively. |
+| **Wii Fit Plus** (RFPE01) | Plays through setup and the Body Test with simulated controllers, at 60 fps on an Intel Mac. On a Raspberry Pi 5 at 1080p, the Body Test and the step-off screen hold 60 fps. |
+| **Wii Menu 4.3** | Runs natively at 60 fps on an Intel Mac through the health warning, first-time setup, channel grid and settings. With a recompiled disc image in its drive, it shows the game's banner and starts it. |
+| **The Last Story** (SLSEXJ) | Reaches gameplay with a simulated Wii Remote and Classic Controller, through the game's own Bluetooth code. Some surfaces draw wrong, and heavy scenes are slow. |
 
-Real controllers aren't supported yet, and this doesn't run every Wii game. Unsupported hardware features are logged by name, so they can be fixed once for all games.
+Physical Wii Remotes and the Balance Board aren't supported yet. When a game uses a hardware feature the runtime doesn't have, the runtime logs the feature by name. Each one is fixed once, for every game.
 
 ## How it works
 
-1. **Find the code.** `recomp/translate` follows branches and pointers from the entry point, with no symbols needed. `--all-code` also sweeps for code reached only through tables built at run time.
-2. **Find system functions by their contents.** The few system functions the runtime replaces are found by hashes of their instructions, so no game needs its own address list. The build stops rather than guess.
-3. **Write C.** Each instruction becomes literal C, and clang does the optimizing. Code the translator never saw runs through a PowerPC interpreter instead of stopping the game, and is logged.
-4. **Run.** `recomp/runtime` models the hardware the game talks to: the graphics command stream and its timing, the Wii's color stages as shaders drawn with Vulkan or OpenGL, the AX sound mixer, IOS services for disc, storage and Bluetooth, and a simulated Wii Remote with attachments.
+1. **Find the code.** The translator follows branches and pointers from the program's entry point, so no symbols are needed. `--all-code` also sweeps for code that is reached only through tables built at run time.
+2. **Find system functions by their contents.** The few system functions the runtime replaces are matched by hashes of their instructions, so a game needs no address list. If a match is unclear, the build stops instead of guessing.
+3. **Write C.** Each PowerPC instruction becomes plain C, and clang does the optimizing. Any code the translator missed runs on a built-in PowerPC interpreter, and is logged so the next build translates it.
+4. **Run.** The runtime models the hardware the game talks to: the graphics command stream and its timing, the Wii's colour stages as Vulkan shaders, the AX sound mixer, IOS for disc, storage and Bluetooth, and a simulated Wii Remote and Balance Board.
 
-The game's own code, including its operating system and thread scheduler, runs almost unchanged.
+The game's own code, its operating system and thread scheduler included, runs almost unchanged.
 
-The console is one program, `wii-recomp`, the same for every title. Each title's translated code is a library it loads, `title.dylib` (`title.so` on Linux), which can travel inside a recompiled disc image with the disc.
+A build produces two files. `wii-recomp` is the console, the same program for every title. `title.dylib` (`title.so` on Linux) holds one game's translated code, and the console loads it.
 
 ## Build and run
 
-You need `clang`, `ninja`, Python 3 and GLFW (`brew install glfw` on a Mac). Vulkan needs the Vulkan loader and shaderc, and MoltenVK on a Mac. Then extract your disc and build:
+You need `clang`, `ninja`, Python 3, GLFW, the Vulkan loader and shaderc. On a Mac, also MoltenVK. GLFW installs with `brew install glfw`.
 
 ```sh
+# Unpack your disc (ISO, RVZ or WBFS) into extracted/
 python3 recomp/tools/extract_disc.py "path/to/game.rvz"
+
+# Translate and compile it. A full build takes a few minutes.
 python3 recomp/translate/emit.py extracted/sys/main.dol recomp/build/generated
 python3 recomp/translate/build_file.py recomp/build
 mkdir -p recomp/build/obj
 (cd recomp/build && ninja)
+
+# Play
 recomp/build/wii-recomp extracted/sys path/to/Wii/NAND
 ```
 
-To play from one file instead, pack the disc and its native code with `recomp/tools/make_disc.py` and give the console the image; `recomp/README.md` has the steps, and how to start from the Wii Menu.
+The last argument is a Wii storage folder, such as Dolphin's NAND folder after its system update. Wii Recomp only reads it and writes saves to `recomp/build/saves`. Some games need the console settings it holds, such as SYSCONF, and won't start without one.
 
-`extract_disc.py` reads ISO, RVZ and WBFS images with [nodtool](https://github.com/encounter/nod), and downloads a pinned, checksummed copy if it isn't installed. The program's second argument is a Wii storage folder, such as Dolphin's NAND folder after its system update. It's only read. Saves go to `recomp/build/saves`. Without a storage folder, the console's settings files such as SYSCONF are missing, and games that need them won't start.
+`extract_disc.py` uses [nodtool](https://github.com/encounter/nod), and downloads a pinned, checksummed copy if it isn't installed. For games that build their C++ method tables at run time, such as The Last Story, add `--all-code` to `emit.py`.
 
-A full build takes several minutes. Add `--all-code` to `emit.py` for games that build their C++ method tables at run time, such as The Last Story.
+### Play from a disc image, or from the Wii Menu
 
-See [`recomp/README.md`](recomp/README.md) for controls, settings, benchmarking and a map of the source.
+```sh
+# Pack the disc and its native code into one file
+python3 recomp/tools/make_disc.py extracted game.wrd --native darwin-x86_64=recomp/build/title.dylib
+recomp/build/wii-recomp game.wrd path/to/Wii/NAND
+
+# Or set up a console with the Wii Menu, and put the disc in its drive
+python3 recomp/tools/prepare_console.py path/to/Wii/NAND console --menu recomp/build-menu
+cp game.wrd console/drive/ && recomp/build/wii-recomp --console console
+```
+
+[`recomp/README.md`](recomp/README.md) covers the controls, the settings, benchmarking, and a map of the source.
+
+## Repository layout
+
+| Folder | Contents |
+| --- | --- |
+| `recomp/translate` | The translator: finds code, matches system functions, writes C and the ninja file |
+| `recomp/runtime` | The console: CPU state, hardware, graphics, sound, IOS, Bluetooth and the window |
+| `recomp/tools` | Disc extraction, disc images, console setup, frame replay and benchmarks |
+| `test` | Unit, translator and graphics tests, all on made-up data |
+| `docs` | The hardware inventory and the native IOS plan |
 
 ## Tests
 
@@ -54,16 +82,16 @@ See [`recomp/README.md`](recomp/README.md) for controls, settings, benchmarking 
 python3 -m unittest discover test
 ```
 
-The tests use made-up data, with no Nintendo files. Set `VULKAN_SDK` to a folder holding the Vulkan libraries to also run the graphics replay tests, which draw scenes headless and compare pixels. Translator tests that need a real game are skipped when `extracted/` is missing.
+The tests need no Nintendo files. Set `VULKAN_SDK` to a folder with the Vulkan libraries to also run the graphics replay tests, which draw scenes without a window and compare pixels. Translator tests that need a game are skipped when `extracted/` is missing.
 
 ## Documents
 
-- [`ROADMAP.md`](ROADMAP.md): the stages towards a complete native Wii.
-- [`docs/hardware_inventory.md`](docs/hardware_inventory.md): every part of the console, with what's done, partial or missing.
-- [`docs/native_ios.md`](docs/native_ios.md): the plan for a native IOS that runs the real Wii Menu.
+- [`ROADMAP.md`](ROADMAP.md): the stages towards a complete native Wii, as checklists.
+- [`docs/hardware_inventory.md`](docs/hardware_inventory.md): every part of the console, marked done, partial or missing.
+- [`docs/native_ios.md`](docs/native_ios.md): how the native IOS runs the Wii Menu, and what comes next.
 
 ## License
 
-GPL-2.0-or-later. See [`LICENSE`](LICENSE). Parts of the graphics model follow [Dolphin](https://dolphin-emu.org/)'s behaviour, as listed in [`CREDITS.md`](CREDITS.md).
+GPL-2.0-or-later, see [`LICENSE`](LICENSE). Parts of the graphics and IOS models follow the behaviour of [Dolphin](https://dolphin-emu.org/), as listed in [`CREDITS.md`](CREDITS.md).
 
-This project isn't affiliated with or endorsed by Nintendo. Wii is a trademark of Nintendo.
+Wii Recomp isn't affiliated with or endorsed by Nintendo. Wii is a trademark of Nintendo.
