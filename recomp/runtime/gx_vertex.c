@@ -1,0 +1,241 @@
+// Vertices: decodes each format the game declares into a buffer for the vertex
+// shader, which applies the matrices (gx_transform.c) and lights (gx_light.c).
+#include <string.h>
+
+#include "cpu.h"
+#include "debug.h"
+#include "gx.h"
+
+enum {
+  CP_MATRIX_INDEX = 0x30, CP_DESCRIPTOR_LOW = 0x50, CP_DESCRIPTOR_HIGH = 0x60, CP_FORMAT_A = 0x70,
+  CP_FORMAT_B = 0x80, CP_FORMAT_C = 0x90, CP_ARRAY_BASE = 0xa0, CP_ARRAY_STRIDE = 0xb0,
+  ARRAY_POSITION = 0, ARRAY_NORMAL = 1, ARRAY_COLOR = 2, ARRAY_TEXTURE = 4,
+  KIND_NONE = 0, KIND_DIRECT = 1, KIND_INDEX8 = 2, KIND_INDEX16 = 3,
+  COMPONENT_U8 = 0, COMPONENT_S8 = 1, COMPONENT_U16 = 2, COMPONENT_S16 = 3, COMPONENT_FLOAT = 4,
+  COLOR_RGB565 = 0, COLOR_RGB8 = 1, COLOR_RGBX8 = 2, COLOR_RGBA4 = 3, COLOR_RGBA6 = 4, COLOR_RGBA8 = 5,
+  NORMAL_SHIFT_U8 = 7, NORMAL_SHIFT_S8 = 6, NORMAL_SHIFT_U16 = 15, NORMAL_SHIFT_S16 = 14, MATRIX_INDEX_MASK = 63, TEXTURES = 8, ALL_NORMAL_VALUES = 9,
+  NULL_INDEX8 = 0xff, NULL_INDEX16 = 0xffff,
+};
+
+float gx_cached_normals[CACHED_NORMALS][4];
+
+typedef struct {
+  int position, normal, color[2], texture[TEXTURES], position_index, texture_index[TEXTURES];
+  int position_components, position_type, position_shift;
+  int normal_components, normal_type, normal_indexes;
+  int color_type[2], color_alpha[2];
+  int texture_components[TEXTURES], texture_type[TEXTURES], texture_shift[TEXTURES];
+} Format;
+
+static uint32_t bits(uint32_t value, int low, int count) { return (value >> low) & ((1u << count) - 1); }
+
+static void read_format(int v, Format *f) {
+  uint32_t low = gx.cp[CP_DESCRIPTOR_LOW], high = gx.cp[CP_DESCRIPTOR_HIGH];
+  uint32_t a = gx.cp[CP_FORMAT_A + v], b = gx.cp[CP_FORMAT_B + v], c = gx.cp[CP_FORMAT_C + v];
+  f->position_index = (int)(low & 1);
+  for (int i = 0; i < TEXTURES; i++) {
+    f->texture_index[i] = (int)bits(low, 1 + i, 1);
+    f->texture[i] = (int)bits(high, i * 2, 2);
+  }
+  f->position = (int)bits(low, 9, 2);
+  f->normal = (int)bits(low, 11, 2);
+  f->color[0] = (int)bits(low, 13, 2);
+  f->color[1] = (int)bits(low, 15, 2);
+  f->position_components = bits(a, 0, 1) ? 3 : 2;
+  f->position_type = (int)bits(a, 1, 3);
+  f->position_shift = (int)bits(a, 4, 5);
+  f->normal_components = bits(a, 9, 1) ? 9 : 3;
+  f->normal_type = (int)bits(a, 10, 3);
+  // Three normals can each have their own index, one after the other.
+  f->normal_indexes = bits(a, 31, 1) && f->normal_components == ALL_NORMAL_VALUES && f->normal >= KIND_INDEX8 ? 3 : 1;
+  f->color_alpha[0] = (int)bits(a, 13, 1);
+  f->color_type[0] = (int)bits(a, 14, 3);
+  f->color_alpha[1] = (int)bits(a, 17, 1);
+  f->color_type[1] = (int)bits(a, 18, 3);
+  static const struct { int word, count, type, shift; } layout[TEXTURES] = {
+    {0, 21, 22, 25}, {1, 0, 1, 4}, {1, 9, 10, 13}, {1, 18, 19, 22},
+    {1, 27, 28, -1}, {2, 5, 6, 9}, {2, 14, 15, 18}, {2, 23, 24, 27},
+  };
+  const uint32_t words[3] = {a, b, c};
+  for (int i = 0; i < TEXTURES; i++) {
+    uint32_t word = words[layout[i].word];
+    f->texture_components[i] = bits(word, layout[i].count, 1) ? 2 : 1;
+    f->texture_type[i] = (int)bits(word, layout[i].type, 3);
+    f->texture_shift[i] = layout[i].shift < 0 ? (int)bits(c, 0, 5) : (int)bits(word, layout[i].shift, 5);
+  }
+}
+
+static uint32_t component_bytes(int type) {
+  return type == COMPONENT_FLOAT ? 4 : type >= COMPONENT_U16 ? 2 : 1;
+}
+
+static uint32_t color_bytes(int type) {
+  static const uint32_t sizes[] = {2, 3, 4, 2, 3, 4};
+  return sizes[type > COLOR_RGBA8 ? 0 : type];
+}
+
+static uint32_t attribute_bytes(int kind, uint32_t direct) {
+  if (kind == KIND_DIRECT) return direct;
+  return kind == KIND_INDEX8 ? 1 : kind == KIND_INDEX16 ? 2 : 0;
+}
+
+static uint32_t vertex_bytes(const Format *f) {
+  uint32_t size = (uint32_t)f->position_index;
+  for (int i = 0; i < TEXTURES; i++) size += (uint32_t)f->texture_index[i];
+  size += attribute_bytes(f->position, (uint32_t)f->position_components * component_bytes(f->position_type));
+  size += attribute_bytes(f->normal, (uint32_t)f->normal_components * component_bytes(f->normal_type)) * (uint32_t)f->normal_indexes;
+  for (int i = 0; i < 2; i++) size += attribute_bytes(f->color[i], color_bytes(f->color_type[i]));
+  for (int i = 0; i < TEXTURES; i++) {
+    size += attribute_bytes(f->texture[i], (uint32_t)f->texture_components[i] * component_bytes(f->texture_type[i]));
+  }
+  return size;
+}
+
+int gx_vertex_normals(int format) {
+  Format f;
+  read_format(format, &f);
+  return f.normal == KIND_NONE ? 0 : f.normal_components == ALL_NORMAL_VALUES ? 3 : 1;
+}
+
+uint32_t gx_vertices_size(int format, int count) {
+  Format f;
+  read_format(format, &f);
+  return vertex_bytes(&f) * (uint32_t)count;
+}
+
+static float read_component(const uint8_t *p, int type, int shift) {
+  float scale = 1.0f / (float)(1u << shift);
+  switch (type) {
+    case COMPONENT_U8: return (float)p[0] * scale;
+    case COMPONENT_S8: return (float)(int8_t)p[0] * scale;
+    case COMPONENT_U16: return (float)(uint16_t)((p[0] << 8) | p[1]) * scale;
+    case COMPONENT_S16: return (float)(int16_t)((p[0] << 8) | p[1]) * scale;
+    default: return as_float(((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]);
+  }
+}
+
+static void read_color(const uint8_t *p, int type, float out[4]) {
+  uint32_t v = 0;
+  switch (type) {
+    case COLOR_RGB565:
+      v = ((uint32_t)p[0] << 8) | p[1];
+      out[0] = (float)(v >> 11) / 31; out[1] = (float)((v >> 5) & 63) / 63; out[2] = (float)(v & 31) / 31; out[3] = 1;
+      break;
+    case COLOR_RGB8: case COLOR_RGBX8:
+      out[0] = (float)p[0] / 255; out[1] = (float)p[1] / 255; out[2] = (float)p[2] / 255; out[3] = 1;
+      break;
+    case COLOR_RGBA4:
+      out[0] = (float)(p[0] >> 4) / 15; out[1] = (float)(p[0] & 15) / 15;
+      out[2] = (float)(p[1] >> 4) / 15; out[3] = (float)(p[1] & 15) / 15;
+      break;
+    case COLOR_RGBA6:
+      v = ((uint32_t)p[0] << 16) | ((uint32_t)p[1] << 8) | p[2];
+      for (int i = 0; i < 4; i++) out[i] = (float)((v >> (18 - i * 6)) & 63) / 63;
+      break;
+    default:
+      for (int i = 0; i < 4; i++) out[i] = (float)p[i] / 255;
+  }
+}
+
+// Returns where an attribute's data is, in the stream or in an array.
+static const uint8_t *locate(const uint8_t **p, int kind, int array, uint32_t direct) {
+  const uint8_t *at = *p;
+  if (kind == KIND_DIRECT) {
+    *p += direct;
+    return at;
+  }
+  uint32_t index = kind == KIND_INDEX8 ? at[0] : ((uint32_t)at[0] << 8) | at[1];
+  *p += kind == KIND_INDEX8 ? 1 : 2;
+  return host((gx.cp[CP_ARRAY_BASE + array] + index * (gx.cp[CP_ARRAY_STRIDE + array] & 0xff)) | 0x80000000u);
+}
+
+static int normal_shift(int type) {
+  return type == COMPONENT_U8 ? NORMAL_SHIFT_U8 : type == COMPONENT_S8 ? NORMAL_SHIFT_S8 : type == COMPONENT_U16 ? NORMAL_SHIFT_U16 : NORMAL_SHIFT_S16;
+}
+
+static void read_normal(const uint8_t *source, const Format *f, float out[3]) {
+  uint32_t size = component_bytes(f->normal_type);
+  for (uint32_t i = 0; i < 3; i++) out[i] = read_component(source + i * size, f->normal_type, normal_shift(f->normal_type));
+}
+
+static void read_normals(const uint8_t **p, const Format *f, Vertex *v) {
+  uint32_t size = component_bytes(f->normal_type), values = (uint32_t)f->normal_components;
+  float *parts[3] = {v->normal, v->tangent, v->binormal};
+  if (f->normal_indexes == 1) {
+    const uint8_t *source = locate(p, f->normal, ARRAY_NORMAL, values * size);
+    for (uint32_t part = 0; source && part < values / 3; part++) read_normal(source + part * 3 * size, f, parts[part]);
+    return;
+  }
+  for (uint32_t part = 0; part < 3; part++) {
+    const uint8_t *source = locate(p, f->normal, ARRAY_NORMAL, 0);
+    if (source) read_normal(source + part * 3 * size, f, parts[part]);
+  }
+}
+
+// An index of all ones in the position leaves the vertex out, and those after move up.
+static int skips_vertex(const uint8_t *p, int kind) {
+  if (kind == KIND_INDEX8) return p[0] == NULL_INDEX8;
+  return kind == KIND_INDEX16 && (uint32_t)((p[0] << 8) | p[1]) == NULL_INDEX16;
+}
+
+// The chip keeps each normal of the last vertex of a draw, for the vertices of later
+// draws with none. That counts even if the vertex was left out.
+static void keep_last_normals(const Format *f, const Vertex *last) {
+  if (f->normal == KIND_NONE) return;
+  memcpy(gx_cached_normals[CACHED_NORMAL], last->normal, sizeof last->normal);
+  if (f->normal_components != ALL_NORMAL_VALUES) return;
+  memcpy(gx_cached_normals[CACHED_TANGENT], last->tangent, sizeof last->tangent);
+  memcpy(gx_cached_normals[CACHED_BINORMAL], last->binormal, sizeof last->binormal);
+}
+
+int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
+  Format f;
+  read_format(format, &f);
+  if (f.normal_components == ALL_NORMAL_VALUES && f.normal != KIND_NONE && (f.texture[VERTEX_NORMALS_UV] || f.texture[VERTEX_NORMALS_UV + 1] || f.texture[VERTEX_NORMALS_UV + 2])) {
+    debug_unsupported("texture coordinates 5 to 7 beside binormal and tangent", (uint32_t)format);
+  }
+  uint32_t matrices = gx.cp[CP_MATRIX_INDEX], matrices_high = gx.cp[CP_MATRIX_INDEX + 0x10];
+  uint8_t matrix_defaults[VERTEX_MATRICES];
+  matrix_defaults[VERTEX_MATRIX_POSITION] = (uint8_t)(matrices & MATRIX_INDEX_MASK);
+  for (int i = 0; i < TEXTURES; i++) {
+    uint32_t index = i < 4 ? bits(matrices, 6 + i * 6, 6) : bits(matrices_high, (i - 4) * 6, 6);
+    matrix_defaults[VERTEX_MATRIX_COORDINATE + i] = (uint8_t)index;
+  }
+  const uint8_t *p = data;
+  int kept = 0;
+  for (int n = 0; n < count; n++) {
+    Vertex *v = &out[kept];
+    memset(v, 0, sizeof *v);
+    memcpy(v->matrix, matrix_defaults, sizeof matrix_defaults);
+    if (f.position_index) v->matrix[VERTEX_MATRIX_POSITION] = *p++ & MATRIX_INDEX_MASK;
+    for (int i = 0; i < TEXTURES; i++) {
+      if (f.texture_index[i]) v->matrix[VERTEX_MATRIX_COORDINATE + i] = *p++ & MATRIX_INDEX_MASK;
+    }
+    uint32_t size = component_bytes(f.position_type);
+    int skipped = skips_vertex(p, f.position);
+    if (f.position != KIND_NONE) {
+      const uint8_t *source = locate(&p, f.position, ARRAY_POSITION, (uint32_t)f.position_components * size);
+      for (int i = 0; source && i < f.position_components; i++) {
+        v->position[i] = read_component(source + (uint32_t)i * size, f.position_type, f.position_shift);
+      }
+    }
+    if (f.normal != KIND_NONE) read_normals(&p, &f, v);
+    for (int i = 0; i < 2; i++) {
+      for (int c = 0; c < 4; c++) v->color[i][c] = 1;
+      if (f.color[i] == KIND_NONE) continue;
+      const uint8_t *source = locate(&p, f.color[i], ARRAY_COLOR + i, color_bytes(f.color_type[i]));
+      if (source) read_color(source, f.color_type[i], v->color[i]);
+    }
+    for (int i = 0; i < TEXTURES; i++) {
+      if (f.texture[i] == KIND_NONE) continue;
+      uint32_t bytes = component_bytes(f.texture_type[i]);
+      const uint8_t *source = locate(&p, f.texture[i], ARRAY_TEXTURE + i, (uint32_t)f.texture_components[i] * bytes);
+      if (!source) continue;
+      v->uv[i][0] = read_component(source, f.texture_type[i], f.texture_shift[i]);
+      if (f.texture_components[i] > 1) v->uv[i][1] = read_component(source + bytes, f.texture_type[i], f.texture_shift[i]);
+    }
+    if (n == count - 1) keep_last_normals(&f, v);
+    if (!skipped) kept++;
+  }
+  return kept;
+}

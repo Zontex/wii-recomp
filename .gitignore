@@ -1,0 +1,31 @@
+# Disc images and anything extracted from them stay on your machine.
+*.rvz
+*.iso
+*.wbfs
+extracted/
+extracted.partial/
+.tools/
+roms/
+
+# Left over from the browser version: converted game assets and saved progress.
+web/
+data/
+node_modules/
+
+__pycache__/
+*.pyc
+.DS_Store
+
+# Wii storage backups hold personal data and the console's unique keys.
+nand/
+*.wad
+
+# Translated games are the game in another form, so they stay on your machine.
+recomp/build/
+recomp/build-*/
+
+# Local tool settings.
+.claude/
+
+# FIFO recordings hold the game's textures and models.
+*.dff
