@@ -49,6 +49,8 @@ enum {
 };
 
 int gx_transform_bounds(const Vertex *vertices, int count, float bounds[4]);
+int gx_transform_depths(const Vertex *vertices, int count, float *low, float *high);
+int gx_fog_none_between(double low, double high);
 // Where a vertex lands, over w as in gl_Position, and whether it is in front of the camera.
 int gx_transform_screen(const Vertex *vertex, float *x, float *y);
 // Lines (1) or points (2) are being drawn as quads, each corner moved by this much over w.
@@ -115,7 +117,7 @@ typedef struct {
   uint8_t bump_alpha;  // Some stage makes a bump alpha.
   uint8_t biased_maps;  // Maps with a level of detail bias, which most have none of.
   uint8_t depth_mode, depth_format, depth_from_copy;
-  uint8_t fog_type, fog_orthographic, fog_range;
+  uint8_t fog_type, fog_orthographic, fog_range, fog_none;  // None: proven to add nothing to this draw.
   uint8_t logic_help;  // What the shader does for a logic operation done by blending. See read_logic in gx_tev.c.  // Fog's function, 0 for none. See read_fog in gx_tev.c.
   TevIndirectSource indirect_source[TEV_INDIRECT_SOURCES];
   TevStage stage[MAX_STAGES];
@@ -200,6 +202,7 @@ void gx_copy_to_texture(uint32_t control, int from_depth);
 int gx_target_has_alpha(void);
 // Whether the constant output alpha is in use: it needs alpha written and kept. See Dolphin's PixelShaderGen.cpp.
 int gx_constant_alpha_used(void);
+int gx_blend_needs_second_output(const TevKey *key);
 struct GxTexture *gx_copy_find(int map);
 int gx_copy_is_depth(int map);
 

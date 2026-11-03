@@ -3,6 +3,7 @@
 #include <math.h>
 #include <stddef.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "debug.h"
@@ -210,6 +211,15 @@ static void apply_blending(void) {
     }
   }
   state.cull = gx_expanding ? GX_CULL_NONE : (gx.bp[BP_GEN_MODE] >> 14) & 3;  // As in Dolphin.
+  // Without a second output the stages' alpha is the output's own, the same number.
+  extern TevKey gx_last_tev;
+  if (!gx_blend_needs_second_output(&gx_last_tev)) {
+    uint8_t *factors[4] = {&state.blend_source, &state.blend_target, &state.blend_source_alpha, &state.blend_target_alpha};
+    for (int i = 0; i < 4; i++) {
+      if (*factors[i] == GX_FACTOR_SOURCE1_ALPHA) *factors[i] = GX_FACTOR_SOURCE_ALPHA;
+      else if (*factors[i] == GX_FACTOR_INVERSE_SOURCE1_ALPHA) *factors[i] = GX_FACTOR_INVERSE_SOURCE_ALPHA;
+    }
+  }
   gx_backend->render_state(&state);
 }
 
@@ -218,23 +228,42 @@ static float xf_float(int address) {
   return word.value;
 }
 
+static void viewport_depth(float *depth_near, float *depth_far);
+
+// Fog that a draw's depths prove adds nothing needn't be worked out for every pixel. Pixels
+// lie between their triangle's vertices in depth, and the viewport maps that range.
+static int fog_adds_nothing(int count) {
+  enum { MOST_VERTICES = 1024 };
+  float low, high, depth_near, depth_far;
+  if (count > MOST_VERTICES || !gx_transform_depths(gx_reserved, count, &low, &high)) return 0;
+  if (low < 0) low = 0;
+  if (high > 1) high = 1;
+  if (low > high) return 0;
+  viewport_depth(&depth_near, &depth_far);
+  double a = depth_near + (double)(depth_far - depth_near) * low, b = depth_near + (double)(depth_far - depth_near) * high;
+  return gx_fog_none_between(a < b ? a : b, a < b ? b : a);
+}
+
 // The game's viewport is in pixels of its own frame.
 static void apply_viewport(void) {
   float half_width = xf_float(XF_VIEWPORT), half_height = -xf_float(XF_VIEWPORT + 1);
   float center_x = xf_float(XF_VIEWPORT + 3) - VIEWPORT_ORIGIN, center_y = xf_float(XF_VIEWPORT + 4) - VIEWPORT_ORIGIN;
   GxViewport viewport = {center_x - half_width, center_y - half_height, half_width * 2, half_height * 2, 0, 1};
-  // The chip's depth is far + range * z / w, from 0 to 2^24. Dolphin's BPFunctions.cpp works the
-  // same two ends out. Ends outside the depth buffer's range would need the shader to do it.
-  float range = xf_float(XF_VIEWPORT + VIEWPORT_Z_RANGE), far = xf_float(XF_VIEWPORT + VIEWPORT_FAR);
-  float depth_near = (far - range) / DEPTH_STEPS, depth_far = far / DEPTH_STEPS;
-  if (!(depth_near >= 0 && depth_near <= 1 && depth_far >= 0 && depth_far <= 1)) {
-    debug_unsupported("viewport depth past the depth buffer", gx.xf[XF_VIEWPORT + VIEWPORT_FAR]);
-    depth_near = depth_near > 0 ? (depth_near < 1 ? depth_near : 1) : 0;
-    depth_far = depth_far > 0 ? (depth_far < 1 ? depth_far : 1) : 0;
-  }
-  viewport.depth_near = depth_near;
-  viewport.depth_far = depth_far;
+  viewport_depth(&viewport.depth_near, &viewport.depth_far);
   gx_backend->viewport(&viewport);
+}
+
+// The chip's depth is far + range * z / w, from 0 to 2^24. Dolphin's BPFunctions.cpp works the
+// same two ends out. Ends outside the depth buffer's range would need the shader to do it.
+static void viewport_depth(float *depth_near, float *depth_far) {
+  float range = xf_float(XF_VIEWPORT + VIEWPORT_Z_RANGE), far = xf_float(XF_VIEWPORT + VIEWPORT_FAR);
+  *depth_near = (far - range) / DEPTH_STEPS;
+  *depth_far = far / DEPTH_STEPS;
+  if (!(*depth_near >= 0 && *depth_near <= 1 && *depth_far >= 0 && *depth_far <= 1)) {
+    debug_unsupported("viewport depth past the depth buffer", gx.xf[XF_VIEWPORT + VIEWPORT_FAR]);
+    *depth_near = *depth_near > 0 ? (*depth_near < 1 ? *depth_near : 1) : 0;
+    *depth_far = *depth_far > 0 ? (*depth_far < 1 ? *depth_far : 1) : 0;
+  }
 }
 
 static void apply_scissor(void) {
@@ -288,6 +317,9 @@ void gx_draw(int primitive, int count) {
   TevKey tev;
   VertexKey vertex;
   unsigned maps = gx_tev_apply(&tev);
+  static int keep_fog = -1;
+  if (keep_fog < 0) keep_fog = getenv("WII_RECOMP_KEEP_FOG") != 0;
+  if (tev.fog_type && !tev.depth_mode && !tev.fog_range && !keep_fog) tev.fog_none = (uint8_t)fog_adds_nothing(count);
   gx_transform_read(&tev, &vertex);
   gx_transform_apply(&vertex);
   gx_shader_use(&tev, &vertex);
@@ -313,6 +345,9 @@ int gx_target_has_alpha(void) {
   }
   return format == PIXEL_FORMAT_RGBA6;
 }
+
+// The stored alpha leaves the stages' only for a constant alpha or a logic operation's help.
+int gx_blend_needs_second_output(const TevKey *key) { return key->constant_alpha || key->logic_help; }
 
 int gx_constant_alpha_used(void) {
   return ((gx.bp[BP_CONSTANT_ALPHA] >> CONSTANT_ALPHA_ENABLE_BIT) & 1) && ((gx.bp[BP_BLEND] >> 4) & 1) && gx_target_has_alpha();

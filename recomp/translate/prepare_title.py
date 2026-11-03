@@ -9,9 +9,12 @@ for the runtime. The storage folder is only read.
 Usage: recomp/translate/prepare_title.py <Wii storage folder> <title high> <title low> <output folder>
 Example: recomp/translate/prepare_title.py /path/to/NAND 00000001 00000002 recomp/build-menu/disc
 """
+import hashlib
 import struct
 import sys
 from pathlib import Path
+
+from modules import find_modules, is_export_list
 
 BOOT_INDEX_OFFSET = 0x1e0
 CONTENT_COUNT_OFFSET = 0x1de
@@ -72,6 +75,40 @@ def program_with_code_marked(program):
     return struct.pack(f">{HEADER_WORDS}I", *header) + program[HEADER_WORDS * 4:]
 
 
+SHARED = 0x8000
+MAP_ENTRY_BYTES, MAP_NAME_BYTES = 28, 8
+
+
+def content_files(storage, tmd, content):
+    """(name, bytes) for each of the title's contents, its own and shared ones."""
+    shared_map = (storage / "shared1" / "content.map").read_bytes() if (storage / "shared1" / "content.map").exists() else b""
+    shared = {shared_map[at + MAP_NAME_BYTES:at + MAP_ENTRY_BYTES]: shared_map[at:at + MAP_NAME_BYTES].decode()
+              for at in range(0, len(shared_map) - MAP_ENTRY_BYTES + 1, MAP_ENTRY_BYTES)}
+    count = struct.unpack_from(">H", tmd, CONTENT_COUNT_OFFSET)[0]
+    for number in range(count):
+        record = CONTENTS_OFFSET + number * CONTENT_BYTES
+        content_id, _, kind = struct.unpack_from(">IHH", tmd, record)
+        digest = tmd[record + 16:record + 36]
+        path = storage / "shared1" / f"{shared[digest]}.app" if kind & SHARED and digest in shared else content / f"{content_id:08x}.app"
+        if path.exists():
+            data = path.read_bytes()
+            if hashlib.sha1(data).digest() != digest:
+                raise SystemExit(f"{path} doesn't match the title's metadata")
+            yield path.name, data
+
+
+def write_modules(storage, tmd, content, system):
+    """Code modules the title loads at run time, unpacked, for the translator."""
+    folder = system / "modules"
+    folder.mkdir(exist_ok=True)
+    for old in list(folder.glob("*.rso")) + list(folder.glob("*.sel")):
+        old.unlink()
+    for module in find_modules(list(content_files(storage, tmd, content))):
+        kind = "sel" if is_export_list(module) else "rso"
+        (folder / f"{module.name}.{kind}").write_bytes(module.data)
+        print(f"{'export list' if kind == 'sel' else 'module'} {module.name}: {len(module.data)} bytes")
+
+
 def main():
     storage, high, low, output = Path(sys.argv[1]), sys.argv[2], sys.argv[3], Path(sys.argv[4])
     content = storage / "title" / high / low / "content"
@@ -83,6 +120,7 @@ def main():
     (system / "boot.bin").write_bytes(bytes(EMPTY_BOOT_BYTES))
     (system / "fst.bin").write_bytes(EMPTY_FILE_TABLE)
     (output / "files").mkdir(exist_ok=True)
+    write_modules(storage, tmd, content, system)
 
 
 if __name__ == "__main__":

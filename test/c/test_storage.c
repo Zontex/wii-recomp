@@ -4,6 +4,7 @@
 #include <stddef.h>
 const int game_virtual_bluetooth = 0;
 void bluetooth_register_remote(uint8_t *settings, size_t bytes) {}
+void camera_set_bar_above(int above) {}
 int files_request(int id, uint32_t command, uint32_t request);
 uint32_t hw_read(uint32_t a, int n) { return 0; }
 void hw_write(uint32_t a, uint32_t v, int n) {}
@@ -27,7 +28,8 @@ static int list_count(const char *path) {
   wr32(REQUEST + 24, VECTORS & 0x7fffffff);
   wr32(VECTORS, IN & 0x7fffffff);
   wr32(VECTORS + 8, OUT & 0x7fffffff);
-  if (fs_request(IOS_IOCTLV, REQUEST)) return -1;
+  int result = fs_request(IOS_IOCTLV, REQUEST);
+  if (result) return result;
   return (int)rd32(OUT);
 }
 static int put_bytes(int id, const char *text) {
@@ -80,6 +82,7 @@ int main(int count, char **arguments) {
   CHECK_EQ(ioctl_path(GET_ATTR, "/shared2/read_only", 0, 0), 0);
   CHECK_EQ((uint32_t)ioctl_path(GET_ATTR, "/missing", 0, 0), (uint32_t)-106);
   CHECK_EQ(list_count("/shared2"), 3);  // only_storage in both, read_only, made.
+  CHECK_EQ(list_count("/shared2/made"), -101);  // A file isn't a folder: NANDGetType depends on it.
 
   // Deleting and renaming storage files never touches storage.
   CHECK_EQ(ioctl_path(DELETE, "/shared2/read_only", 0, 0), 0);

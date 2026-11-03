@@ -9,7 +9,9 @@
 #include "ios.h"
 
 enum {
-  READ_DISC_ID = 0x70, READ = 0x71, OPEN_PARTITION = 0x8b,
+  INQUIRY = 0x12, READ_DISC_ID = 0x70, READ = 0x71, GET_COVER_REGISTER = 0x7a, CLEAR_COVER_INTERRUPT = 0x86, RESET = 0x8a, OPEN_PARTITION = 0x8b,
+  GET_STATUS_REGISTER = 0x95, REQUEST_ERROR = 0xe0, STOP_MOTOR = 0xe3,
+  COVER_OPEN = 1, NO_MEDIUM = 0x01023a00,  // The drive's error for "no disc".
   DRIVE_OK = 1, DRIVE_ERROR = 2,
   ENTRY_BYTES = 12, NAME_LIMIT = 512, MAX_FILES = 8192, DISC_ID_BYTES = 0x20,
   BOOT_DOL_OFFSET = 0x420, BOOT_FST_OFFSET = 0x424,
@@ -25,6 +27,7 @@ static DiscFile files[MAX_FILES];
 static int file_count;
 static const char *root;
 static int reads;
+static int has_disc;  // A disc with a game ID. The Wii Menu's own folder has none.
 
 static uint32_t big(const uint8_t *data) {
   return ((uint32_t)data[0] << 24) | ((uint32_t)data[1] << 16) | ((uint32_t)data[2] << 8) | data[3];
@@ -75,6 +78,7 @@ void dvd_start(const char *extracted_system_folder) {
   uint8_t *boot = load(path, &boot_length);
   snprintf(path, sizeof path, "%s/fst.bin", root);
   uint8_t *table = load(path, &table_length);
+  has_disc = boot_length >= 4 && big(boot) != 0;
   add_file(0, (uint32_t)boot_length, path);
   snprintf(files[0].path, sizeof files[0].path, "%s/boot.bin", root);
   snprintf(path, sizeof path, "%s/main.dol", root);
@@ -135,11 +139,31 @@ static int read_disc(uint64_t offset, uint32_t bytes, uint32_t target) {
   return DRIVE_OK;
 }
 
+int dvd_ticket(uint8_t *out, unsigned long limit) {
+  char path[NAME_LIMIT];
+  snprintf(path, sizeof path, "%s/../ticket.bin", root);
+  FILE *file = root ? fopen(path, "rb") : 0;
+  if (!file) return 0;
+  size_t got = fread(out, 1, limit, file);
+  fclose(file);
+  return got == limit;
+}
+
 int dvd_request(uint32_t command, uint32_t request) {
   uint32_t code = rd32(request + 12);
-  if (command == IOS_IOCTLV) return code == OPEN_PARTITION ? DRIVE_OK : DRIVE_OK;
-  if (command != IOS_IOCTL) return DRIVE_OK;
+  // The partition is already open: reads go straight to its files.
+  if (command == IOS_IOCTLV) return code == OPEN_PARTITION ? DRIVE_OK : IOS_UNHANDLED;
+  if (command != IOS_IOCTL) return IOS_UNHANDLED;
   uint32_t input = rd32(request + 16) | 0x80000000u, output = rd32(request + 24) | 0x80000000u;
+  uint32_t out_bytes = rd32(request + 28);
+  uint32_t word_out = output != 0x80000000u && out_bytes >= 4 ? output : 0;
+  switch (code) {
+    case RESET: case STOP_MOTOR: return DRIVE_OK;
+    case GET_STATUS_REGISTER: if (word_out) wr32(word_out, 0); return DRIVE_OK;
+    case REQUEST_ERROR: if (word_out) wr32(word_out, has_disc ? 0 : NO_MEDIUM); return DRIVE_OK;
+    case GET_COVER_REGISTER: if (word_out) wr32(word_out, has_disc ? 0 : COVER_OPEN); return DRIVE_OK;
+  }
+  if (!has_disc && (code == READ_DISC_ID || code == READ)) return DRIVE_ERROR;
   if (code == READ_DISC_ID) return read_disc(0, DISC_ID_BYTES, output);
   if (code == READ) {
     uint64_t started = time_base();
@@ -147,7 +171,10 @@ int dvd_request(uint32_t command, uint32_t request) {
     stage_add(STAGE_DISC, time_base() - started);
     return result;
   }
-  uint32_t out_bytes = rd32(request + 28);
-  if (output != 0x80000000u) memset(host(output), 0, out_bytes);
-  return DRIVE_OK;
+  if (code == CLEAR_COVER_INTERRUPT) return DRIVE_OK;  // Discs never change, so it never interrupts.
+  if (code == INQUIRY) {  // The drive's model and date. Programs only check the call works.
+    if (output != 0x80000000u) memset(host(output), 0, out_bytes);
+    return DRIVE_OK;
+  }
+  return IOS_UNHANDLED;
 }

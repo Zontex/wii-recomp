@@ -4,16 +4,37 @@
 
 enum { IOS_OPEN = 1, IOS_CLOSE = 2, IOS_READ = 3, IOS_WRITE = 4, IOS_SEEK = 5, IOS_IOCTL = 6, IOS_IOCTLV = 7 };
 
+// Answers real IOS gives: a bad argument, and a device or file that doesn't exist.
+enum { IOS_EINVAL = -4, IOS_ENOENT = -6, FS_ENOENT = -106 };
+
+// This console's number, made up. The real one is never read.
+enum { IOS_DEVICE_ID = 0x0403ac68 };
+
 int ios_find_device(const char *path);
+const char *ios_device_name(int device);
 int ios_device_request(int device, uint32_t command, uint32_t request);
 void ios_complete(uint32_t request, int result);
+
+// A device answer meaning "no reply yet": the request stays pending.
+#define IOS_NO_REPLY (-0x7fffffff)
+// A device answer meaning "not modelled": the game gets IOS_EINVAL, and the trace says so.
+#define IOS_UNHANDLED (-0x7ffffffe)
+
+void ios_trace(const char *device, uint32_t command, uint32_t request, int result);
+int ios_trace_all(void);
 
 void dvd_start(const char *extracted_system_folder);
 int dvd_request(uint32_t command, uint32_t request);
 int es_request(uint32_t command, uint32_t request);
-
-// A device answer meaning "no reply yet": the request stays pending.
-#define IOS_NO_REPLY (-0x7fffffff)
+int stm_immediate(uint32_t command, uint32_t request);
+int stm_event_hook(uint32_t command, uint32_t request);
+int net_kd_request(uint32_t command, uint32_t request);
+int net_kd_time(uint32_t command, uint32_t request);
+int net_ncd_manage(uint32_t command, uint32_t request);
+int sdio_request(uint32_t command, uint32_t request);
+void wc24_request_user_id(uint8_t *out);
+// The disc's ticket, beside the extracted system folder. Returns 0 if there's none.
+int dvd_ticket(uint8_t *out, unsigned long limit);
 
 void files_start(const char *folder);
 void files_save_path(const char *path, char *out, unsigned long size);
@@ -23,4 +44,5 @@ int files_find(const char *path, char *out, unsigned long size);
 int fs_request(uint32_t command, uint32_t request);
 int files_open(const char *path);
 void files_close(int id);
+const char *files_name(int id);  // The path an open file was opened by.
 int files_request(int id, uint32_t command, uint32_t request);

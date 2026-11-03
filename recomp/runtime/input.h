@@ -12,9 +12,13 @@ enum {
 void input_hold(uint32_t buttons, int down);
 void input_press(uint32_t buttons);
 void input_pointer(float x, float y);
+void input_pointer_now(float *x, float *y);  // Where the pointer is, -1 to 1 with y growing down.
 void input_board(int standing, float kilograms, float lean_x, float lean_y);
 void input_board_nudge(float lean_x, float lean_y);
 void input_board_toggle(void);
+// What each of the board's sensors carries now, in kilograms: top right, bottom right,
+// top left, bottom left.
+void input_board_now(double kilograms[4]);
 void input_start_control_pipe(const char *path);
 void input_sticks(float out[4]);  // Left then right, x then y, from -1 to 1.
 uint32_t input_buttons(void);  // In the Wii Remote's own bit order.

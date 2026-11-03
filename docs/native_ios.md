@@ -4,9 +4,13 @@ Run the real Wii Menu and the games it launches on our own native IOS, on any ma
 
 ## Where we are
 
-- The menu runs on the Intel Mac for 60+ seconds without crashing and stops at its own error screen.
-- Its log says `ES error. [-1017] iplNandManager.cpp line: 72`. Our `es.c` only ever returns 0, so that number didn't come from us. The menu's own ES library made it, most likely after a request "succeeded" with zeros. Faking success hid the real failure, which is why rule 2 exists.
-- `/dev/di` and `/dev/fs` do real work. `/dev/usb/oh1/57e/305` has a virtual Bluetooth chip with a simulated Wii Remote. Everything else answers "fine" or never replies.
+- **Stages 0 and 1 are done** on the Intel Mac. Every device is in a table, every request is traced, and an unhandled one gets an error, never a fake success. Wii Fit Plus runs in strict mode with every request answered.
+- **The menu gets past its ES error.** It reads its titles, tickets, metadata and contents from a private NAND copy made by `recomp/tools/prepare_console.py`. It also gets past network settings and WiiConnect24, making its user ID on first boot as a real Wii does, and sees a drive with no disc in it. Strict mode finds no unhandled request before it stops.
+- **The menu reaches its first-time setup.** It loads its web library, `wwwlib-rvl`, links it at run time and runs it under the interpreter. Code only that library calls is written to `discovered.txt` by the interpreter, and the next build translates it. With `--virtual-bluetooth` the menu's own Wii Remote code runs, and A on "Press A to continue" opens the language choice.
+- **The menu is usable with the pointer** on the Intel Mac with Vulkan: the health warning, first-time setup, the channel grid, Wii Options, and the disc channel's "Please insert a disc" screen all work. The simulated remote's IR camera is calibrated against the menu's cursor. It runs at about 30 fps: the web library runs under the interpreter, and translating modules ahead of time is the fix.
+- **60 fps across the menu on the Intel Mac.** `recomp/tools/menu_bench.py` tours 16 screens: health warning, grid, scrolling, disc channel, Wii Options, three Wii Settings pages, Data Management and the message board. With Vulkan and a translated web library, every one holds 60 fps at 2× scale, with no frame over 22 ms, even with the Mac heat-throttled to 62%. At 2.5× (1600 × 1140, the Pi's 1080p setting) every scene holds 59.2–60 fps, but the first draw of the grid and the disc channel costs 32–62 ms, because Vulkan pipelines are compiled again on each run until a disk cache exists. Most of the earlier 30 fps was the Mac's heat throttling and OpenGL, which was the Mac's default renderer: the menu is now built with Vulkan only.
+- **Next: a disc and launching.** Present a translated game as the inserted disc, then hand over to it from Start (Stages 4 and 5). The clock still shows 0:00 on Fri 01/01, so the real time isn't passed in yet.
+- The ES request numbers and the WiiConnect24 user ID follow Dolphin's sources (GPL-2.0+).
 
 ## Rules
 

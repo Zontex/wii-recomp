@@ -119,6 +119,25 @@ def find_functions(program):
     return functions, sorted(set(unknown))
 
 
+def add_starts(program, functions, starts):
+    """Adds functions from known starts, such as addresses seen running under the interpreter."""
+    pending = [start for start in starts if program.is_code(start) and not start & 3]
+    while pending:
+        start = pending.pop()
+        if start in functions or not program.is_code(start):
+            continue
+        body, calls, _, tails = walk(program, start)
+        functions[start] = body
+        pending += calls | tails
+
+
+def read_starts(path):
+    """Addresses from a file, one in hex per line. A missing file gives none."""
+    if not path.exists():
+        return set()
+    return {int(line, 16) for line in path.read_text().split() if line}
+
+
 def add_unreached_code(program, functions):
     """Adds code nothing visibly points at, such as methods in tables built at run time.
 

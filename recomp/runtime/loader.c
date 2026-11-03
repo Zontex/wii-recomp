@@ -3,10 +3,12 @@
 #include <stdlib.h>
 
 #include "cpu.h"
+#include "game.h"
+#include "ios.h"
 #include "loader.h"
+#include "titles.h"
 
 #define SECTIONS 18
-#define IOS_VERSION 0x0024000cu
 #define IOS_BUILD_DATE 0x00123120u  // December 31, 2020, as 00 MM DD YY.
 
 static uint32_t big32(const uint8_t *data) { return __builtin_bswap32(*(const uint32_t *)data); }
@@ -59,6 +61,15 @@ static uint32_t file_size(const char *folder, const char *name) {
   return (uint32_t)length;
 }
 
+// The IOS the title asks for, with the revision installed in storage, as 00 VV RR RR.
+static uint32_t ios_version(void) {
+  static uint8_t tmd[TMD_MAX_BYTES];
+  long size = title_tmd(1ull << 32 | game_ios_version, tmd, sizeof tmd);
+  uint32_t revision = size >= 0 ? tmd_title_version(tmd) : 0;
+  if (size < 0) fprintf(stderr, "IOS %u isn't in storage, so its revision is given as 0\n", game_ios_version);
+  return game_ios_version << 16 | revision;
+}
+
 void set_up_low_memory(const char *folder) {
   read_file(folder, "boot.bin", host(0x80000000u), 0x20);
   uint32_t table_size = file_size(folder, "fst.bin");
@@ -90,7 +101,7 @@ void set_up_low_memory(const char *folder) {
   wr32(0x80003130, 0x933e0000u);
   wr32(0x80003134, 0x93400000u);
   wr32(0x80003138, 0x11);         // Graphics chip revision.
-  wr32(0x80003140, IOS_VERSION);
+  wr32(0x80003140, ios_version());
   wr32(0x80003144, IOS_BUILD_DATE);
-  wr32(0x80003188, IOS_VERSION);       // The version the game asked to run on.
+  wr32(0x80003188, ios_version());       // The version the game asked to run on.
 }

@@ -1,6 +1,7 @@
 // A stand-in for IOS, the Wii's security processor. The game sends it requests
 // through shared memory, like opening a device, and gets replies by interrupt.
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include "cpu.h"
@@ -39,9 +40,10 @@ static int open_request(uint32_t request) {
     if (!path[i]) break;
   }
   int device = ios_find_device(path);
-  int file = device < 0 ? files_open(path) : -1;
+  int is_device = !strncmp(path, "/dev/", 5);
+  int file = device < 0 && !is_device ? files_open(path) : -1;
   fprintf(stderr, "ios open %s -> %s\n", path, device >= 0 || file >= 0 ? "ok" : "not found");
-  if (device < 0 && file < 0) return NOT_FOUND;
+  if (device < 0 && file < 0) return is_device ? IOS_ENOENT : NOT_FOUND;
   for (int fd = 3; fd < MAX_OPEN; fd++) {
     if (!open_device[fd] && !open_file[fd]) {
       open_device[fd] = device + 1;
@@ -65,10 +67,17 @@ static void handle(uint32_t physical) {
       open_file[fd] = 0;
     } else {
       result = files_request(open_file[fd] - 1, command, request);
+      ios_trace(files_name(open_file[fd] - 1), command, request, result);
     }
   } else if (fd >= 3 && fd < MAX_OPEN && open_device[fd]) {
-    if (command == IOS_CLOSE) open_device[fd] = 0;
-    else result = ios_device_request(open_device[fd] - 1, command, request);
+    int device = open_device[fd] - 1;
+    if (command == IOS_CLOSE) {
+      open_device[fd] = 0;
+    } else {
+      result = ios_device_request(device, command, request);
+      ios_trace(ios_device_name(device), command, request, result);
+      if (result == IOS_UNHANDLED) result = IOS_EINVAL;
+    }
   } else {
     result = NOT_FOUND;
   }
@@ -81,7 +90,11 @@ void ios_complete(uint32_t request, int result) {
   wr32(request + 4, (uint32_t)result);
   wr32(request + 8, command);
   wr32(request, REPLY_MARKER);
-  if (queued < MAX_QUEUED) queue[queued++] = request & ~0x80000000u;
+  if (queued == MAX_QUEUED) {  // Dropping a reply would leave the program waiting forever.
+    fprintf(stderr, "stop: more than %d IOS replies waiting\n", MAX_QUEUED);
+    exit(9);
+  }
+  queue[queued++] = request & ~0x80000000u;
 }
 
 // One reply at a time, once the game has finished with the last one.

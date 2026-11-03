@@ -28,11 +28,11 @@ VULKAN_LINK_FLAGS += f" -l{SHADERC}"
 # For each platform, what it always links, and what each backend adds. The Pi draws at
 # 5/2, which puts the game's 456 lines above a full 1080p picture.
 PLATFORMS = {
-    "darwin": {"system": "-framework AudioToolbox", "opengl": "-framework OpenGL", "vulkan": VULKAN_LINK_FLAGS, "default": ["opengl", "vulkan"]},
+    "darwin": {"system": "-framework AudioToolbox", "opengl": "-framework OpenGL", "vulkan": VULKAN_LINK_FLAGS, "default": ["vulkan", "opengl"]},
     "linux": {"defines": "-DEFB_SCALE=5/2", "system": "-lasound", "opengl": "-lGL", "vulkan": VULKAN_LINK_FLAGS, "default": ["vulkan"]},
 }
 AUDIO_SOURCES = {"darwin": "audio_output_mac.c", "linux": "audio_output_linux.c"}
-BACKEND_SOURCES = {"opengl": ["gx_gl.c"], "vulkan": ["gx_vulkan.c", "gx_vulkan_device.c", "gx_vulkan_pipeline.c"]}
+BACKEND_SOURCES = {"opengl": ["gx_gl.c"], "vulkan": ["gx_vulkan.c", "gx_vulkan_device.c", "gx_vulkan_pipeline.c", "gx_shot.c"]}
 LIBRARY_FOLDERS = ["/usr/local/lib", "/usr/lib", "/usr/lib/aarch64-linux-gnu"] + ([f"{VULKAN_SDK}/lib"] if VULKAN_SDK else [])
 VULKAN_LIBRARIES = ["vulkan", SHADERC]
 
@@ -56,7 +56,7 @@ def main():
     platform = PLATFORMS[sys.platform]
     backends = sys.argv[2].split(",") if len(sys.argv) > 2 else default_backends(platform)
     link_flags = " ".join([COMMON_LINK_FLAGS, platform["system"]] + [platform[backend] for backend in backends])
-    defines = " ".join(f"-DGX_WITH_{backend.upper()}" for backend in backends) + " " + platform.get("defines", "")
+    defines = " ".join(f"-DGX_WITH_{backend.upper()}" for backend in backends) + f" -DGX_FIRST_{backends[0].upper()} " + platform.get("defines", "")
     left_out = {name for backend, names in BACKEND_SOURCES.items() if backend not in backends for name in names}
     left_out |= {name for system, name in AUDIO_SOURCES.items() if system != sys.platform}
     lines = [f"cflags = {FLAGS}", "",

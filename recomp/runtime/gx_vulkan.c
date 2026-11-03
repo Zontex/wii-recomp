@@ -42,14 +42,17 @@ struct GxTexture {
   int width, height, depth, written;
   GxChannels channels;
   uint32_t copied_frame, strip_frame;
-  int owed;  // Its copy was skipped: 1 the picture, 2 an empty layer, 3 depth. 4 adds: the layer was given up late.
+  VkImageView attach_view;  // With framebuffer, when its image can be drawn into: see the side picture.
+  VkFramebuffer framebuffer;
+  int owed;  // Its copy was skipped: 1 the picture, 2 an empty layer, 3 depth. 4 adds: given up late, 8: drawn apart.
   uint32_t owed_frame;
 };
 static uint32_t frame_serial;
 static int in_strip, strip_rest;
-enum { LAYER_IDLE, LAYER_PICTURE_COPIED, LAYER_CLEARED, LAYER_EMPTY_COPIED, LAYER_CLEARED_AGAIN, LAYER_PICTURE_BACK, LAYER_DEPTH_COPIED, LAYER_DEPTH_CLEARED };
+enum { LAYER_IDLE, LAYER_PICTURE_COPIED, LAYER_CLEARED, LAYER_EMPTY_COPIED, LAYER_CLEARED_AGAIN, LAYER_PICTURE_BACK, LAYER_DEPTH_COPIED, LAYER_DEPTH_CLEARED,
+       LAYER_SIDE, LAYER_SIDE_COPIED, LAYER_SIDE_CLEARED };
 static struct {
-  int step, off;
+  int step, off, real;  // Real: the layer has something in it, drawn into the side picture.
   GxTexture *picture, *layer, *depth;
   GxRectangle from;
   int width, height, depth_width, depth_height;
@@ -190,6 +193,7 @@ static void blank_efb(VkCommandBuffer commands) {
 }
 
 static GxTexture *texture_create(void) { return calloc(1, sizeof(GxTexture)); }
+static void retire_attachment(GxTexture *t);
 
 static void upload_pixels(GxTexture *texture, uint32_t width, uint32_t height, uint32_t levels, const uint8_t *rgba);
 
@@ -324,6 +328,15 @@ static int pass_kind_learned(void) {
   return (depth_use.no_load[n] ? CLEARS_DEPTH : 0) | (depth_use.no_store[n] ? DROPS_DEPTH : 0);
 }
 
+// A layer's color can go to a second picture while the first stays where it is, so the
+// first needn't be copied out and drawn back. Depth is shared. See the layers below.
+static struct { VkImage image; VkDeviceMemory memory; VkImageView view; VkFramebuffer framebuffer; int on; } side;
+
+static VkFramebuffer framebuffer_for(int visible) {
+  if (side.on && !in_strip) return side.framebuffer;
+  return visible ? visible_framebuffer : vk.efb_framebuffer;
+}
+
 static void start_pass_with_clear(void) {
   int learned = pass_kind_learned();
   if (learned & CLEARS_DEPTH) waiting_clear.values[1].depthStencil.depth = depth_use.clear_depth;
@@ -332,7 +345,7 @@ static void start_pass_with_clear(void) {
   VkRect2D area = waiting_clear.area;
   int visible = area.offset.y + (int64_t)area.extent.height == VISIBLE_HEIGHT * EFB_SCALE;
   VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = render_passes[waiting_clear.kind],
-                                .framebuffer = visible ? visible_framebuffer : vk.efb_framebuffer, .renderArea = area,
+                                .framebuffer = framebuffer_for(visible), .renderArea = area,
                                 .clearValueCount = 2, .pClearValues = waiting_clear.values};
   vkCmdBeginRenderPass(vk.frame->draw, &info, VK_SUBPASS_CONTENTS_INLINE);
   waiting_clear.kind = 0;
@@ -389,7 +402,7 @@ static void begin_pass(const VkRect2D *area) {
     if (!apart) wanted = rectangle_union(&pass_area, area);
     end_pass();
   }
-  VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = vk.render_pass, .framebuffer = vk.efb_framebuffer,
+  VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = vk.render_pass, .framebuffer = framebuffer_for(0),
                                 .renderArea = wanted};
   vkCmdBeginRenderPass(vk.frame->draw, &info, VK_SUBPASS_CONTENTS_INLINE);
   pass_open = 1;
@@ -517,6 +530,7 @@ static void upload_pixels(GxTexture *texture, uint32_t width, uint32_t height, u
   // Always a new image: draws already recorded this frame run after the upload
   // commands, and must still see the old picture, as may a frame on the card.
   if (texture->image) vk_retire(texture->image, texture->view, texture->memory);
+  retire_attachment(texture);
   vk_create_image(COLOR_FORMAT, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, width, height, levels, &texture->image, &texture->memory);
   VkComponentMapping plain = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
   texture->view = vk_create_view(texture->image, COLOR_FORMAT, VK_IMAGE_ASPECT_COLOR_BIT, levels, plain);
@@ -656,31 +670,51 @@ static void drop_recorded_commands(void) {
 // Every corner must map onto itself, in white, from the newest copy of the whole picture.
 static struct { GxTexture *texture; uint32_t frame; } newest_copy;
 
+// Whether the color stages hand on the first texture exactly, color and alpha alike: one
+// plain stage times a white vertex, with nothing after it that changes a pixel, and no
+// fog unless it's proven to add nothing.
+static int passes_texture_through(const TevKey *key, const GxTexture *texture) {
+  enum { SWAP_IDENTITY = 0 | 1 << 2 | 2 << 4 | 3 << 6 };
+  const TevStage *s = &key->stage[0];
+  if (key->stages != 1 || key->alpha_test || key->constant_alpha || key->logic_help || key->wrap_output || key->bump_alpha) return 0;
+  if ((key->fog_type && !key->fog_none) || key->depth_mode || key->no_coordinates || (key->projected & 1)) return 0;
+  if (s->color_in[0] != 15 || s->color_in[1] != 8 || s->color_in[2] != 10 || s->color_in[3] != 15) return 0;
+  if (s->alpha_in[0] != 7 || s->alpha_in[1] != 4 || s->alpha_in[2] != 5 || s->alpha_in[3] != 7) return 0;
+  if (s->color_bias || s->color_subtract || s->color_scale || s->color_target) return 0;
+  if (s->alpha_bias || s->alpha_subtract || s->alpha_scale || s->alpha_target || s->map != 0 || s->coordinate != 0) return 0;
+  if (s->indirect || !s->texture_on || s->texture_swap != SWAP_IDENTITY) return 0;
+  const GxChannels *c = &texture->channels;
+  return c->red == GX_CHANNEL_RED && c->green == GX_CHANNEL_GREEN && c->blue == GX_CHANNEL_BLUE && c->alpha == GX_CHANNEL_ALPHA;
+}
+
+// Whether four vertices are the whole picture's corners, each reading the texture where it
+// lands, in a viewport that is the whole picture: a copy drawn back where it came from.
+static int draws_copy_where_it_was(int count) {
+  if (count != 4 || viewport_wanted.x != 0 || viewport_wanted.width != EFB_WIDTH * EFB_SCALE || -viewport_wanted.height != VISIBLE_HEIGHT * EFB_SCALE) return 0;
+  if (scissor_wanted.offset.x || scissor_wanted.offset.y || scissor_wanted.extent.width < (uint32_t)(EFB_WIDTH * EFB_SCALE)
+      || scissor_wanted.extent.height < (uint32_t)(VISIBLE_HEIGHT * EFB_SCALE)) return 0;
+  int corners = 0;
+  for (int i = 0; i < 4; i++) {
+    const Vertex *v = &gx_reserved[i];
+    float x, y;
+    if (!gx_transform_screen(v, &x, &y)) return 0;
+    for (int channel = 0; channel < 4; channel++) if (v->color[0][channel] != 1) return 0;
+    if (fabsf((x + 1) / 2 - v->uv[0][0]) > 0.0005f || fabsf((1 - y) / 2 - v->uv[0][1]) > 0.0005f) return 0;
+    if (fabsf(fabsf(x) - 1) > 0.0001f || fabsf(fabsf(y) - 1) > 0.0001f) return 0;
+    corners |= 1 << ((x > 0) + 2 * (y > 0));
+  }
+  return corners == 15;
+}
+
 static int redraws_newest_copy(int count) {
   static int off = -1;
   if (off < 0) off = getenv("WII_RECOMP_KEEP_COPY_BACK") != 0;
   extern TevKey gx_last_tev;
   const TevKey *key = &gx_last_tev;
-  const TevStage *s = &key->stage[0];
   if (off || in_strip || count != 4 || newest_copy.frame != frame_serial || bindings[0].texture != newest_copy.texture) return 0;
   if (!(waiting_clear.kind & CLEARS_COLOR) || pass_open || state_in_use.blend_on || !state_in_use.color_write || !state_in_use.alpha_write) return 0;
-  if (state_in_use.depth_write || state_in_use.depth_test_on || key->stages != 1 || key->alpha_test) return 0;
-  if (s->color_in[0] != 15 || s->color_in[1] != 8 || s->color_in[2] != 10 || s->color_in[3] != 15) return 0;
-  if (s->alpha_in[0] != 7 || s->alpha_in[1] != 4 || s->alpha_in[2] != 5 || s->alpha_in[3] != 7) return 0;
-  if (s->color_bias || s->color_subtract || s->color_scale || s->color_target) return 0;
-  if (s->alpha_bias || s->alpha_subtract || s->alpha_scale || s->alpha_target || s->map != 0 || s->coordinate != 0) return 0;
-  if (viewport_wanted.x != 0 || viewport_wanted.width != EFB_WIDTH * EFB_SCALE || -viewport_wanted.height != VISIBLE_HEIGHT * EFB_SCALE) return 0;
-  const GxChannels *c = &newest_copy.texture->channels;
-  if (c->red != GX_CHANNEL_RED || c->green != GX_CHANNEL_GREEN || c->blue != GX_CHANNEL_BLUE || c->alpha != GX_CHANNEL_ALPHA) return 0;
-  for (int i = 0; i < 4; i++) {
-    const Vertex *v = &gx_reserved[i];
-    float box[4];
-    if (!gx_transform_bounds(v, 1, box)) return 0;
-    for (int channel = 0; channel < 4; channel++) if (v->color[0][channel] != 1) return 0;
-    float u = (box[0] + 1) / 2, t = (1 - box[1]) / 2;
-    if (fabsf(u - v->uv[0][0]) > 0.0005f || fabsf(t - v->uv[0][1]) > 0.0005f) return 0;
-  }
-  return 1;
+  if (state_in_use.depth_write || state_in_use.depth_test_on || !passes_texture_through(key, newest_copy.texture)) return 0;
+  return draws_copy_where_it_was(count);
 }
 
 static void watch_for_cover(int count) {
@@ -712,9 +746,11 @@ static void watch_for_cover(int count) {
   }
 }
 
+// Only the maps this draw reads: the others still hold whatever earlier draws bound.
 static int reads_this_frames_copy(void) {
+  extern unsigned gx_used_maps;
   for (int map = 0; map < MAX_TEXTURE_MAPS; map++) {
-    if (bindings[map].texture && bindings[map].texture->copied_frame == frame_serial) return 1;
+    if ((gx_used_maps & (1u << map)) && bindings[map].texture && bindings[map].texture->copied_frame == frame_serial) return 1;
   }
   return 0;
 }
@@ -743,8 +779,8 @@ static void draw(int primitive, int count) {
         static int told;
         GxTexture *t = bindings[m].texture;
         static const char *const roles[] = {"", "picture", "layer", "depth"};
-        if (!told++) fprintf(stderr, "layer: a skipped %s copy%s was read %u frames later by %d vertices with shader %u, so skipping stops\n",
-                             roles[t->owed & 3], t->owed & 4 ? " (given up late)" : "", frame_serial - t->owed_frame, count, shader_in_use);
+        if (!told++) fprintf(stderr, "layer: a skipped %s copy%s%s was read %u frames later by %d vertices with shader %u, so skipping stops\n",
+                             roles[t->owed & 3], t->owed & 4 ? " (given up late)" : "", t->owed & 8 ? " (drawn apart)" : "", frame_serial - t->owed_frame, count, shader_in_use);
         empty_layer.off = 1;
       }
     }
@@ -884,6 +920,7 @@ static void prepare_copy(GxTexture *to, int width, int height, VkFormat format, 
   VkComponentMapping mapping = {swizzle(channels.red), swizzle(channels.green), swizzle(channels.blue), swizzle(channels.alpha)};
   if (!to->image || to->width != width || to->height != height) {
     if (to->image) vk_retire(to->image, to->view, to->memory);
+    retire_attachment(to);
     vk_create_image(format, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, (uint32_t)width, (uint32_t)height, 1, &to->image, &to->memory);
     to->view = vk_create_view(to->image, format, aspect, 1, mapping);
     to->width = width;
@@ -1084,12 +1121,183 @@ static void fill_copy(GxTexture *to, int width, int height, GxChannels channels,
   mark("fill instead of copy", width, height);
 }
 
+// Framebuffers outlive their last use by the frames still on the chip.
+typedef struct { VkFramebuffer framebuffer; uint32_t frame; } DeadFramebuffer;
+static DeadFramebuffer dead_framebuffers[16];
+static int dead_count;
+
+static void retire_framebuffer(VkFramebuffer framebuffer) {
+  if (!framebuffer) return;
+  for (int i = 0; i < dead_count;) {
+    if (frame_serial - dead_framebuffers[i].frame > FRAMES_IN_FLIGHT + 1) {
+      vkDestroyFramebuffer(vk.device, dead_framebuffers[i].framebuffer, 0);
+      dead_framebuffers[i] = dead_framebuffers[--dead_count];
+    } else {
+      i++;
+    }
+  }
+  if (dead_count == (int)(sizeof dead_framebuffers / sizeof dead_framebuffers[0])) {
+    vkQueueWaitIdle(vk.queue);
+    for (int i = 0; i < dead_count; i++) vkDestroyFramebuffer(vk.device, dead_framebuffers[i].framebuffer, 0);
+    dead_count = 0;
+  }
+  dead_framebuffers[dead_count++] = (DeadFramebuffer){framebuffer, frame_serial};
+}
+
+// A texture that took the side picture's image keeps a view and framebuffer for drawing into
+// it, and they go when its image does.
+static void retire_attachment(GxTexture *t) {
+  if (t->attach_view) vk_retire(VK_NULL_HANDLE, t->attach_view, VK_NULL_HANDLE);
+  retire_framebuffer(t->framebuffer);
+  t->attach_view = VK_NULL_HANDLE;
+  t->framebuffer = VK_NULL_HANDLE;
+}
+
+static VkFramebuffer side_framebuffer_for(VkImageView view) {
+  VkImageView views[2] = {view, vk.efb_depth_view};
+  VkFramebufferCreateInfo info = {.sType = VK_STRUCTURE_TYPE_FRAMEBUFFER_CREATE_INFO, .renderPass = vk.render_pass, .attachmentCount = 2, .pAttachments = views,
+                                  .width = EFB_PIXEL_WIDTH, .height = VISIBLE_HEIGHT * EFB_SCALE, .layers = 1};
+  VkFramebuffer framebuffer;
+  vk_check(vkCreateFramebuffer(vk.device, &info, 0, &framebuffer), "creating the side framebuffer");
+  return framebuffer;
+}
+
+static void make_side(void) {
+  if (side.image) return;
+  static const VkComponentMapping plain = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+  vk_create_image(COLOR_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                  EFB_PIXEL_WIDTH, VISIBLE_HEIGHT * EFB_SCALE, 1, &side.image, &side.memory);
+  side.view = vk_create_view(side.image, COLOR_FORMAT, VK_IMAGE_ASPECT_COLOR_BIT, 1, plain);
+  side.framebuffer = side_framebuffer_for(side.view);
+  barrier(vk.frame->draw, side.image, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, COLOR_ATTACHMENT_STAGE, COLOR_ATTACHMENT_ACCESS);
+}
+
+static void side_to_source(VkCommandBuffer commands) {
+  barrier(commands, side.image, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+          COLOR_ATTACHMENT_STAGE, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+}
+
+static void side_to_target(VkCommandBuffer commands) {
+  barrier(commands, side.image, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+          VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT, COLOR_ATTACHMENT_STAGE, COLOR_ATTACHMENT_ACCESS);
+}
+
+// Ends drawing into the side picture. Anything still waiting to clear it happens first.
+static void leave_side(void) {
+  if (!side.on) return;
+  end_pass();
+  side.on = 0;
+}
+
+// A copy of the picture while the layer is being drawn is a copy of the side picture.
+static void copy_from_side(GxTexture *to, const GxRectangle *from, int width, int height, GxChannels channels) {
+  route_work(0);
+  leave_side();
+  to->copied_frame = frame_serial;
+  to->strip_frame = frame_serial;
+  cover.recorded_anything_lasting = 1;
+  VkCommandBuffer commands = vk.frame->draw;
+  static int swap_off = -1;
+  if (swap_off < 0) swap_off = getenv("WII_RECOMP_NO_SWAP") != 0;
+  // The whole picture at its own size: the texture can take the side picture's image as
+  // it is, and give its own for the next layer. Only an image made for drawing into will do.
+  if (!swap_off && width == EFB_PIXEL_WIDTH && height == VISIBLE_HEIGHT * EFB_SCALE && !to->depth) {
+    static const VkComponentMapping plain = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
+    VkComponentMapping mapping = {swizzle(channels.red), swizzle(channels.green), swizzle(channels.blue), swizzle(channels.alpha)};
+    VkImage image = to->image;
+    VkDeviceMemory memory = to->memory;
+    VkImageView attach_view = to->attach_view;
+    VkFramebuffer framebuffer = to->framebuffer;
+    int was_written = to->written;
+    if (to->view) vk_retire(VK_NULL_HANDLE, to->view, VK_NULL_HANDLE);
+    to->image = side.image;
+    to->memory = side.memory;
+    to->attach_view = side.view;
+    to->framebuffer = side.framebuffer;
+    to->view = vk_create_view(to->image, COLOR_FORMAT, VK_IMAGE_ASPECT_COLOR_BIT, 1, mapping);
+    to->width = width;
+    to->height = height;
+    to->channels = channels;
+    to->owed = 0;
+    barrier(commands, to->image, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            COLOR_ATTACHMENT_STAGE, VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+    to->written = 1;
+    if (attach_view) {
+      side.image = image;
+      side.memory = memory;
+      side.view = attach_view;
+      side.framebuffer = framebuffer;
+    } else {
+      // Its image wasn't made for drawing into, so it goes, and the side picture gets a new one.
+      if (image) vk_retire(image, VK_NULL_HANDLE, memory);
+      vk_create_image(COLOR_FORMAT, VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT,
+                      EFB_PIXEL_WIDTH, VISIBLE_HEIGHT * EFB_SCALE, 1, &side.image, &side.memory);
+      side.view = vk_create_view(side.image, COLOR_FORMAT, VK_IMAGE_ASPECT_COLOR_BIT, 1, plain);
+      side.framebuffer = side_framebuffer_for(side.view);
+      was_written = 0;
+    }
+    barrier(commands, side.image, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, was_written ? VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL : VK_IMAGE_LAYOUT_UNDEFINED,
+            VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, COLOR_ATTACHMENT_STAGE, COLOR_ATTACHMENT_ACCESS);
+    mark("swap with side", width, height);
+    return;
+  }
+  prepare_copy(to, width, height, COLOR_FORMAT, VK_IMAGE_ASPECT_COLOR_BIT, channels);
+  side_to_source(commands);
+  VkImageBlit blit = {.srcSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, .dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}};
+  blit_areas(from, width, height, blit.srcOffsets, blit.dstOffsets);
+  if (same_size(&blit)) vkCmdCopyImage(commands, side.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, to->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &(VkImageCopy){blit.srcSubresource, blit.srcOffsets[0], blit.dstSubresource, blit.dstOffsets[0], blit_extent(&blit)});
+  else vkCmdBlitImage(commands, side.image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, to->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_NEAREST);
+  side_to_target(commands);
+  finish_copy(to, VK_IMAGE_ASPECT_COLOR_BIT);
+  mark("copy color from side", width, height);
+}
+
+// Puts what was drawn apart where the game expects it, when the layer ends some other way:
+// from the side picture, or once copied, from the layer, which may have taken its image.
+static void side_to_picture(GxTexture *copied) {
+  leave_side();
+  VkCommandBuffer commands = vk.frame->draw;
+  VkImage source = copied ? copied->image : side.image;
+  if (copied) {
+    barrier(commands, source, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+            VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+  } else {
+    side_to_source(commands);
+  }
+  barrier(commands, vk.efb_color, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+          COLOR_ATTACHMENT_STAGE, COLOR_ATTACHMENT_ACCESS, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+  VkImageCopy region = {{VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0}, {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1}, {0, 0, 0},
+                        {EFB_PIXEL_WIDTH, VISIBLE_HEIGHT * EFB_SCALE, 1}};
+  vkCmdCopyImage(commands, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, vk.efb_color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+  barrier(commands, vk.efb_color, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
+          VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, COLOR_ATTACHMENT_STAGE, COLOR_ATTACHMENT_ACCESS);
+  if (copied) {
+    barrier(commands, source, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+  } else {
+    side_to_target(commands);
+  }
+  mark("side back to picture", EFB_PIXEL_WIDTH, VISIBLE_HEIGHT * EFB_SCALE);
+}
+
 static void owe(GxTexture *t, int why) { t->owed = why; t->owed_frame = frame_serial; }
 
-static void give_up_layer(void) {
-  int step = empty_layer.step;
+// Runs what was held back. The picture's copy can be left out when it's about to be
+// copied again with nothing read in between.
+static void settle_layer(int picture_needed) {
+  int step = empty_layer.step, real = empty_layer.real;
   empty_layer.step = LAYER_IDLE;
+  empty_layer.real = 0;
   if (step == LAYER_IDLE) return;
+  // The picture never left. What the game thinks it holds is in the side picture, or a clear.
+  if (step >= LAYER_SIDE) {
+    leave_side();
+    copy_color_now(empty_layer.picture, &empty_layer.from, empty_layer.width, empty_layer.height, empty_layer.picture_channels, 0);
+    if (step == LAYER_SIDE_CLEARED) clear_now(&empty_layer.clears[1]);
+    else side_to_picture(step == LAYER_SIDE_COPIED ? empty_layer.layer : 0);
+    return;
+  }
   if (step < LAYER_PICTURE_BACK) {
     copy_color_now(empty_layer.picture, &empty_layer.from, empty_layer.width, empty_layer.height, empty_layer.picture_channels, 0);
     if (step >= LAYER_CLEARED) clear_now(&empty_layer.clears[0]);
@@ -1099,30 +1307,42 @@ static void give_up_layer(void) {
   }
   // The picture is back and depth is untouched, so the copies can still be made now. The
   // layer had nothing drawn into it, so its copy is the clear before it.
-  copy_color_now(empty_layer.picture, &empty_layer.from, empty_layer.width, empty_layer.height, empty_layer.picture_channels, 0);
-  fill_copy(empty_layer.layer, empty_layer.width, empty_layer.height, empty_layer.layer_channels, empty_layer.clears[0].color);
+  // A layer drawn apart was copied for real. Its picture copy was only ever drawn back, so
+  // like a skipped layer's it's left out, and a read of it is caught.
+  if (real) {
+    if (picture_needed) owe(empty_layer.picture, 1 | 8);
+  } else {
+    if (picture_needed) copy_color_now(empty_layer.picture, &empty_layer.from, empty_layer.width, empty_layer.height, empty_layer.picture_channels, 0);
+    fill_copy(empty_layer.layer, empty_layer.width, empty_layer.height, empty_layer.layer_channels, empty_layer.clears[0].color);
+  }
   if (step >= LAYER_DEPTH_COPIED) copy_depth_requested(empty_layer.depth, &empty_layer.from, empty_layer.depth_width, empty_layer.depth_height);
   if (step == LAYER_DEPTH_CLEARED) clear_now(&empty_layer.clears[2]);
+}
+
+static void give_up_layer(void) { settle_layer(1); }
+
+// Work in the strip below the picture neither changes the picture nor, unless it reads
+// one of them, needs the copies held back, so it doesn't end a layer.
+static int holds(const GxTexture *t) {
+  int step = empty_layer.step;
+  if (!t || step == LAYER_IDLE) return 0;
+  if (t == empty_layer.picture) return 1;
+  if (step >= LAYER_SIDE) return 0;
+  return (step >= LAYER_EMPTY_COPIED && !empty_layer.real && t == empty_layer.layer) || (step >= LAYER_DEPTH_COPIED && t == empty_layer.depth);
+}
+
+static int reads_held(void) {
+  extern unsigned gx_used_maps;
+  for (int m = 0; m < MAX_TEXTURE_MAPS; m++) if ((gx_used_maps & (1u << m)) && holds(bindings[m].texture)) return 1;
+  return 0;
 }
 
 static int draws_straight_back(int count, GxTexture *texture) {
   extern TevKey gx_last_tev;
   const TevKey *key = &gx_last_tev;
-  const TevStage *s = &key->stage[0];
   if (count != 4 || bindings[0].texture != texture || state_in_use.blend_on || !state_in_use.color_write || !state_in_use.alpha_write) return 0;
-  if (state_in_use.depth_write || state_in_use.depth_test_on || key->stages != 1 || key->alpha_test) return 0;
-  if (s->color_in[0] != 15 || s->color_in[1] != 8 || s->color_in[2] != 10 || s->color_in[3] != 15) return 0;
-  if (s->alpha_in[0] != 7 || s->alpha_in[1] != 4 || s->alpha_in[2] != 5 || s->alpha_in[3] != 7) return 0;
-  if (s->color_bias || s->color_subtract || s->color_scale || s->color_target) return 0;
-  if (s->alpha_bias || s->alpha_subtract || s->alpha_scale || s->alpha_target || s->map != 0 || s->coordinate != 0) return 0;
-  for (int i = 0; i < 4; i++) {
-    const Vertex *v = &gx_reserved[i];
-    float box[4];
-    if (!gx_transform_bounds(v, 1, box)) return 0;
-    for (int channel = 0; channel < 4; channel++) if (v->color[0][channel] != 1) return 0;
-    if (fabsf((box[0] + 1) / 2 - v->uv[0][0]) > 0.0005f || fabsf((1 - box[1]) / 2 - v->uv[0][1]) > 0.0005f) return 0;
-  }
-  return 1;
+  if (state_in_use.depth_write || state_in_use.depth_test_on || !passes_texture_through(key, texture)) return 0;
+  return draws_copy_where_it_was(count);
 }
 
 // The layer's alpha decides the color, and an empty layer has none: the first stage
@@ -1147,26 +1367,50 @@ static int lays_empty_layer_over(int count) {
   if (t->alpha_bias || t->alpha_subtract || t->alpha_scale || t->alpha_target) return refuse(__LINE__);
   if (gx.bp[BP_Z_TEXTURE_BIAS] & 0xffffff) return refuse(__LINE__);
   if (!state_in_use.blend_on || state_in_use.blend_subtract || state_in_use.alpha_write) return refuse(__LINE__);
-  if (state_in_use.blend_source != GX_FACTOR_SOURCE1_ALPHA || state_in_use.blend_target != GX_FACTOR_INVERSE_SOURCE1_ALPHA) return refuse(__LINE__);
+  // The stages' alpha, read through the second output or, with none, the first.
+  int second = state_in_use.blend_source == GX_FACTOR_SOURCE1_ALPHA && state_in_use.blend_target == GX_FACTOR_INVERSE_SOURCE1_ALPHA;
+  int plain = state_in_use.blend_source == GX_FACTOR_SOURCE_ALPHA && state_in_use.blend_target == GX_FACTOR_INVERSE_SOURCE_ALPHA;
+  if (!second && !(plain && !gx_blend_needs_second_output(key))) return refuse(__LINE__);
   if (!state_in_use.depth_write || empty_layer.clears[2].depth != 1) return refuse(__LINE__);
   int test = state_in_use.depth_test;
   return !state_in_use.depth_test_on || test == TEST_LESS || test == TEST_LEQUAL || test == TEST_ALWAYS;
 }
 
 static int layer_draw(int count) {
-  if (empty_layer.step == LAYER_IDLE) return 0;
+  if (empty_layer.step == LAYER_IDLE || (in_strip && !reads_held())) return 0;
+  static int side_off = -1;
+  if (side_off < 0) side_off = getenv("WII_RECOMP_NO_SIDE") != 0;
+  VkRect2D where = drawn_area();
+  int fits = !reads_held() && where.offset.y + (int64_t)where.extent.height <= VISIBLE_HEIGHT * EFB_SCALE;
+  // Something is drawn into the cleared picture: a layer with something in it. It goes to
+  // the side picture, cleared the same way, and the picture stays.
+  if (empty_layer.step == LAYER_CLEARED && fits && !side_off) {
+    end_pass();
+    make_side();
+    newest_copy.frame = 0;
+    side.on = 1;
+    empty_layer.step = LAYER_SIDE;
+    clear_now(&empty_layer.clears[0]);
+    return 0;
+  }
+  if (empty_layer.step == LAYER_SIDE && fits) return 0;
+  if (empty_layer.step == LAYER_SIDE_CLEARED && draws_straight_back(count, empty_layer.picture)) {
+    empty_layer.step = LAYER_PICTURE_BACK;
+    empty_layer.real = 1;
+    return 1;
+  }
   if (empty_layer.step == LAYER_CLEARED_AGAIN && draws_straight_back(count, empty_layer.picture)) {
     empty_layer.step = LAYER_PICTURE_BACK;
     return 1;
   }
-  if (empty_layer.step == LAYER_DEPTH_CLEARED && lays_empty_layer_over(count)) {
+  if (empty_layer.step == LAYER_DEPTH_CLEARED && !empty_layer.real && lays_empty_layer_over(count)) {
     owe(empty_layer.picture, 1);
     owe(empty_layer.layer, 2);
     owe(empty_layer.depth, 3);
     empty_layer.step = LAYER_IDLE;
     return 1;
   }
-  if (empty_layer.step == LAYER_DEPTH_CLEARED) {
+  if (empty_layer.step == LAYER_DEPTH_CLEARED && !empty_layer.real) {
     static int told;
     if (!told++) fprintf(stderr, "layer: laid over in a way not proven to change nothing (gx_vulkan.c:%d), so it is drawn\n", refused_at);
   }
@@ -1178,6 +1422,19 @@ static void copy_color(GxTexture *to, const GxRectangle *from, int width, int he
   static int off = -1;
   if (off < 0) off = getenv("WII_RECOMP_KEEP_EMPTY_LAYERS") != 0;
   int step = empty_layer.step, usable = !off && !empty_layer.off && is_whole_picture(from) && width == EFB_WIDTH * EFB_SCALE && !smooth;
+  if (step == LAYER_SIDE && usable && to != empty_layer.picture) {
+    copy_from_side(to, from, width, height, channels);
+    empty_layer.step = LAYER_SIDE_COPIED;
+    empty_layer.layer = to;
+    empty_layer.layer_channels = channels;
+    return;
+  }
+  // The game sometimes ends a layer without laying it over, then copies the picture again.
+  int back = step == LAYER_PICTURE_BACK || step == LAYER_DEPTH_COPIED || step == LAYER_DEPTH_CLEARED;
+  if (usable && back && to == empty_layer.picture) {
+    settle_layer(0);
+    step = LAYER_IDLE;
+  }
   if (usable && step == LAYER_IDLE) {
     empty_layer.step = LAYER_PICTURE_COPIED;
     empty_layer.picture = to;
@@ -1193,11 +1450,16 @@ static void copy_color(GxTexture *to, const GxRectangle *from, int width, int he
     empty_layer.layer_channels = channels;
     return;
   }
-  give_up_layer();
+  if (from->y < VISIBLE_HEIGHT || holds(to)) give_up_layer();
   copy_color_now(to, from, width, height, channels, smooth);
 }
 
 static void copy_depth(GxTexture *to, const GxRectangle *from, int width, int height) {
+  // Depth is never drawn apart, so its copies go on as asked.
+  if (empty_layer.step == LAYER_SIDE && !holds(to)) {
+    copy_depth_requested(to, from, width, height);
+    return;
+  }
   if (empty_layer.step == LAYER_PICTURE_BACK && is_whole_picture(from)) {
     empty_layer.step = LAYER_DEPTH_COPIED;
     empty_layer.depth = to;
@@ -1205,7 +1467,7 @@ static void copy_depth(GxTexture *to, const GxRectangle *from, int width, int he
     empty_layer.depth_height = height;
     return;
   }
-  give_up_layer();
+  if (from->y < VISIBLE_HEIGHT || holds(to)) give_up_layer();
   copy_depth_requested(to, from, width, height);
 }
 
@@ -1217,12 +1479,22 @@ static void clear(const GxClear *c) {
     empty_layer.step = step + 1;
     return;
   }
+  // While drawing apart, a clear in the picture clears the side picture and shared depth.
+  if (step == LAYER_SIDE && c->area.y + c->area.height <= VISIBLE_HEIGHT) {
+    clear_now(c);
+    return;
+  }
+  if (step == LAYER_SIDE_COPIED && whole && c->color_write && c->alpha_write && !c->depth_write) {
+    empty_layer.clears[1] = *c;
+    empty_layer.step = LAYER_SIDE_CLEARED;
+    return;
+  }
   if (step == LAYER_DEPTH_COPIED && whole && c->depth_write && !c->color_write && !c->alpha_write) {
     empty_layer.clears[2] = *c;
     empty_layer.step = LAYER_DEPTH_CLEARED;
     return;
   }
-  give_up_layer();
+  if (c->area.y < VISIBLE_HEIGHT) give_up_layer();
   clear_now(c);
 }
 

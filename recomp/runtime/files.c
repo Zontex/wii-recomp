@@ -7,6 +7,7 @@
 #include <sys/stat.h>
 
 #include "bluetooth.h"
+#include "wii_camera.h"
 #include "game.h"
 #include "cpu.h"
 #include "ios.h"
@@ -62,6 +63,20 @@ int files_find(const char *path, char *out, unsigned long size) {
   return !stat(out, &info);
 }
 
+// A one-byte value from the console settings, or -1. Each item is a type and name
+// length byte, the name, then the value.
+static int settings_byte(const uint8_t *data, size_t bytes, const char *name) {
+  if (bytes < 6) return -1;
+  unsigned count = (unsigned)data[4] << 8 | data[5];
+  size_t length = strlen(name);
+  for (unsigned i = 0; i < count && 8 + 2 * i <= bytes; i++) {
+    size_t at = (size_t)data[6 + 2 * i] << 8 | data[7 + 2 * i];
+    if (at + 1 + length + 1 > bytes || (size_t)(data[at] & 0x1f) + 1 != length) continue;
+    if (!memcmp(data + at + 1, name, length)) return data[at + 1 + length];
+  }
+  return -1;
+}
+
 int files_open(const char *path) {
   char full[MAX_PATH];
   if (!files_find(path, full, sizeof full)) return -1;
@@ -79,13 +94,18 @@ int files_open(const char *path) {
     handle->changed = 0;
     snprintf(handle->path, sizeof handle->path, "%s", path);
     fread(handle->data, 1, (size_t)handle->size, file);
-    if (game_virtual_bluetooth && !strcmp(path, SETTINGS_FILE)) bluetooth_register_remote(handle->data, (size_t)handle->size);
+    if (game_virtual_bluetooth && !strcmp(path, SETTINGS_FILE)) {
+      bluetooth_register_remote(handle->data, (size_t)handle->size);
+      camera_set_bar_above(settings_byte(handle->data, (size_t)handle->size, "BT.BAR") == 1);
+    }
     fclose(file);
     return i;
   }
   fclose(file);
   return -1;
 }
+
+const char *files_name(int id) { return handles[id].path; }
 
 void files_close(int id) {
   Handle *handle = &handles[id];

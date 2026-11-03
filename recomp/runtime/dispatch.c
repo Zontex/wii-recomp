@@ -6,6 +6,7 @@
 #include "cpu.h"
 #include "dispatch.h"
 #include "interp.h"
+#include "modules.h"
 
 typedef struct { uint32_t address; GuestFunction run; } Entry;
 extern const Entry function_table[];
@@ -60,9 +61,36 @@ static void log_once(uint32_t address) {
   logged_count++;
   logged[at] = address;
   fprintf(stderr, "interpreting %08x (return address %08x)\n", address, cpu.lr);
+  // Kept for the translator, which treats each one as a function start next time.
+  static FILE *discovered;
+  if (!discovered && getenv("WII_RECOMP_DISCOVERED")) discovered = fopen(getenv("WII_RECOMP_DISCOVERED"), "a");
+  if (discovered) {
+    fprintf(discovered, "%08x\n", address);
+    fflush(discovered);
+  }
+}
+
+void dispatch_register(uint32_t address, GuestFunction run) {
+  uint32_t word = (address - CODE_START) >> 2;
+  if (word >= CODE_WORDS) {
+    fprintf(stderr, "stop: a module's code at %08x is outside main memory, which isn't supported yet\n", address);
+    exit(4);
+  }
+  code_slots[word] = run;
 }
 
 static __attribute__((noinline)) void run_untranslated(uint32_t address) {
+  if (modules_bind(address)) {  // A module the program just linked, translated ahead of time.
+    GuestFunction run = translated_at(address);
+    if (run) {
+      run();
+      return;
+    }
+  }
+  if (getenv("WII_RECOMP_NATIVE_ONLY")) {
+    fprintf(stderr, "stop: no native code at %08x (return address %08x), and the interpreter is off\n", address, cpu.lr);
+    exit(4);
+  }
   log_once(address);
   interpret(address);
 }

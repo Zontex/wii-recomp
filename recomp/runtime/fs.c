@@ -12,7 +12,7 @@
 enum {
   GET_STATS = 2, CREATE_DIR = 3, READ_DIR = 4, SET_ATTR = 5, GET_ATTR = 6, DELETE = 7, RENAME = 8, CREATE_FILE = 9,
   GET_USAGE = 12, PATH_BYTES = 64, ATTR_PATH = 6, ATTR_BYTES = 0x4c, MAX_PATH = 1024, VECTOR_BYTES = 8,
-  NOT_FOUND = -106, ALREADY_EXISTS = -105, BLOCK_BYTES = 0x4000, FREE_BLOCKS = 0x4000, FREE_INODES = 0x4000,
+  INVALID = -101, NOT_FOUND = -106, ALREADY_EXISTS = -105, BLOCK_BYTES = 0x4000, FREE_BLOCKS = 0x4000, FREE_INODES = 0x4000,
   NAME_BYTES = 13, READ_WRITE = 3,
 };
 
@@ -114,6 +114,9 @@ static int read_folder(uint32_t request) {
   char path[PATH_BYTES], saved[MAX_PATH], found[MAX_PATH];
   read_path(guest(rd32(vectors)), path);
   if (!files_find(path, found, sizeof found)) return NOT_FOUND;
+  struct stat info;
+  // A file can't be listed. NANDGetType relies on this answer to tell files from folders.
+  if (!stat(found, &info) && !S_ISDIR(info.st_mode)) return INVALID;
   // Asked once for the count, then again with room for the names.
   int with_names = inputs == 2;
   uint32_t limit = with_names ? rd32(guest(rd32(vectors + VECTOR_BYTES))) : 4096;
@@ -148,10 +151,11 @@ int fs_request(uint32_t command, uint32_t request) {
       uint32_t vectors = guest(rd32(request + 24));
       wr32(guest(rd32(vectors + VECTOR_BYTES)), 0);
       wr32(guest(rd32(vectors + 2 * VECTOR_BYTES)), 0);
+      return 0;
     }
-    return 0;
+    return IOS_UNHANDLED;
   }
-  if (command != IOS_IOCTL) return 0;
+  if (command != IOS_IOCTL) return IOS_UNHANDLED;
   uint32_t in = guest(rd32(request + 16)), out = guest(rd32(request + 24));
   char path[PATH_BYTES], other[PATH_BYTES];
   switch (code) {
@@ -161,6 +165,7 @@ int fs_request(uint32_t command, uint32_t request) {
     case GET_ATTR: read_path(in, path); return get_attributes(path, out, rd32(request + 28));
     case DELETE: read_path(in, path); return erase(path);
     case RENAME: read_path(in, path); read_path(in + PATH_BYTES, other); return move(path, other);
-    default: return 0;
+    case SET_ATTR: return 0;  // Owners and permissions aren't kept yet: docs/native_ios.md, stage 2.
+    default: return IOS_UNHANDLED;
   }
 }

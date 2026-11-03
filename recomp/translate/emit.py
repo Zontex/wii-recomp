@@ -9,12 +9,14 @@ FIFO breakpoints, for games that keep several frames in the FIFO. Wii Fit sets o
 needs it ignored, as it sends two tokens a frame. --virtual-bluetooth runs the game's own
 Wii Remote code against the virtual Bluetooth chip in place of direct input.
 """
+import struct
 import sys
 from collections import Counter
 from pathlib import Path
 
 from decode import Program, name_of
-from functions import add_unreached_code, branch_target, find_functions, signed
+import modules
+from functions import add_starts, add_unreached_code, branch_target, find_functions, read_starts, signed
 from remote_tables import find_remote_tables
 from signatures import load_entries, resolve
 
@@ -27,6 +29,7 @@ REPLACED = {}
 IDLE_LOOPS = {}
 # Replacements that skip the game's Wii Remote code, for games not on virtual Bluetooth.
 DIRECT_INPUT = {"input_read();", "input_probe();"}
+IOS_OFFSET = 0x184  # The IOS the title asks for, in its TMD.
 TITLE_ID_OFFSET = 0x18c  # In the disc's tmd.bin.
 DECREMENTER = 22
 CACHE_DMA_LOW = 923
@@ -467,6 +470,37 @@ def function_name(address):
     return f"f_{address:08x}"
 
 
+# Set while a run-time-loaded module is translated: where its code and imports stand in,
+# and the C names of the addresses its linker settles on. See modules.py.
+MODULE = None
+FIELD_STAND_IN = 0x7b5d  # Put in place of a linker-filled immediate, then replaced by C.
+
+
+def address_text(address):
+    """An address as C. A module's own addresses depend on where it was loaded."""
+    if MODULE and MODULE["base"] <= address < MODULE["base"] + MODULE["size"]:
+        return f"({MODULE['prefix']}_code + 0x{address - MODULE['base']:x}u)"
+    if MODULE and MODULE["imports"] <= address < MODULE["imports"] + 4 * MODULE["import_count"]:
+        return f"{MODULE['prefix']}_import[{(address - MODULE['imports']) // 4}]"
+    return f"0x{address:x}u"
+
+
+def emit_field(address, word, name):
+    """An instruction whose immediate the module's linker fills in, as C that works it out."""
+    kind, section, symbol, addend = MODULE["fields"][address]
+    prefix = MODULE["prefix"]
+    target = f"{prefix}_section[{section}]" if symbol is None else f"{prefix}_import[{symbol}]"
+    target = f"({target} + 0x{addend:x}u)"
+    value = f"({target} & 0xffffu)" if kind == "lo" else f"((({target}) + 0x8000u) >> 16)"
+    text = emit(address, (word & 0xffff0000) | FIELD_STAND_IN, name)
+    forms = [(f"0x{FIELD_STAND_IN << 16:x}u", f"({value} << 16)"), (f"0x{FIELD_STAND_IN:x}u", value),
+             (str(FIELD_STAND_IN), f"(int32_t)(int16_t){value}")]
+    found = [(literal, c) for literal, c in forms if text and literal in text]
+    if len(found) != 1 or text.count(found[0][0]) != 1:
+        raise SystemExit(f"{prefix}: can't place the linker's {kind} field in {name} at 0x{address:x}: {text}")
+    return text.replace(found[0][0], found[0][1])
+
+
 def write_if_changed(path, text):
     """Keeps file times, so only changed parts are compiled again."""
     if not path.exists() or path.read_text() != text:
@@ -511,9 +545,9 @@ def emit_function(program, start, body, starts):
             destination, is_call = branch_target(address, word)
             before, test = ("", "1") if name == "b" else condition(word)
             if is_call and destination == following:  # Only reads its own address, and isn't a call.
-                lines.append(f"{before} if ({test}) {{ cpu.lr = 0x{following:x}u; }}")
+                lines.append(f"{before} if ({test}) {{ cpu.lr = {address_text(following)}; }}")
             elif is_call:
-                lines.append(f"{before} if ({test}) {{ cpu.lr = 0x{following:x}u; {call_text(destination, starts)} }}")
+                lines.append(f"{before} if ({test}) {{ cpu.lr = {address_text(following)}; {call_text(destination, starts)} }}")
             elif destination in body:
                 check = "POLL(); " if destination <= address else ""
                 if destination in IDLE_LOOPS and destination <= address:
@@ -524,13 +558,13 @@ def emit_function(program, start, body, starts):
         elif name == "bclr":
             before, test = condition(word)
             if word & 1:  # blrl calls the address in the link register, then carries on here.
-                lines.append(f"{before} if ({test}) {{ uint32_t target = cpu.lr; cpu.lr = 0x{following:x}u; dispatch(target); }}")
+                lines.append(f"{before} if ({test}) {{ uint32_t target = cpu.lr; cpu.lr = {address_text(following)}; dispatch(target); }}")
             else:
                 lines.append(f"{before} if ({test}) {{ return; }}")
         elif name == "bcctr":
             before, test = condition(word)
             if word & 1:
-                lines.append(f"{before} if ({test}) {{ cpu.lr = 0x{following:x}u; dispatch(cpu.ctr); }}")
+                lines.append(f"{before} if ({test}) {{ cpu.lr = {address_text(following)}; dispatch(cpu.ctr); }}")
             else:
                 lines.append(f"{before} if ({test}) {{ dispatch(cpu.ctr); return; }}")
         elif name == "sc":
@@ -538,7 +572,10 @@ def emit_function(program, start, body, starts):
         elif name == "rfi":
             lines.append("cpu.msr = cpu.spr[27]; dispatch(cpu.spr[26]); return;")
         else:
-            text = emit(address, word, name) if name else None
+            if MODULE and address in MODULE["fields"]:
+                text = emit_field(address, word, name)
+            else:
+                text = emit(address, word, name) if name else None
             if text is None:
                 unknown[name] += 1
                 lines.append(f'unimplemented(0x{address:x}u, "{name}");')
@@ -558,11 +595,11 @@ def tail_text(destination, starts):
     """A jump to other code. It must not grow the stack, as loops can span functions."""
     if destination in starts:
         return f"__attribute__((musttail)) return {function_name(destination)}();"
-    return f"dispatch(0x{destination:x}u); return;"
+    return f"dispatch({address_text(destination)}); return;"
 
 
 def call_text(destination, starts):
-    return f"{function_name(destination)}();" if destination in starts else f"dispatch(0x{destination:x}u);"
+    return f"{function_name(destination)}();" if destination in starts else f"dispatch({address_text(destination)});"
 
 
 def check_replaced(starts):
@@ -582,9 +619,135 @@ def game_settings(tmd, values, tables):
             f"const uint32_t game_calibration_flag = 0x{values.get('calibration_flag', 0):x}u;\n"
             f"const uint32_t game_title_high = 0x{high:08x}u, game_title_low = 0x{low:08x}u;\n"
             f'const char game_data_folder[] = "/title/{high:08x}/{low:08x}/data";\n'
+            f"const uint32_t game_ios_version = {int.from_bytes(tmd[IOS_OFFSET + 4:IOS_OFFSET + 8], 'big')};\n"
             f"const uint32_t game_remote_blocks = 0x{blocks:x}u, game_attachment_add = 0x{add:x}u, game_attachment_xor = 0x{exclusive:x}u;\n"
             f"const int game_fifo_breakpoints = {int('--fifo-breakpoints' in sys.argv)};\n"
             f"const int game_virtual_bluetooth = {int('--virtual-bluetooth' in sys.argv)};\n")
+
+
+# Each module's code stands in at MODULE_BASE + n * MODULE_SPACING, and its imports 16 MiB
+# after that, within a branch's reach of all its code.
+MODULE_BASE, MODULE_IMPORTS, MODULE_SPACING = 0xc0000000, 0xc1000000, 0x02000000
+
+
+def export_addresses(system, functions):
+    """What the program exports to its modules, by name, from its .sel export list.
+
+    The list gives each export as an offset into a section of the program, but not where
+    that section starts. A code section's start is the one that puts its exports on
+    functions the translator found. It must be clear-cut, or the build stops. The runtime
+    checks every address again once a module is linked.
+    """
+    starts = sorted(functions)
+    found = {}
+    for path in sorted((system / "modules").glob("*.sel")):
+        exported = modules.parse_rso(path.stem, path.read_bytes())
+        by_section = {}
+        for name, section, value in exported.exports:
+            by_section.setdefault(section, []).append((name, value))
+        for section, entries in sorted(by_section.items()):
+            votes = Counter(start - value for _, value in entries[:40] for start in starts)
+            scored = sorted(((sum(base + value in functions for _, value in entries), base)
+                             for base, _ in votes.most_common(20)), reverse=True)
+            best, base = scored[0]
+            runner_up = scored[1][0] if len(scored) > 1 else 0
+            if best < max(3, len(entries) * 0.7) or runner_up * 2 > best:
+                print(f"{path.name}: section {section} isn't code the translator found ({best} of {len(entries)} exports)")
+                continue
+            print(f"{path.name}: section {section} starts at {base:08x}, {best} of {len(entries)} exports on known functions")
+            found.update({name: base + value for name, value in entries})
+    return found
+
+
+def module_imports(system):
+    """Names each module calls in the program, which must be native functions."""
+    names = set()
+    for path in sorted((system / "modules").glob("*.rso")):
+        module = modules.parse_rso(path.stem, path.read_bytes())
+        names |= {module.imports[r.symbol] for r in module.external if r.kind == modules.REL24}
+    return names
+
+
+def emit_module(path, number, out, exports):
+    """Translates a run-time-loaded module's code into native functions, wherever it is
+    loaded. Writes mod<number>_*.c and returns the C for its entry in the module table."""
+    global MODULE
+    module = modules.parse_rso(path.stem, path.read_bytes())
+    if not module:
+        raise SystemExit(f"{path} isn't an RSO module")
+    base, imports = MODULE_BASE + number * MODULE_SPACING, MODULE_IMPORTS + number * MODULE_SPACING
+    prepared = modules.prepare(module, base, imports)
+    header = bytearray(0x100)
+    struct.pack_into(">I", header, 0, 0x100)
+    struct.pack_into(">I", header, 0x48, base)
+    struct.pack_into(">I", header, 0x90, len(prepared.code))
+    struct.pack_into(">I", header, 0xe0, base)
+    program = Program(bytes(header) + prepared.code)
+    functions = {}
+    add_starts(program, functions, prepared.starts)
+    prefix = f"m{number}"
+    MODULE = {"prefix": prefix, "base": base, "size": len(prepared.code), "imports": imports,
+              "import_count": len(module.imports), "fields": prepared.fields}
+    try:
+        addresses = sorted(functions)
+        starts = set(addresses)
+        declarations = "\n".join(f"void {function_name(a)}(void);" for a in addresses)
+        write_if_changed(out / f"{prefix}_functions.h",
+                         f'#include "../../runtime/cpu.h"\nextern uint32_t {prefix}_code, {prefix}_section[], {prefix}_import[];\n'
+                         f"{declarations}\n")
+        unknown, files = Counter(), 0
+        for first in range(0, len(addresses), FUNCTIONS_PER_FILE):
+            parts = [f'#include "{prefix}_functions.h"']
+            for start in addresses[first:first + FUNCTIONS_PER_FILE]:
+                text, _, missing = emit_function(program, start, functions[start], starts)
+                unknown += missing
+                parts.append(text)
+            write_if_changed(out / f"{prefix}_part{files:04}.c", "\n".join(parts) + "\n")
+            files += 1
+    finally:
+        MODULE = None
+    for stale in out.glob(f"{prefix}_part*.c"):  # Left from a translation with more files.
+        if int(stale.stem.rsplit("part", 1)[1]) >= files:
+            stale.unlink()
+    code_start = module.sections[prepared.section][0]
+    export_offsets = sorted(offset for _, section, offset in module.exports if section == prepared.section)
+    sites = []
+    for index in range(len(module.imports)):
+        site = prepared.import_sites.get(index)
+        if site is None:
+            sites.append("{0, 0, 0, 0, 0}")
+        elif site[0] == "branch":
+            sites.append(f"{{1, 0x{site[1]:x}u, 0, 0, 0x{exports.get(module.imports[index], 0):x}u}}")
+        else:
+            sites.append(f"{{2, 0x{site[1]:x}u, 0x{site[2]:x}u, 0x{site[3]:x}u, 0x{exports.get(module.imports[index], 0):x}u}}")
+    lines = [f'#include "{prefix}_functions.h"', '#include "../../runtime/modules.h"',
+             f"uint32_t {prefix}_code, {prefix}_section[{len(module.sections)}], {prefix}_import[{max(1, len(module.imports))}];",
+             f"static const ModuleFunction {prefix}_functions[] = {{" + ",".join(
+                 f"{{0x{a - base:x}u,{function_name(a)}}}" for a in addresses) + "};",
+             f"static const uint32_t {prefix}_exports[] = {{" + ",".join(f"0x{e:x}u" for e in export_offsets or [0]) + "};",
+             f"static const uint32_t {prefix}_relocated[] = {{" + ",".join(
+                 f"0x{r:x}u" for r in sorted(prepared.relocated_words)) + "};",
+             f"static const ImportSite {prefix}_sites[] = {{" + ",".join(sites or ["{0, 0, 0, 0, 0}"]) + "};"]
+    entry = (f'{{"{module.name}", 0x{code_start:x}u, 0x{len(prepared.code):x}u, {len(module.sections)}, {prepared.section}, '
+             f"{prefix}_functions, {len(addresses)}, {prefix}_exports, {len(export_offsets)}, "
+             f"{prefix}_relocated, {len(prepared.relocated_words)}, 0x{prepared.check:x}ull, "
+             f"{prefix}_sites, {len(module.imports)}, &{prefix}_code, {prefix}_section, {prefix}_import}}")
+    lines.append(f"const Module {prefix}_module = {entry};")
+    write_if_changed(out / f"{prefix}_table.c", "\n".join(lines) + "\n")
+    print(f"{module.name}: {len(addresses)} functions in {files} files")
+    if unknown:
+        print(f"{module.name} not yet translated:", unknown.most_common(20))
+    return prefix
+
+
+def write_modules(system, out, exports):
+    """Every module the title loads at run time, from sys/modules, as native code."""
+    prefixes = [emit_module(path, number, out, exports)
+                for number, path in enumerate(sorted((system / "modules").glob("*.rso")))]
+    write_if_changed(out / "modules.c", '#include "../../runtime/modules.h"\n'
+                     + "".join(f"extern const Module {prefix}_module;\n" for prefix in prefixes)
+                     + f"const Module *const game_modules[] = {{{', '.join(f'&{p}_module' for p in prefixes) or '0'}}};\n"
+                     f"const int game_module_count = {len(prefixes)};\n")
 
 
 def main():
@@ -595,13 +758,22 @@ def main():
     functions, _ = find_functions(program)
     replaced, idle_loops, values = resolve(program, functions, load_entries())
     if "--virtual-bluetooth" in sys.argv:
-        replaced = {address: entry for address, entry in replaced.items() if entry[1] not in DIRECT_INPUT and "Bluetooth" not in entry[0]}
+        # The program's own controller code runs, including an older KPADRead left as a stub.
+        replaced = {address: entry for address, entry in replaced.items()
+                    if entry[1] not in DIRECT_INPUT and "Bluetooth" not in entry[0] and not entry[0].startswith("KPADRead")}
     REPLACED.update(replaced)
     IDLE_LOOPS.update(idle_loops)
     write_if_changed(out / "game.c", game_settings((dol.parent.parent / "tmd.bin").read_bytes(), values, find_remote_tables(program, functions)))
     # After resolving, as finding a function can depend on counting its neighbours.
     if "--all-code" in sys.argv:
         add_unreached_code(program, functions)
+    # Program functions only its run-time modules call, by name from its export list.
+    exports = export_addresses(dol.parent, functions) if (dol.parent / "modules").is_dir() else {}
+    called = module_imports(dol.parent) if exports else set()
+    unplaced = sorted(name for name in called if name not in exports)
+    if unplaced:  # The runtime checks each has native code once a module is linked.
+        print("module calls placed only at run time:", ", ".join(unplaced))
+    add_starts(program, functions, {exports[name] for name in called if name in exports})
     starts = set(functions)
     check_replaced(starts)
     addresses = sorted(starts)
@@ -630,6 +802,7 @@ def main():
     )
     print(f"{len(addresses)} functions in {files} files")
     print("not yet translated:", unknown.most_common(40))
+    write_modules(dol.parent, out, exports)
 
 
 if __name__ == "__main__":

@@ -7,13 +7,18 @@
 
 const GxBackend *gx_backend;
 
-// The first one here is the default.
+// The first one here is the default: the first in build_file.py's list, which is Vulkan
+// unless asked otherwise. OpenGL stays as a fallback for machines with no working Vulkan,
+// and as a second opinion: a picture wrong in both is wrong above the line.
 static const GxBackend *const backends[] = {
-#ifdef GX_WITH_OPENGL
+#if defined(GX_WITH_OPENGL) && defined(GX_FIRST_OPENGL)
   &gx_backend_opengl,
 #endif
 #ifdef GX_WITH_VULKAN
   &gx_backend_vulkan,
+#endif
+#if defined(GX_WITH_OPENGL) && !defined(GX_FIRST_OPENGL)
+  &gx_backend_opengl,
 #endif
 };
 enum { BACKEND_COUNT = sizeof backends / sizeof backends[0] };

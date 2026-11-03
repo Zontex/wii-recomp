@@ -1,5 +1,5 @@
-// The IOS devices the game opens. Anything unmodelled answers "fine" and logs it.
-#include <stdio.h>
+// The IOS devices a program can open, by exact name. A request a device doesn't
+// model answers IOS_UNHANDLED, which ios.c logs and turns into an error.
 #include <string.h>
 
 #include "bluetooth.h"
@@ -7,31 +7,57 @@
 #include "game.h"
 #include "ios.h"
 
-#define STM_EVENT_HOOK 0x1000u
+typedef int (*IosHandler)(uint32_t command, uint32_t request);
 
-static const char *device_names[] = {
-  "/dev/es", "/dev/stm/immediate", "/dev/stm/eventhook", "/dev/di", "/dev/fs", "/dev/net", "/dev/usb/oh1/57e/305", "/dev/usb",
-  "/dev/sdio", "/dev/aes", "/dev/sha", "/dev/wl0", 0,
+typedef struct {
+  const char *name;
+  int prefix;  // Also answers any name that starts with this one.
+  IosHandler request;
+} IosDevice;
+
+static int unmodelled(uint32_t command, uint32_t request) { return IOS_UNHANDLED; }
+
+// The Bluetooth chip only replies when something happens. Without the virtual chip,
+// controllers come straight from input.c and nothing ever happens here.
+static int bluetooth(uint32_t command, uint32_t request) {
+  return game_virtual_bluetooth ? bluetooth_request(command, request) : IOS_NO_REPLY;
+}
+
+// Other USB devices, such as a keyboard, are never plugged in, so they never reply.
+static int usb(uint32_t command, uint32_t request) { return IOS_NO_REPLY; }
+
+static const IosDevice devices[] = {
+  {"/dev/es", 0, es_request},
+  {"/dev/fs", 0, fs_request},
+  {"/dev/di", 0, dvd_request},
+  {"/dev/stm/immediate", 0, stm_immediate},
+  {"/dev/stm/eventhook", 0, stm_event_hook},
+  {"/dev/usb/oh1/57e/305", 0, bluetooth},
+  {"/dev/usb/", 1, usb},
+  {"/dev/net/kd/request", 0, net_kd_request},
+  {"/dev/net/kd/time", 0, net_kd_time},
+  {"/dev/net/ncd/manage", 0, net_ncd_manage},
+  {"/dev/net/wd/command", 0, unmodelled},
+  {"/dev/net/ip/top", 0, unmodelled},
+  {"/dev/net/ssl", 0, unmodelled},
+  {"/dev/sdio/", 1, sdio_request},
+  {"/dev/aes", 0, unmodelled},
+  {"/dev/sha", 0, unmodelled},
+  {"/dev/wl0", 0, unmodelled},
 };
 
+enum { DEVICE_COUNT = sizeof devices / sizeof devices[0] };
+
 int ios_find_device(const char *path) {
-  for (int i = 0; device_names[i]; i++) {
-    if (!strncmp(path, device_names[i], strlen(device_names[i]))) return i;
+  for (int i = 0; i < DEVICE_COUNT; i++) {
+    const IosDevice *device = &devices[i];
+    if (device->prefix ? !strncmp(path, device->name, strlen(device->name)) : !strcmp(path, device->name)) return i;
   }
   return -1;
 }
 
+const char *ios_device_name(int device) { return devices[device].name; }
+
 int ios_device_request(int device, uint32_t command, uint32_t request) {
-  if (!strcmp(device_names[device], "/dev/di")) return dvd_request(command, request);
-  if (!strcmp(device_names[device], "/dev/es")) return es_request(command, request);
-  if (!strcmp(device_names[device], "/dev/fs")) return fs_request(command, request);
-  // The Bluetooth chip only replies when something happens, and nothing is paired.
-  if (!strcmp(device_names[device], "/dev/usb/oh1/57e/305") && game_virtual_bluetooth) return bluetooth_request(command, request);
-  if (!strncmp(device_names[device], "/dev/usb", 8)) return IOS_NO_REPLY;
-  // This call stays open until the reset or power button is pressed, and the game
-  // sends it again after every reply, so answering it would repeat it endlessly.
-  if (!strcmp(device_names[device], "/dev/stm/eventhook") && command == IOS_IOCTL && rd32(request + 12) == STM_EVENT_HOOK) return IOS_NO_REPLY;
-  fprintf(stderr, "ios %s command %u: %08x %08x %08x %08x %08x\n", device_names[device], command,
-          rd32(request + 12), rd32(request + 16), rd32(request + 20), rd32(request + 24), rd32(request + 28));
-  return 0;
+  return devices[device].request(command, request);
 }

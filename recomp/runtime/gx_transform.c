@@ -163,6 +163,32 @@ int gx_transform_screen(const Vertex *vertex, float *x, float *y) {
   return 1;
 }
 
+// The depth of each vertex from 0 to 1 before the viewport's depth range, as the
+// shaders' GX_DEPTH gives it on either backend. Says no if a vertex is behind the camera.
+int gx_transform_depths(const Vertex *vertices, int count, float *low, float *high) {
+  float rows[4][4] = {{0}};
+  read_projection(rows);
+  const float *matrices = (const float *)&gx.xf[XF_MATRICES];
+  *low = 1e9f;
+  *high = -1e9f;
+  for (int i = 0; i < count; i++) {
+    const float *p = vertices[i].position, *m = &matrices[vertices[i].matrix[VERTEX_MATRIX_POSITION] * WORDS_PER_ROW];
+    float view[4];
+    for (int row = 0; row < 3; row++) view[row] = m[row * 4] * p[0] + m[row * 4 + 1] * p[1] + m[row * 4 + 2] * p[2] + m[row * 4 + 3];
+    view[3] = 1;
+    float z = 0, w = 0;
+    for (int column = 0; column < 4; column++) {
+      z += rows[2][column] * view[column];
+      w += rows[3][column] * view[column];
+    }
+    if (!(w > 1e-5f)) return 0;
+    float depth = z / w + 1;
+    if (depth < *low) *low = depth;
+    if (depth > *high) *high = depth;
+  }
+  return count > 0;
+}
+
 int gx_transform_bounds(const Vertex *vertices, int count, float bounds[4]) {
   float left = 1e9f, top = 1e9f, right = -1e9f, bottom = -1e9f;
   for (int i = 0; i < count; i++) {

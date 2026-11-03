@@ -69,12 +69,18 @@ static void *run(void *unused) {
   return 0;
 }
 
-// Saves live next to the program, so they don't depend on where it was started from.
+// Saves and compiled shaders live next to the program, so they don't depend on where
+// it was started from, and each title's build keeps its own.
 static void use_save_folder_beside(const char *program) {
-  char full[PATH_MAX], saves[PATH_MAX + 16];
+  char full[PATH_MAX], saves[PATH_MAX + 16], shaders[PATH_MAX + 16];
   if (!realpath(program, full)) return;
-  snprintf(saves, sizeof saves, "%s/saves", dirname(full));
+  const char *folder = dirname(full);  // Linux's changes `full`, so it's called once.
+  snprintf(saves, sizeof saves, "%s/saves", folder);
+  snprintf(shaders, sizeof shaders, "%s/shader-cache", folder);
   setenv("WII_RECOMP_SAVES", saves, 0);
+  setenv("WII_RECOMP_SHADER_CACHE", shaders, 0);
+  snprintf(saves, sizeof saves, "%s/discovered.txt", folder);
+  setenv("WII_RECOMP_DISCOVERED", saves, 0);
 }
 
 int main(int count, char **arguments) {

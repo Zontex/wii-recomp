@@ -1,23 +1,23 @@
 // What's plugged into the simulated Wii Remote: a Classic Controller. An attachment is a
 // small block of registers the remote reads over a wire. Games can turn on encryption of
-// everything read from it, using a key they choose.
+// everything read from it, using a key they choose: see wii_attachment_key.c.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
-#include "cpu.h"
-#include "game.h"
 #include "input.h"
 #include "wii_attachment.h"
+#include "wii_attachment_key.h"
 
 enum {
   REGISTERS = 256, CALIBRATION = 0x20, CALIBRATION_COPY = 0x30, CALIBRATION_BYTES = 14, CHECK_ONE = 0x55, CHECK_TWO = 0xaa,
-  KEY_LAST = 0x4f, ENABLE = 0xf0, ENABLE_ENCRYPTED = 0xaa, IDENTITY = 0xfa,
-  STICK_LEFT_RANGE = 63, STICK_RIGHT_RANGE = 31, CLASSIC_BYTES = 6, REMOTE_BLOCK_CHANNEL = 0,
+  KEY_FIRST = 0x40, KEY_LAST = 0x4f, ENABLE = 0xf0, ENABLE_ENCRYPTED = 0xaa, IDENTITY = 0xfa,
+  STICK_LEFT_RANGE = 63, STICK_RIGHT_RANGE = 31, CLASSIC_BYTES = 6,
 };
 
 static uint8_t registers[REGISTERS];
 static int started, keyed;
+static uint8_t key_add[8], key_exclusive[8];  // Made from the key the game wrote.
 
 static void start(void) {
   static const uint8_t calibration[CALIBRATION_BYTES] = {0xff, 0, 0x80, 0xff, 0, 0x80, 0xff, 0, 0x80, 0xff, 0, 0x80, 0, 0};
@@ -40,19 +40,11 @@ void attachment_encrypt(uint8_t *bytes, uint32_t count, uint32_t address, const 
   }
 }
 
-// The game's own library works out two tables from the key, for decrypting what it reads.
+// The game writes a key, and both ends make the same two tables from it: the game's
+// library to decrypt what it reads, and the attachment to encrypt it.
 static void encrypt_if_on(uint8_t *bytes, uint32_t count, uint32_t address) {
   if (registers[ENABLE] != ENABLE_ENCRYPTED || !keyed) return;
-  uint8_t add[8], exclusive[8], any = 0;
-  uint32_t block = rd32(game_remote_blocks + REMOTE_BLOCK_CHANNEL * 4);
-  if (!game_remote_blocks || !block) { fprintf(stderr, "stop: attachment encryption is on, but channel 0 has no remote block\n"); exit(11); }
-  for (uint32_t i = 0; i < 8; i++) {
-    add[i] = (uint8_t)rd8(block + game_attachment_add + i);
-    exclusive[i] = (uint8_t)rd8(block + game_attachment_xor + i);
-    any |= add[i] | exclusive[i];
-  }
-  if (!any) { fprintf(stderr, "stop: attachment encryption is on, but the game's tables for channel 0 are empty\n"); exit(11); }
-  attachment_encrypt(bytes, count, address, add, exclusive);
+  attachment_encrypt(bytes, count, address, key_add, key_exclusive);
 }
 
 void attachment_read(uint32_t address, uint8_t *out, uint32_t bytes) {
@@ -67,7 +59,10 @@ void attachment_write(uint32_t address, const uint8_t *data, uint32_t bytes) {
     uint32_t at = (address + i) % REGISTERS;
     registers[at] = data[i];
     if (at == ENABLE) keyed = 0;
-    if (at == KEY_LAST) keyed = 1;
+    if (at == KEY_LAST) {
+      if (!attachment_key_tables(registers + KEY_FIRST, key_add, key_exclusive)) fprintf(stderr, "attachment: the game's key isn't one the Wii makes, so fallback tables are used\n");
+      keyed = 1;
+    }
   }
 }
 

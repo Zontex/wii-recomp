@@ -191,6 +191,35 @@ static float xf_value(int address) {
   return f.value;
 }
 
+// Whether fog adds nothing anywhere between two depths, from 0 to 1. Its distance only
+// rises or only falls across them, so the ends decide, with room for rounding.
+int gx_fog_none_between(double low, double high) {
+  uint32_t a = gx.bp[BP_FOG_A], c = gx.bp[BP_FOG_C];
+  int type = (int)((c >> FOG_TYPE_SHIFT) & 7);
+  if (type == FOG_OFF || type == FOG_BACKWARD_EXP || type == FOG_BACKWARD_EXP2) return 0;
+  double fog_a = fog_float(a), fog_c = fog_float(c);
+  if (((a >> 11) & 255) == 255 && ((c >> 11) & 255) == 255) {
+    fog_a = 0;
+    fog_c = !((a >> 19) & 1) && !((c >> 19) & 1) ? -INFINITY : INFINITY;
+  }
+  uint32_t shift = gx.bp[BP_FOG_B_SHIFT] & 0xffffff, b = gx.bp[BP_FOG_B_MAGNITUDE] & 0xffffff;
+  if (shift > FOG_SHIFT_LARGEST) shift = FOG_SHIFT_LARGEST;
+  enum { ROOM = 256, DEPTH_LARGEST = 0xffffff };
+  double ends[2] = {floor(low * 16777216.0) - ROOM, ceil(high * 16777216.0) + ROOM}, most = -INFINITY;
+  for (int i = 0; i < 2; i++) {
+    double depth = ends[i] < 0 ? 0 : ends[i] > DEPTH_LARGEST ? DEPTH_LARGEST : ends[i], distance;
+    if ((c >> FOG_PROJECTION_BIT) & 1) {
+      distance = fog_a * depth / 16777216.0;
+    } else {
+      double below = (double)b - (double)((uint32_t)depth >> shift);
+      if (!(below > 0)) return 0;
+      distance = fog_a * 16777216.0 / below;
+    }
+    if (distance > most) most = distance;
+  }
+  return most - fog_c < -1e-3;
+}
+
 // Fog mixes the picture toward a color by how far each pixel is, worked out from its depth
 // as Dolphin's PixelShaderGen does. Most draws have none and their shaders never see it.
 static void read_fog(TevKey *key, TevValues *values) {
@@ -545,6 +574,11 @@ static void add_depth(ShaderText *text, const TevKey *key) {
 
 // The depth is the one stored, after any depth texture. Colors mix as whole numbers.
 static void add_fog(ShaderText *text, const TevKey *key) {
+  // With none, the colors are still made whole numbers, as they are below.
+  if (key->fog_none) {
+    gx_text_add(text, "  result.rgb = floor(result.rgb * 255.0 + 0.5) / 255.0;\n");
+    return;
+  }
   if (key->depth_mode) gx_text_add(text, "  int fog_depth = int(gl_FragDepth * " TEXT_DEPTH_MAX " + 0.5);\n");
   else gx_text_add(text, "  int fog_depth = clamp(int(gl_FragCoord.z * 16777216.0), 0, 0xffffff);\n");
   if (key->fog_orthographic) gx_text_add(text, "  float fog_distance = fog_settings.x * float(fog_depth) / 16777216.0;\n");
@@ -588,8 +622,14 @@ void gx_tev_write_shader(const TevKey *key, ShaderText *text) {
   for (int i = 0; i < 2; i++) {
     if (channels & (1u << i)) gx_text_add(text, "GX_VARYING(%d) in vec4 v_color%d;\n", GX_VARYING_COLOR + i, i);
   }
-  gx_text_add(text, "layout(location = 0, index = 0) out vec4 out_color;\n"
-    "#ifdef GX_NO_DUAL_SOURCE\nvec4 blend_alpha;\n#else\nlayout(location = 0, index = 1) out vec4 blend_alpha;\n#endif\n");
+  gx_text_add(text, "layout(location = 0, index = 0) out vec4 out_color;\n");
+  // Blending reads a second output only when the stored alpha differs from the stages'.
+  // A second output costs a tile-based chip a second write of every pixel.
+  if (gx_blend_needs_second_output(key)) {
+    gx_text_add(text, "#ifdef GX_NO_DUAL_SOURCE\nvec4 blend_alpha;\n#else\nlayout(location = 0, index = 1) out vec4 blend_alpha;\n#endif\n");
+  } else {
+    gx_text_add(text, "vec4 blend_alpha;\n");
+  }
   gx_text_add(text, "void main() {\n  vec4 R0 = reg[0], R1 = reg[1], R2 = reg[2], R3 = reg[3];\n  vec2 stepped = vec2(0.0);\n");
   if (key->bump_alpha) gx_text_add(text, "  int bump_alpha = 0;\n");
   if (key->no_coordinates) gx_text_add(text, "  vec2 uv0 = vec2(0.0);\n");

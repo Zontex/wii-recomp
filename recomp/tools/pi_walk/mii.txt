@@ -1,0 +1,11 @@
+20 board on 60 0 0
+24 pointer 0.34 0.78
+25 press a
+27 press a
+30 press a
+33 press a
+36 press a
+39 press a
+42 press a
+45 press a
+60 shot m

@@ -1,9 +1,14 @@
 // Vulkan shaders, pipelines and samplers. A pipeline bakes in a shader with its
 // blending, depth and culling, so each mix is built once, on first use, and kept.
+#include <errno.h>
+#include <pthread.h>
 #include <shaderc/shaderc.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <time.h>
+#include <unistd.h>
 
 #include "debug.h"
 #include "gx_vulkan.h"
@@ -23,12 +28,19 @@ static const char *const prefix =
   "#define GX_MAP(n) layout(set = 1, binding = n)\n"
   "#define GX_DEPTH(z, w) ((z) + (w))\n";  // Vulkan's depth runs from 0, not -w.
 
+// A stage is known by a hash of its full text, so a compiled one can be found again
+// in a later run, and a pipeline by the hashes of its two stages and its state.
 typedef struct {
-  VkShaderModule vertex, fragment;
+  uint64_t hash;
+  VkShaderModule module;
+} Stage;
+
+typedef struct {
+  uint32_t vertex, fragment;  // Indexes into stages.
 } Shader;
 
 typedef struct {
-  GxShader shader;
+  uint64_t vertex, fragment;
   GxRenderState state;
 } PipelineKey;
 
@@ -39,8 +51,10 @@ typedef struct {
 
 static shaderc_compiler_t compiler;
 static shaderc_compile_options_t options;
-static VkShaderModule *stages;
+static Stage *stages;
 static uint32_t stage_count, stage_capacity;
+static uint32_t *stage_slots;  // Open addressing from a hash to an index into stages, plus 1.
+static uint32_t stage_slot_count;
 static Shader *shaders;
 static uint32_t shader_count, shader_capacity;
 static PipelineSlot *pipelines;
@@ -80,14 +94,225 @@ static void create_pipeline_layout(void) {
   vk_check(vkCreateDescriptorPool(vk.device, &pool, 0, &vk.descriptor_pool), "creating a descriptor pool");
 }
 
+// ---- The cache on disk ----
+//
+// Three files in WII_RECOMP_SHADER_CACHE, which main.c puts beside the program:
+//   stages.bin     every stage's SPIR-V, by the hash of its text, so shaderc runs once per stage ever
+//   pipelines.bin  every pipeline's key, so the next run builds them all before the game starts
+//   driver.bin     the driver's own pipeline cache, which makes building them quick
+// The first two only ever grow by whole records written at the end, so a run killed
+// part way leaves at most one torn record, which loading stops at. driver.bin is
+// replaced whole. WII_RECOMP_NO_SHADER_CACHE=1 turns it all off, for comparing.
+
+enum { CACHE_VERSION = 1, SAVE_EVERY_SECONDS = 10, SPIRV_MAGIC = 0x07230203 };
+typedef struct { char magic[4]; uint32_t version, record_bytes, unused; } CacheHeader;
+
+static char cache_folder[1024];
+static FILE *stages_file, *pipelines_file;
+static pthread_mutex_t save_lock = PTHREAD_MUTEX_INITIALIZER;  // The saver and the exit don't write at once.
+static int driver_changed;  // Pipelines were built since driver.bin was last written.
+
+static double seconds_now(void) {
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  return (double)now.tv_sec + now.tv_nsec / 1e9;
+}
+
+static uint64_t hash_text(const char *text, size_t bytes) {
+  uint64_t hash = 14695981039346656037ull;
+  for (size_t i = 0; i < bytes; i++) hash = (hash ^ (uint8_t)text[i]) * 1099511628211ull;
+  return hash ? hash : 1;  // 0 never names a stage.
+}
+
+static void cache_path(char *out, size_t size, const char *name) { snprintf(out, size, "%s/%s", cache_folder, name); }
+
+// Opens a file of records for adding to. If its header is missing or from another
+// version, it's started again, and nothing in it is read.
+static FILE *open_records(const char *name, const char magic[4], uint32_t record_bytes, FILE **reading) {
+  char path[1100];
+  cache_path(path, sizeof path, name);
+  CacheHeader want = {{magic[0], magic[1], magic[2], magic[3]}, CACHE_VERSION, record_bytes, 0}, have;
+  FILE *file = fopen(path, "rb");
+  int usable = file && fread(&have, sizeof have, 1, file) == 1 && !memcmp(&have, &want, sizeof want);
+  if (file && !usable) fclose(file);
+  *reading = usable ? file : 0;
+  FILE *adding = fopen(path, usable ? "ab" : "wb");
+  if (!adding) {
+    fprintf(stderr, "shader cache: can't write %s, so it won't be kept\n", path);
+    return 0;
+  }
+  if (!usable) {
+    fwrite(&want, sizeof want, 1, adding);
+    fflush(adding);
+  }
+  return adding;
+}
+
+static void *read_whole(const char *name, size_t *bytes) {
+  char path[1100];
+  cache_path(path, sizeof path, name);
+  FILE *file = fopen(path, "rb");
+  if (!file) return 0;
+  fseek(file, 0, SEEK_END);
+  long size = ftell(file);
+  fseek(file, 0, SEEK_SET);
+  void *data = size > 0 ? malloc((size_t)size) : 0;
+  if (data && fread(data, 1, (size_t)size, file) != (size_t)size) {
+    free(data);
+    data = 0;
+  }
+  fclose(file);
+  *bytes = data ? (size_t)size : 0;
+  return data;
+}
+
+// Written beside, then renamed over, so a reader never sees half a file.
+static void save_driver_cache(void) {
+  pthread_mutex_lock(&save_lock);
+  if (cache_folder[0] && __atomic_exchange_n(&driver_changed, 0, __ATOMIC_ACQ_REL)) {
+    size_t bytes = 0;
+    void *data = 0;
+    if (vkGetPipelineCacheData(vk.device, pipeline_cache, &bytes, 0) == VK_SUCCESS && bytes && (data = malloc(bytes)) &&
+        vkGetPipelineCacheData(vk.device, pipeline_cache, &bytes, data) == VK_SUCCESS) {
+      char path[1100], temporary[1100];
+      cache_path(path, sizeof path, "driver.bin");
+      cache_path(temporary, sizeof temporary, "driver.bin.new");
+      FILE *file = fopen(temporary, "wb");
+      if (file && fwrite(data, 1, bytes, file) == bytes && !fclose(file)) rename(temporary, path);
+      else if (file) fclose(file);
+    }
+    free(data);
+  }
+  pthread_mutex_unlock(&save_lock);
+}
+
+// Building a pipeline is the slow part, so the game's thread never waits on saving.
+// The driver keeps its cache safe to read while another thread adds to it.
+static void *keep_saving(void *unused) {
+  (void)unused;
+  for (;;) {
+    sleep(SAVE_EVERY_SECONDS);
+    save_driver_cache();
+  }
+  return 0;
+}
+
+static void open_cache(void) {
+  const char *folder = getenv("WII_RECOMP_SHADER_CACHE");
+  const char *off = getenv("WII_RECOMP_NO_SHADER_CACHE");
+  if (!folder || !*folder || (off && *off && strcmp(off, "0"))) return;
+  if (mkdir(folder, 0755) && errno != EEXIST) {
+    fprintf(stderr, "shader cache: can't make %s, so it won't be kept\n", folder);
+    return;
+  }
+  snprintf(cache_folder, sizeof cache_folder, "%s", folder);
+  atexit(save_driver_cache);
+  pthread_t saver;
+  pthread_create(&saver, 0, keep_saving, 0);
+  pthread_detach(saver);
+}
+
+static uint32_t stage_find(uint64_t hash) {
+  if (!stage_slot_count) return 0;
+  uint32_t slot = (uint32_t)(hash * 0x9e3779b97f4a7c15ull >> 32) & (stage_slot_count - 1);
+  while (stage_slots[slot] && stages[stage_slots[slot] - 1].hash != hash) slot = (slot + 1) & (stage_slot_count - 1);
+  return stage_slots[slot];
+}
+
+static void stage_slots_fill(void) {
+  for (uint32_t i = 0; i < stage_count; i++) {
+    uint32_t slot = (uint32_t)(stages[i].hash * 0x9e3779b97f4a7c15ull >> 32) & (stage_slot_count - 1);
+    while (stage_slots[slot]) slot = (slot + 1) & (stage_slot_count - 1);
+    stage_slots[slot] = i + 1;
+  }
+}
+
+static uint32_t stage_keep(uint64_t hash, const uint32_t *code, size_t bytes) {
+  if (stage_count == stage_capacity) {
+    stage_capacity = stage_capacity ? stage_capacity * 2 : FIRST_STAGE_SLOTS;
+    stages = realloc(stages, stage_capacity * sizeof *stages);
+  }
+  VkShaderModuleCreateInfo info = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = bytes, .pCode = code};
+  vk_check(vkCreateShaderModule(vk.device, &info, 0, &stages[stage_count].module), "creating a shader");
+  stages[stage_count].hash = hash;
+  stage_count++;
+  if (stage_count * 2 > stage_slot_count) {
+    free(stage_slots);
+    stage_slot_count = stage_slot_count ? stage_slot_count * 2 : FIRST_STAGE_SLOTS * 2;
+    stage_slots = calloc(stage_slot_count, sizeof *stage_slots);
+    stage_slots_fill();
+  } else {
+    uint32_t slot = (uint32_t)(hash * 0x9e3779b97f4a7c15ull >> 32) & (stage_slot_count - 1);
+    while (stage_slots[slot]) slot = (slot + 1) & (stage_slot_count - 1);
+    stage_slots[slot] = stage_count;
+  }
+  return stage_count;
+}
+
+// Each record: the hash, the SPIR-V's length in bytes, then the SPIR-V.
+static void load_stages(FILE *file) {
+  uint64_t hash;
+  uint32_t bytes;
+  while (fread(&hash, sizeof hash, 1, file) == 1 && fread(&bytes, sizeof bytes, 1, file) == 1) {
+    if (!bytes || bytes % 4 || bytes > 16 * 1024 * 1024) break;
+    uint32_t *code = malloc(bytes);
+    int whole = fread(code, 1, bytes, file) == bytes && code[0] == SPIRV_MAGIC;
+    if (whole && !stage_find(hash)) stage_keep(hash, code, bytes);
+    free(code);
+    if (!whole) break;
+  }
+  fclose(file);
+}
+
+static PipelineSlot *find_slot(const PipelineKey *key);
+static void grow_pipelines(void);
+static VkPipeline build_pipeline(const PipelineKey *key);
+
+static void load_pipelines(FILE *file) {
+  PipelineKey key;
+  while (fread(&key, sizeof key, 1, file) == 1) {
+    if (!stage_find(key.vertex) || !stage_find(key.fragment)) continue;  // Its stage didn't survive.
+    if ((pipeline_count + 1) * 2 > pipeline_slots) grow_pipelines();
+    PipelineSlot *slot = find_slot(&key);
+    if (slot->pipeline) continue;
+    slot->key = key;
+    slot->pipeline = build_pipeline(&key);
+    pipeline_count++;
+  }
+  fclose(file);
+}
+
+// Everything the last runs used is ready before the game draws anything.
+static void load_cache(void) {
+  if (!cache_folder[0]) return;
+  double start = seconds_now();
+  FILE *reading;
+  stages_file = open_records("stages.bin", "WRST", 0, &reading);
+  if (reading) load_stages(reading);
+  pipelines_file = open_records("pipelines.bin", "WRPL", sizeof(PipelineKey), &reading);
+  if (reading) load_pipelines(reading);
+  if (stage_count || pipeline_count) {
+    fprintf(stderr, "shader cache: %u stages and %u pipelines ready in %.0f ms\n", stage_count, pipeline_count, (seconds_now() - start) * 1000);
+  }
+}
+
 void vk_pipelines_start(const GxAttribute *attributes, int attribute_count, size_t vertex_bytes) {
   create_set_layouts();
   create_pipeline_layout();
   compiler = shaderc_compiler_initialize();
   options = shaderc_compile_options_initialize();
   shaderc_compile_options_set_target_env(options, shaderc_target_env_vulkan, shaderc_env_version_vulkan_1_1);
-  VkPipelineCacheCreateInfo cache = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO};
-  vk_check(vkCreatePipelineCache(vk.device, &cache, 0, &pipeline_cache), "creating a pipeline cache");
+  open_cache();
+  size_t driver_bytes = 0;
+  void *driver_data = cache_folder[0] ? read_whole("driver.bin", &driver_bytes) : 0;
+  // The driver checks the data's own header, and starts empty if it came from another device or version.
+  VkPipelineCacheCreateInfo cache = {.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO, .initialDataSize = driver_bytes, .pInitialData = driver_data};
+  if (vkCreatePipelineCache(vk.device, &cache, 0, &pipeline_cache) != VK_SUCCESS) {
+    cache.initialDataSize = 0;
+    cache.pInitialData = 0;
+    vk_check(vkCreatePipelineCache(vk.device, &cache, 0, &pipeline_cache), "creating a pipeline cache");
+  }
+  free(driver_data);
   vertex_binding = (VkVertexInputBindingDescription){0, (uint32_t)vertex_bytes, VK_VERTEX_INPUT_RATE_VERTEX};
   static const VkFormat floats[] = {[2] = VK_FORMAT_R32G32_SFLOAT, [3] = VK_FORMAT_R32G32B32_SFLOAT, [4] = VK_FORMAT_R32G32B32A32_SFLOAT};
   static const VkFormat bytes[] = {[1] = VK_FORMAT_R8_UINT, [2] = VK_FORMAT_R8G8_UINT, [4] = VK_FORMAT_R8G8B8A8_UINT};
@@ -97,35 +322,39 @@ void vk_pipelines_start(const GxAttribute *attributes, int attribute_count, size
     VkFormat format = attributes[i].kind == GX_ATTRIBUTE_BYTE ? bytes[components] : floats[components];
     vertex_attributes[i] = (VkVertexInputAttributeDescription){(uint32_t)attributes[i].location, 0, format, (uint32_t)attributes[i].offset};
   }
+  load_cache();
 }
 
-static VkShaderModule compile(shaderc_shader_kind kind, const char *text) {
+// A stage already compiled, in this run or an earlier one, is found by its text's hash.
+// The hash covers the prefix too, so a change to it or to the device's features is a new stage.
+GxStage vk_stage_compile(int kind, const char *text) {
   static char source[TEXT_BYTES];
   size_t bytes = (size_t)snprintf(source, sizeof source, "%s%s%s", prefix, vk.dual_source ? "" : "#define GX_NO_DUAL_SOURCE\n", text);
   if (bytes >= sizeof source) {
     fprintf(stderr, "shader: text too long\n");
     exit(9);
   }
-  shaderc_compilation_result_t result = shaderc_compile_into_spv(compiler, source, bytes, kind, "wii-recomp", "main", options);
+  uint64_t hash = hash_text(source, bytes) ^ (uint64_t)(kind + 1);
+  if (!hash) hash = 1;
+  uint32_t found = stage_find(hash);
+  if (found) return found;
+  shaderc_shader_kind shaderc_kind = kind == GX_STAGE_VERTEX ? shaderc_vertex_shader : shaderc_fragment_shader;
+  shaderc_compilation_result_t result = shaderc_compile_into_spv(compiler, source, bytes, shaderc_kind, "wii-recomp", "main", options);
   if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) {
     fprintf(stderr, "shader: %s\n", shaderc_result_get_error_message(result));
     exit(9);
   }
-  VkShaderModuleCreateInfo info = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = shaderc_result_get_length(result),
-                                   .pCode = (const uint32_t *)shaderc_result_get_bytes(result)};
-  VkShaderModule module;
-  vk_check(vkCreateShaderModule(vk.device, &info, 0, &module), "creating a shader");
-  shaderc_result_release(result);
-  return module;
-}
-
-GxStage vk_stage_compile(int kind, const char *text) {
-  if (stage_count == stage_capacity) {
-    stage_capacity = stage_capacity ? stage_capacity * 2 : FIRST_STAGE_SLOTS;
-    stages = realloc(stages, stage_capacity * sizeof *stages);
+  const uint32_t *code = (const uint32_t *)shaderc_result_get_bytes(result);
+  uint32_t code_bytes = (uint32_t)shaderc_result_get_length(result);
+  uint32_t stage = stage_keep(hash, code, code_bytes);
+  if (stages_file) {
+    fwrite(&hash, sizeof hash, 1, stages_file);
+    fwrite(&code_bytes, sizeof code_bytes, 1, stages_file);
+    fwrite(code, 1, code_bytes, stages_file);
+    fflush(stages_file);
   }
-  stages[stage_count] = compile(kind == GX_STAGE_VERTEX ? shaderc_vertex_shader : shaderc_fragment_shader, text);
-  return ++stage_count;
+  shaderc_result_release(result);
+  return stage;
 }
 
 // Nothing is built until a pipeline needs it, as only then is the rest of the state known.
@@ -134,7 +363,7 @@ GxShader vk_shader_link(GxStage vertex, GxStage fragment) {
     shader_capacity = shader_capacity ? shader_capacity * 2 : FIRST_SHADER_SLOTS;
     shaders = realloc(shaders, shader_capacity * sizeof *shaders);
   }
-  shaders[shader_count] = (Shader){stages[vertex - 1], stages[fragment - 1]};
+  shaders[shader_count] = (Shader){vertex - 1, fragment - 1};
   return ++shader_count;
 }
 
@@ -161,10 +390,10 @@ static VkPipeline build_pipeline(const PipelineKey *key) {
   static const VkCullModeFlags culls[] = {[GX_CULL_NONE] = VK_CULL_MODE_NONE, [GX_CULL_FRONT] = VK_CULL_MODE_FRONT_BIT,
                                           [GX_CULL_BACK] = VK_CULL_MODE_BACK_BIT, [GX_CULL_ALL] = VK_CULL_MODE_FRONT_AND_BACK};
   const GxRenderState *state = &key->state;
-  const Shader *shader = &shaders[key->shader - 1];
-  VkPipelineShaderStageCreateInfo stages[2] = {
-    {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = shader->vertex, .pName = "main"},
-    {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = shader->fragment, .pName = "main"},
+  VkShaderModule vertex = stages[stage_find(key->vertex) - 1].module, fragment = stages[stage_find(key->fragment) - 1].module;
+  VkPipelineShaderStageCreateInfo stage_info[2] = {
+    {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vertex, .pName = "main"},
+    {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fragment, .pName = "main"},
   };
   VkPipelineVertexInputStateCreateInfo input = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO, .vertexBindingDescriptionCount = 1,
                                                 .pVertexBindingDescriptions = &vertex_binding, .vertexAttributeDescriptionCount = vertex_attribute_count,
@@ -190,12 +419,13 @@ static VkPipeline build_pipeline(const PipelineKey *key) {
   static const VkDynamicState dynamics[] = {VK_DYNAMIC_STATE_VIEWPORT, VK_DYNAMIC_STATE_SCISSOR};
   VkPipelineDynamicStateCreateInfo dynamic = {.sType = VK_STRUCTURE_TYPE_PIPELINE_DYNAMIC_STATE_CREATE_INFO, .dynamicStateCount = 2, .pDynamicStates = dynamics};
   VkGraphicsPipelineCreateInfo info = {
-    .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .stageCount = 2, .pStages = stages, .pVertexInputState = &input,
+    .sType = VK_STRUCTURE_TYPE_GRAPHICS_PIPELINE_CREATE_INFO, .stageCount = 2, .pStages = stage_info, .pVertexInputState = &input,
     .pInputAssemblyState = &assembly, .pViewportState = &viewport, .pRasterizationState = &raster, .pMultisampleState = &multisample,
     .pDepthStencilState = &depth, .pColorBlendState = &blending, .pDynamicState = &dynamic, .layout = vk.pipeline_layout, .renderPass = vk.render_pass,
   };
   VkPipeline pipeline;
   vk_check(vkCreateGraphicsPipelines(vk.device, pipeline_cache, 1, &info, 0, &pipeline), "creating a pipeline");
+  __atomic_store_n(&driver_changed, 1, __ATOMIC_RELEASE);
   return pipeline;
 }
 
@@ -226,7 +456,8 @@ static void grow_pipelines(void) {
 VkPipeline vk_pipeline_find(GxShader shader, const GxRenderState *state) {
   PipelineKey key;
   memset(&key, 0, sizeof key);
-  key.shader = shader;
+  key.vertex = stages[shaders[shader - 1].vertex].hash;
+  key.fragment = stages[shaders[shader - 1].fragment].hash;
   key.state = *state;
   if ((pipeline_count + 1) * 2 > pipeline_slots) grow_pipelines();
   PipelineSlot *slot = find_slot(&key);
@@ -234,6 +465,10 @@ VkPipeline vk_pipeline_find(GxShader shader, const GxRenderState *state) {
     slot->key = key;
     slot->pipeline = build_pipeline(&key);
     pipeline_count++;
+    if (pipelines_file) {
+      fwrite(&key, sizeof key, 1, pipelines_file);
+      fflush(pipelines_file);
+    }
   }
   return slot->pipeline;
 }

@@ -11,6 +11,9 @@
 #include "game.h"
 #include "cpu.h"
 #include "gx_inspect.h"
+#ifdef GX_WITH_VULKAN
+#include "gx_shot.h"
+#endif
 #include "input.h"
 
 enum {
@@ -54,6 +57,13 @@ void input_pointer(float x, float y) {
   pthread_mutex_lock(&lock);
   state.pointer_x = x;
   state.pointer_y = y;
+  pthread_mutex_unlock(&lock);
+}
+
+void input_pointer_now(float *x, float *y) {
+  pthread_mutex_lock(&lock);
+  *x = state.pointer_x;
+  *y = state.pointer_y;
   pthread_mutex_unlock(&lock);
 }
 
@@ -135,6 +145,12 @@ static void read_sensors(double sensors[4]) {
   sensors[1] = total * right * (1 - front);
   sensors[2] = total * (1 - right) * front;
   sensors[3] = total * (1 - right) * (1 - front);
+}
+
+void input_board_now(double kilograms[4]) {
+  pthread_mutex_lock(&lock);
+  read_sensors(kilograms);
+  pthread_mutex_unlock(&lock);
 }
 
 static void fill_board(uint32_t out) {
@@ -219,9 +235,10 @@ static uint32_t button_named(const char *name) {
   return 0;
 }
 
-// One command per line: press a, hold a, release a, pointer x y, board on kg x y, board off.
+// One command per line: press a, hold a, release a, pointer x y, board on kg x y, board off,
+// shot <file> to save the next picture.
 static void run_command(const char *line) {
-  char word[16], name[16];
+  char word[16], name[16], path[1024];
   float x = 0, y = 0, kilograms = state.kilograms;
   int first, last;
   if (sscanf(line, "press %15s", name) == 1) input_press(button_named(name));
@@ -232,13 +249,20 @@ static void run_command(const char *line) {
     input_board(!strcmp(word, "on"), kilograms, x, y);
   } else if (!strncmp(line, "dump", 4)) gx_inspect_dump();
   else if (sscanf(line, "skip %d %d", &first, &last) == 2) gx_inspect_skip(first, last);
+  else if (sscanf(line, "shot %1023s", path) == 1) {
+#ifdef GX_WITH_VULKAN
+    gx_shot(path);
+#else
+    fprintf(stderr, "control: shot needs the Vulkan renderer\n");
+#endif
+  }
   else fprintf(stderr, "control: unknown command: %s", line);
 }
 
 static void *control_loop(void *path) {
   // Opened for writing too, so it stays open between senders.
   FILE *pipe_file = fdopen(open(path, O_RDWR), "r");
-  char line[128];
+  char line[1200];  // Room for a shot command with a long path.
   while (pipe_file && fgets(line, sizeof line, pipe_file)) run_command(line);
   return 0;
 }

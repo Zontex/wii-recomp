@@ -34,7 +34,11 @@ static void on_key(GLFWwindow *from, int key, int scancode, int action, int mods
   input_board_nudge(lean_x, lean_y);
 }
 
+// A control script drives the remote alone, so a stray mouse can't move or click it.
+static int scripted(void) { return getenv("WII_RECOMP_CONTROL") != 0; }
+
 static void on_mouse_move(GLFWwindow *from, double x, double y) {
+  if (scripted()) return;
   int width, height;
   glfwGetWindowSize(from, &width, &height);
   input_pointer((float)(x / width * 2 - 1), (float)(y / height * 2 - 1));
@@ -42,6 +46,7 @@ static void on_mouse_move(GLFWwindow *from, double x, double y) {
 
 static void on_mouse_button(GLFWwindow *from, int button, int action, int mods) {
   (void)from; (void)mods;
+  if (scripted()) return;
   if (button == GLFW_MOUSE_BUTTON_LEFT) input_hold(BUTTON_A, action == GLFW_PRESS);
   if (button == GLFW_MOUSE_BUTTON_RIGHT) input_hold(BUTTON_B, action == GLFW_PRESS);
 }
@@ -51,7 +56,7 @@ void window_create(void) {
   gx_backend_choose();
   gx_backend->window_prepare();
   glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);  // The game draws 640x456; 4x the pixels adds cost, not detail.
-  window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Wii Fit Plus: original code", 0, 0);
+  window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Wii Recomp", 0, 0);
   if (!window) { fprintf(stderr, "stop: no window\n"); exit(10); }
   glfwSetKeyCallback(window, on_key);
   glfwSetCursorPosCallback(window, on_mouse_move);

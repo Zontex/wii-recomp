@@ -1,9 +1,7 @@
 // Attachment encryption and the Classic Controller's bytes, with made-up tables.
 #include "../../recomp/runtime/wii_attachment.c"
+#include "../../recomp/runtime/wii_attachment_key.c"
 #include "../harness.h"
-const uint32_t game_remote_blocks = 0, game_attachment_add = 0, game_attachment_xor = 0;
-uint32_t hw_read(uint32_t a, int n) { return 0; }
-void hw_write(uint32_t a, uint32_t v, int n) {}
 void input_sticks(float out[4]) { for (int i = 0; i < 4; i++) out[i] = 0; }
 uint32_t input_buttons(void) { return 0; }
 
@@ -12,7 +10,6 @@ static uint8_t decrypt(uint8_t value, uint32_t address, const uint8_t *add, cons
 }
 
 int main(void) {
-  memory_start();
   static const uint8_t add[8] = {1, 22, 3, 44, 5, 66, 7, 88}, exclusive[8] = {9, 8, 170, 6, 85, 4, 3, 2};
   for (uint32_t start = 0; start < 20; start++) {
     uint8_t plain[32], coded[32];
@@ -41,5 +38,23 @@ int main(void) {
   attachment_write(0xf0, &written, 1);
   attachment_read(0xfa, id, 6);
   CHECK_EQ(id[3], 0x20);
+
+  // A key The Last Story wrote, and the tables its own library made from it.
+  static const uint8_t key[16] = {0x54, 0x3a, 0x9a, 0x45, 0x7d, 0xff, 0xc4, 0x64, 0x60, 0x6c, 0x29, 0x5e, 0x5b, 0x8c, 0x82, 0x67};
+  static const uint8_t want_add[8] = {0x4f, 0xa0, 0x55, 0x65, 0x3c, 0xc9, 0x40, 0x91};
+  static const uint8_t want_exclusive[8] = {0x77, 0x0a, 0x73, 0x7b, 0x69, 0xef, 0x24, 0xd0};
+  uint8_t made_add[8], made_exclusive[8];
+  CHECK_EQ(attachment_key_tables(key, made_add, made_exclusive), 1);
+  for (int i = 0; i < 8; i++) {
+    CHECK_EQ(made_add[i], want_add[i]);
+    CHECK_EQ(made_exclusive[i], want_exclusive[i]);
+  }
+  // Writing the key turns encryption on with those tables.
+  static const uint8_t encrypted = 0xaa;
+  attachment_write(0xf0, &encrypted, 1);
+  attachment_write(0x40, key, 16);
+  uint8_t coded[6];
+  attachment_read(0xfa, coded, 6);
+  for (int i = 0; i < 6; i++) CHECK_EQ(decrypt(coded[i], 0xfa + (uint32_t)i, want_add, want_exclusive), id[i]);
   return finish();
 }

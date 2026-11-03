@@ -3,6 +3,7 @@ import hashlib
 import os
 import re
 import shutil
+import struct
 import subprocess
 import tempfile
 import unittest
@@ -11,7 +12,7 @@ from pathlib import Path
 HERE = Path(__file__).parent
 RUNTIME = HERE.parent / "recomp/runtime"
 FLAGS = ["-w", "-O1", "-fwrapv", f"-I{RUNTIME}", f"-I{HERE}", "-lm"]
-INTERPRETER = [HERE / "c/test_interp.c", RUNTIME / "dispatch.c", RUNTIME / "interp.c", RUNTIME / "quantized.c"]
+INTERPRETER = [HERE / "c/test_interp.c", RUNTIME / "dispatch.c", RUNTIME / "interp.c", RUNTIME / "quantized.c", RUNTIME / "modules.c"]
 
 
 def tree(folder):
@@ -72,6 +73,12 @@ class Runtime(unittest.TestCase):
     def test_attachment_encryption_and_layout(self):
         self.build_and_run([HERE / "c/test_attachment.c"])
 
+    def test_camera_dots_and_formats(self):
+        self.build_and_run([HERE / "c/test_camera.c"])
+
+    def test_board_calibration_and_readings(self):
+        self.build_and_run([HERE / "c/test_board.c"])
+
     def test_storage_is_never_written(self):
         storage, saves = self.folder / "storage", self.folder / "saves"
         (storage / "shared2").mkdir(parents=True)
@@ -84,6 +91,75 @@ class Runtime(unittest.TestCase):
         os.chmod(storage / "shared2/read_only", 0o644)
         self.assertEqual({k: v[0] for k, v in tree(storage).items()}, {k: v[0] for k, v in before.items()})
         self.assertEqual((saves / "shared2/only_storage").read_text()[:3], "new")
+
+    def test_modules_loaded_at_run_time(self):
+        sources = [HERE / "c/test_modules.c", RUNTIME / "dispatch.c", RUNTIME / "interp.c", RUNTIME / "quantized.c"]
+        self.build_and_run(sources, "match")
+        program = self.compile(sources)
+        for mode, message in (("changed", "isn't what was translated"), ("no-native-import", "has no native code")):
+            result = subprocess.run([str(program), mode], capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
+            self.assertIn(message, result.stderr)
+
+    def test_installed_titles(self):
+        storage, saves = self.folder / "storage", self.folder / "saves"
+        make_storage(storage)
+        saves.mkdir()
+        self.build_and_run([HERE / "c/test_titles.c", RUNTIME / "titles.c", RUNTIME / "files.c"], storage, saves)
+
+    def test_es_requests(self):
+        storage, saves, disc = self.folder / "storage", self.folder / "saves", self.folder / "disc"
+        make_storage(storage)
+        saves.mkdir()
+        (disc / "sys").mkdir(parents=True)
+        (disc / "files").mkdir()
+        (disc / "sys/boot.bin").write_bytes(bytes(0x440))
+        (disc / "sys/fst.bin").write_bytes(struct.pack(">BBHII", 1, 0, 0, 0, 1) + b"\0")
+        (disc / "sys/main.dol").write_bytes(bytes(0x100))
+        disc_ticket = bytearray(ticket(0x0001000053414141))
+        struct.pack_into(">I", disc_ticket, 0x1d0, 0x99887766)
+        (disc / "ticket.bin").write_bytes(disc_ticket)
+        sources = ["test_es.c", "es.c", "es_titles.c", "es_content.c", "titles.c", "files.c", "dvd.c"]
+        self.build_and_run([HERE / "c" / sources[0]] + [RUNTIME / name for name in sources[1:]], storage, saves, disc / "sys")
+
+
+def tmd(title, contents, ios=0x0000000100000050, version=0x1234, boot=1):
+    """A made-up TMD: header fields only, no real signature. contents: (id, index, type, data)."""
+    header = bytearray(0x1e4)
+    header[0x180] = 1
+    struct.pack_into(">QQ", header, 0x184, ios, title)
+    struct.pack_into(">HHH", header, 0x1dc, version, len(contents), boot)
+    for content_id, index, kind, data in contents:
+        header += struct.pack(">IHHQ", content_id, index, kind, len(data)) + hashlib.sha1(data).digest()
+    return bytes(header)
+
+
+def ticket(title):
+    data = bytearray(0x2a4)
+    struct.pack_into(">QIQ", data, 0x1d0, 0x1122334455667788, 0, title)
+    return bytes(data)
+
+
+def make_storage(root):
+    """A made-up console storage: a menu with a private and a shared content and a
+    ticket, a channel with no ticket, and a channel whose TMD is cut short."""
+    private, shared = b"private", b"share"
+    menu = root / "title/00000001/00000002/content"
+    menu.mkdir(parents=True)
+    (menu / "title.tmd").write_bytes(tmd(0x0000000100000002, [(0x1f, 0, 1, private), (0x20, 1, 0x8001, shared)]))
+    (menu / "0000001f.app").write_bytes(private)
+    (root / "shared1").mkdir()
+    (root / "shared1/00000007.app").write_bytes(shared)
+    (root / "shared1/content.map").write_bytes(b"00000006" + bytes(20) + b"00000007" + hashlib.sha1(shared).digest())
+    (root / "ticket/00000001").mkdir(parents=True)
+    (root / "ticket/00000001/00000002.tik").write_bytes(ticket(0x0000000100000002))
+    channel = root / "title/00010001/48414141/content"
+    channel.mkdir(parents=True)
+    (channel / "title.tmd").write_bytes(tmd(0x0001000148414141, []))
+    broken = root / "title/00010001/48424242/content"
+    broken.mkdir(parents=True)
+    (broken / "title.tmd").write_bytes(tmd(0x0001000148424242, [(1, 0, 1, b"x")])[:-10])
+    (root / "title/00010001/48434343").mkdir(parents=True)  # A save with no title installed.
 
 
 if __name__ == "__main__":

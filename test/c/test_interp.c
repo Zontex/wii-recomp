@@ -69,6 +69,9 @@ static void translated_calls_back(void) {
 typedef struct { uint32_t address; GuestFunction run; } Entry;
 const Entry function_table[] = {{TRANSLATED_ADD, translated_add}, {TRANSLATED_CALLS_BACK, translated_calls_back}};
 const int function_count = 2;
+#include "modules.h"
+const Module *const game_modules[] = {0};
+const int game_module_count = 0;
 
 static void reset(void) {
   memset(&cpu, 0, sizeof cpu);
