@@ -91,7 +91,22 @@ python3 recomp/tools/import_nand.py
 
 This makes `wii/nand/`, the storage every run reads. A Wii storage folder that's already decrypted works too: copy Dolphin's NAND folder, after its system update, into `wii/nand/`. [`wii/README.md`](wii/README.md) has the details. Everything in `wii/` except that README is ignored by git. The backup and keys belong to one console and hold its owner's data, so they never go in the repository.
 
-### 3. Build a game and play it directly
+### 3. Add a game
+
+One command turns a disc image into a game the console plays:
+
+```sh
+python3 recomp/tools/add_game.py "path/to/game.rvz"
+recomp/build/wii-recomp games/RFPE01.wrd
+```
+
+`add_game.py` extracts the disc, translates all of its code, builds the console if it isn't built yet, compiles the game and packs it as `games/<game ID>.wrd`. It also takes an extracted disc folder. The game's own Wii Remote code runs, against a simulated remote with a Classic Controller plugged in; Wii Fit Plus hides its pointer when it sees one, so play it with `WII_RECOMP_ATTACHMENT=none`. On a Raspberry Pi 5, Wii Fit Plus goes from an extracted disc to a playable image in under a minute and a half, where compiling it all for speed takes over seven minutes.
+
+The first build compiles everything quickly, and the game counts how often each part of it runs while you play. Run the same command again, or `add_game.py RFPE01` with the game's ID, and the parts that did the work are compiled for speed. Only those files are compiled again, and the image's native code is swapped without copying the disc. Counts from every run add up, so the build keeps up with what you play. Each game builds in `recomp/build-<game ID>/`, and any code that had to run on the interpreter is translated by the next build.
+
+#### Step by step
+
+The same, one step at a time, for a single game built beside the console:
 
 ```sh
 # Unpack the disc into extracted/
@@ -108,7 +123,7 @@ recomp/build/wii-recomp extracted/sys
 
 The build makes `wii-recomp`, the console, which is the same program for every game, and `title.dylib` (`title.so` on Linux), the game's translated code. Saves go to `recomp/build/saves`; your Wii's storage is only read. The keyboard and mouse stand in for the Wii Remote: Enter is A, the arrows are the D-pad, the mouse points, and Space steps on the Balance Board. [`recomp/README.md`](recomp/README.md) lists every key and setting.
 
-`extract_disc.py` uses [nodtool](https://github.com/encounter/nod), and downloads a pinned, checksummed copy if it isn't installed. For games that build their C++ method tables at run time, such as The Last Story, add `--all-code` to `emit.py`.
+`extract_disc.py` uses [nodtool](https://github.com/encounter/nod), and downloads a pinned, checksummed copy if it isn't installed. For games that build their C++ method tables at run time, such as The Last Story, add `--all-code` to `emit.py`; `add_game.py` always does. `--profile` builds in the two tiers described above.
 
 ### 4. Play from the Wii Menu
 
@@ -124,15 +139,12 @@ mkdir -p recomp/build-menu/obj && (cd recomp/build-menu && ninja)
 # Set up a console: its own copy of your storage, the menu, and an empty drive
 python3 recomp/tools/prepare_console.py wii/nand console --menu recomp/build-menu
 
-# Build the game for the menu, and pack it as a disc image
-python3 recomp/translate/emit.py extracted/sys/main.dol recomp/build/generated --virtual-bluetooth
-python3 recomp/translate/build_file.py recomp/build && (cd recomp/build && ninja)
-python3 recomp/tools/make_disc.py extracted game.wrd --native darwin-x86_64=recomp/build/title.dylib
-
-# Put the disc in the drive, and turn the console on
-cp game.wrd console/drive/
+# Add the game and put it in the console's drive, then turn the console on
+python3 recomp/tools/add_game.py "path/to/game.rvz" --console console
 recomp/build/wii-recomp --console console
 ```
+
+`add_game.py` builds every game with `--virtual-bluetooth`, so the same image plays directly and from the menu. With `--console` it also reads the counts from games started from that console's menu, and moves any other disc in the drive to the console's `shelf/` folder.
 
 A **`.wrd` disc image** is a game prepared for the console: the disc's files, unencrypted, plus the game's translated code for each computer it was built for (`darwin-x86_64` on an Intel Mac, `linux-aarch64` on a Pi). The console reads it like a disc in its drive. It holds the game, so it's yours alone: don't share it.
 
@@ -140,8 +152,9 @@ The menu shows the game's banner in the Disc Channel, and Start runs it. The sim
 
 ### What doesn't work yet
 
-- **A plain ISO in the drive.** Each game has to be prepared as above first. One command that turns a disc image into a `.wrd` is on the [roadmap](ROADMAP.md) (stage 10).
+- **A plain ISO in the drive.** Each game goes through `add_game.py` first.
 - **Going back to the Wii Menu.** Home, then Wii Menu, freezes. Close the window instead.
+- **The simulated pointer's reach.** The simulated Wii Remote's camera is tuned to the Wii Menu. Wii Fit Plus turns the same movement into about three quarters of the pointer's height, so its bottom buttons sit near the edge of the mouse's reach.
 - **Real Wii Remotes and the Balance Board** are built but haven't been tried with real hardware. Until then the keyboard and mouse drive a simulated remote and board. See [Real Wii Remotes](recomp/README.md#real-wii-remotes-and-the-balance-board).
 - **Playing from the Wii Menu** has been tested on an Intel Mac only. On a Raspberry Pi 5, games have been played directly.
 

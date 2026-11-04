@@ -96,13 +96,32 @@ class Program:
         self.entry = struct.unpack_from(">I", data, HEADER_ENTRY)[0]
         self.sections = [(index < TEXT_SECTIONS, addresses[index], offsets[index], sizes[index])
                          for index in range(ALL_SECTIONS) if sizes[index]]
+        # Each section's whole words, read once: the translator asks millions of times, and
+        # mostly about the section it asked about last.
+        self.spans = [(start, start + size // 4 * 4, struct.unpack_from(f">{size // 4}I", data, offset))
+                      for _, start, offset, size in self.sections]
+        self.code_ranges = [(start, start + size) for code, start, _, size in self.sections if code]
+        self.last_span = self.spans[0] if self.spans else (0, 0, ())
+        self.last_code = self.code_ranges[0] if self.code_ranges else (0, 0)
 
     def is_code(self, address):
-        return any(code and start <= address < start + size for code, start, _, size in self.sections)
+        start, end = self.last_code
+        if start <= address < end:
+            return True
+        for start, end in self.code_ranges:
+            if start <= address < end:
+                self.last_code = (start, end)
+                return True
+        return False
 
     def word(self, address):
-        for _, start, offset, size in self.sections:
+        start, end, words = self.last_span
+        if start <= address < end and not (address - start) & 3:
+            return words[(address - start) >> 2]
+        for span, (_, start, offset, size) in zip(self.spans, self.sections):
             if start <= address < start + size:
+                if span[0] <= address < span[1] and not (address - start) & 3:
+                    self.last_span = span
                 return struct.unpack_from(">I", self.data, offset + address - start)[0]
         raise ValueError(f"{address:#x} is outside the program")
 

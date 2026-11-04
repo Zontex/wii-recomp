@@ -12,7 +12,8 @@ from pathlib import Path
 HERE = Path(__file__).parent
 RUNTIME = HERE.parent / "recomp/runtime"
 FLAGS = ["-w", "-O1", "-fwrapv", f"-I{RUNTIME}", f"-I{HERE}", "-lm"]
-INTERPRETER = [HERE / "c/test_interp.c", RUNTIME / "dispatch.c", RUNTIME / "interp.c", RUNTIME / "quantized.c", RUNTIME / "modules.c"]
+# dispatch.c keeps discovered code in the title's data folder, from profile.c.
+INTERPRETER = [HERE / "c/test_interp.c", RUNTIME / "dispatch.c", RUNTIME / "interp.c", RUNTIME / "quantized.c", RUNTIME / "modules.c", RUNTIME / "profile.c"]
 
 
 def tree(folder):
@@ -124,7 +125,7 @@ class Runtime(unittest.TestCase):
         self.assertEqual((saves / "shared2/only_storage").read_text()[:3], "new")
 
     def test_modules_loaded_at_run_time(self):
-        sources = [HERE / "c/test_modules.c", RUNTIME / "dispatch.c", RUNTIME / "interp.c", RUNTIME / "quantized.c"]
+        sources = [HERE / "c/test_modules.c", RUNTIME / "dispatch.c", RUNTIME / "interp.c", RUNTIME / "quantized.c", RUNTIME / "profile.c"]
         self.build_and_run(sources, "match")
         program = self.compile(sources)
         for mode, message in (("changed", "isn't what was translated"), ("no-native-import", "has no native code")):

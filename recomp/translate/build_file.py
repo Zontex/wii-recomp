@@ -21,6 +21,9 @@ VULKAN_SDK = os.environ.get("VULKAN_SDK")
 # Arm's C leaves char unsigned and merges multiply-adds, both unlike the Intel Mac.
 FLAGS = "-w -fno-strict-aliasing -fwrapv -fsigned-char -ffp-contract=off -I/usr/local/include" + (f" -I{VULKAN_SDK}/include" if VULKAN_SDK else "")
 GAME_OPTIMIZATION = "-O2"
+# The quick tier (emit.py --profile): code that has barely run, compiled about five times
+# faster than GAME_OPTIMIZATION and running slower.
+QUICK_OPTIMIZATION = "-O0"
 RUNTIME_OPTIMIZATION = "-O3"
 if sys.platform == "linux" and os.uname().machine == "aarch64":
     FLAGS += " -mcpu=cortex-a76"  # The Raspberry Pi 5.
@@ -91,7 +94,8 @@ def main():
     for source in generated:
         target = f"obj/{source.stem}.o"
         # Hidden, so calls within the title stay direct; only its description is exported.
-        lines.append(f"build {target}: cc generated/{source.name}\n  cflags = {GAME_OPTIMIZATION} {FLAGS} -fPIC -fvisibility=hidden {interface}")
+        optimization = QUICK_OPTIMIZATION if source.name.startswith("cold") else GAME_OPTIMIZATION
+        lines.append(f"build {target}: cc generated/{source.name}\n  cflags = {optimization} {FLAGS} -fPIC -fvisibility=hidden {interface}")
         title_objects.append(target)
     for source in sorted(Path(build / "../runtime").glob("*.c")):
         if source.name in left_out:

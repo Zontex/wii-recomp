@@ -2,7 +2,7 @@
 
 These play the game with no screen attached, for measuring frame rates at 1080p. They run from `test/` in the checkout on the Pi, `~/wii-recomp` unless `WII_RECOMP_DIR` says otherwise, next to the build in `recomp/build`.
 
-- `walk2.sh <seconds> <script>` starts a headless labwc and the game, then sends the script's commands to the control pipe at their times. A line is `<second> <command>`, where the command is anything the pipe takes (`press a`, `pointer x y`, `board on kg x y`, `board off`), `shot <name>` for a screenshot, or `react` to hand over to `react.py`. It prints the frame rates it saw.
+- `walk2.sh <seconds> <script>` starts a headless labwc and the game, then sends the script's commands to the control pipe at their times. A line is `<second> <command>`, where the command is anything the pipe takes (`press a`, `pointer x y`, `board on kg x y`, `board off`), `shot <name>` for a screenshot, or `react` to hand over to `react.py`. It prints the frame rates it saw. It plays `extracted/sys` with the native code built beside the console, or `WII_RECOMP_GAME`, such as a recompiled disc image from `add_game.py`.
 - `w20.txt` creates a Mii and gets to the board's setup, then reacts from there.
 - `mii.txt` stops on the Mii page at 1080p's slowest steady screen; a 68-second walk is enough, with a screenshot `w-m.png` at 60 seconds.
 - `run.sh <name> <seconds> [VAR=value ...]` runs a walk (`SCRIPT=mii.txt` for the Mii page) and writes `test/<name>.out` with the seconds spent at each frame rate and any warnings. Add `WII_RECOMP_GPU_TIMES=1` for what the chip spent on each pass. Start it with `setsid`, as Wi-Fi on the Pi can drop under load.

@@ -38,3 +38,8 @@ recomp/build-*/
 
 # Recompiled disc images hold the whole game.
 *.wrd
+
+# What add_game.py packs, and the console folders the Wii Menu runs from.
+games/
+console/
+.ruff_cache/

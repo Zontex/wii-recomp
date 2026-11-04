@@ -102,12 +102,19 @@ class Finder:
         self.by_hashes = {}
         for start, hashes in self.hashes.items():
             self.by_hashes.setdefault(tuple(hashes), []).append(start)
+        self.closest = {}  # similar()'s answers, as it compares against every function.
 
     def exact(self, hashes):
         return self.by_hashes.get(tuple(hashes), [])
 
     def similar(self, hashes):
         """The one function clearly closest to these hashes, allowing for a changed library."""
+        key = tuple(hashes)
+        if key not in self.closest:
+            self.closest[key] = self.find_similar(hashes)
+        return self.closest[key]
+
+    def find_similar(self, hashes):
         if len(hashes) < MIN_SIMILAR_INSTRUCTIONS:
             return None
         scores = []
@@ -165,12 +172,15 @@ def resolve(program, functions, entries):
     has_board = BOARD_LIBRARY in program.data
     wanted = [e for e in entries if e["group"] != "board" or has_board]
     found = {}
-    for _ in wanted:  # A function placed beside another waits for that one.
+    progress = True
+    while progress:  # A function placed beside another waits for that one.
+        progress = False
         for entry in wanted:
             if entry["name"] not in found:
                 address = find_one(finder, entry, found)
                 if address is not None:
                     found[entry["name"]] = address
+                    progress = True
     missing = [entry["name"] for entry in wanted
                if entry["name"] not in found and entry["group"] != "optional" and entry.get("or") not in found]
     if missing:

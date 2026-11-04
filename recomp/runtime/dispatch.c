@@ -9,6 +9,7 @@
 #include "dispatch.h"
 #include "interp.h"
 #include "modules.h"
+#include "profile.h"
 #include "title.h"
 
 void unimplemented(uint32_t address, const char *name) {
@@ -60,9 +61,17 @@ static void log_once(uint32_t address) {
   logged_count++;
   logged[at] = address;
   fprintf(stderr, "interpreting %08x (return address %08x)\n", address, cpu.lr);
-  // Kept for the translator, which treats each one as a function start next time.
+  // Kept for the translator, which treats each one as a function start next time: in the
+  // title's own folder (profile.h), unless WII_RECOMP_DISCOVERED names one file.
   static FILE *discovered;
-  if (!discovered && getenv("WII_RECOMP_DISCOVERED")) discovered = fopen(getenv("WII_RECOMP_DISCOVERED"), "a");
+  static int opened;
+  if (!opened) {
+    opened = 1;
+    char path[4096];
+    const char *chosen = getenv("WII_RECOMP_DISCOVERED");
+    if (!chosen && title_data_path("discovered.txt", path, sizeof path)) chosen = path;
+    if (chosen) discovered = fopen(chosen, "a");
+  }
   if (discovered) {
     fprintf(discovered, "%08x\n", address);
     fflush(discovered);

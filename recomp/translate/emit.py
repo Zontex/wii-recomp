@@ -2,13 +2,24 @@
 """Translate each function of a Wii program into C.
 
 Usage: recomp/translate/emit.py extracted/sys/main.dol recomp/build/generated [--all-code] [--fifo-breakpoints] [--virtual-bluetooth]
+                                [--profile FILE] [--discovered FILE]...
 
 --all-code also translates code that nothing visibly points at, which games with C++
 method tables built at run time need. --fifo-breakpoints makes the graphics chip honour
 FIFO breakpoints, for games that keep several frames in the FIFO. Wii Fit sets one but
 needs it ignored, as it sends two tokens a frame. --virtual-bluetooth runs the game's own
 Wii Remote code against the virtual Bluetooth chip in place of direct input.
+
+--profile builds in two tiers, from a profile.txt the console wrote while the title ran.
+The functions that did most of the work go in part*.c, compiled for speed; the rest go in
+cold*.c, compiled quickly, and count their runs so the next profile can promote them. A
+missing file means nothing has run yet: everything is quick and counts. Without --profile,
+everything is compiled for speed and nothing counts. --discovered adds each address in a
+discovered.txt, where the console's interpreter ran code the translator missed, as a
+function start.
 """
+import multiprocessing
+import os
 import re
 import struct
 import sys
@@ -21,6 +32,9 @@ from functions import add_starts, add_unreached_code, branch_target, find_functi
 from signatures import load_entries, resolve
 
 FUNCTIONS_PER_FILE = 150
+# The share of all counted runs that the speed tier covers, most-run functions first.
+HOT_SHARE = 0.999
+GROUP_FILE = re.compile(r"(part|cold)\d{4}\.c")
 # Filled in for each game from signatures.py. REPLACED holds the system functions we
 # replace rather than translate, as address -> (reason, C body). IDLE_LOOPS holds loops
 # where the game waits for an interrupt with nothing to do. Spinning them at full speed
@@ -719,13 +733,14 @@ def emit_apploader(system, out, program):
     return len(code), fnv1a64(code), len(addresses)
 
 
-def title_description(program_bytes, tmd, values, function_count, module_count, apploader):
+def title_description(program_bytes, tmd, values, function_count, module_count, apploader, counting=False):
     """What the console needs to know about this title, as the one symbol its library exports."""
     high = int.from_bytes(tmd[TITLE_ID_OFFSET:TITLE_ID_OFFSET + 4], "big")
     low = int.from_bytes(tmd[TITLE_ID_OFFSET + 4:TITLE_ID_OFFSET + 8], "big")
     ios = int.from_bytes(tmd[IOS_OFFSET + 4:IOS_OFFSET + 8], "big")
     return ('#include "../../runtime/title.h"\n'
             "extern const TitleFunction title_functions[];\n"
+            "extern uint32_t title_counts[];\n"
             "extern const Module *const title_modules[];\n"
             "extern const TitleFunction title_apploader[];\n"
             "__attribute__((visibility(\"default\"))) const Title wii_recomp_title = {\n"
@@ -734,6 +749,7 @@ def title_description(program_bytes, tmd, values, function_count, module_count, 
             f"  {int('--virtual-bluetooth' in sys.argv)}, {int('--fifo-breakpoints' in sys.argv)},\n"
             f"  title_functions, {function_count}, title_modules, {module_count},\n"
             f"  0x{APPLOADER_AT if apploader[0] else 0:x}u, 0x{apploader[0]:x}u, 0x{apploader[1]:016x}ull, title_apploader, {apploader[2]},\n"
+            f"  {'title_counts' if counting else '0'},\n"
             "};\n")
 
 
@@ -862,6 +878,90 @@ def write_modules(system, out, exports):
     return len(prefixes)
 
 
+# What a group needs, set before the worker processes fork so they share it unpickled.
+_GROUP_INPUT = None
+
+
+def group_texts(group_number):
+    """The C of one group's functions, by tier, and the instructions not yet translated."""
+    program, functions, addresses, fast, starts = _GROUP_INPUT
+    tiers, unknown = {"part": [], "cold": []}, Counter()
+    first = group_number * FUNCTIONS_PER_FILE
+    for index in range(first, min(first + FUNCTIONS_PER_FILE, len(addresses))):
+        start = addresses[index]
+        text, _, missing = emit_function(program, start, functions[start], starts)
+        unknown += missing
+        if start in fast:
+            tiers["part"].append(text)
+        else:
+            tiers["cold"].append(text.replace("POLL();", f"POLL_COUNTED({index});"))
+    return tiers, unknown
+
+
+def write_groups(program, functions, addresses, fast, out, jobs=None):
+    """Writes the functions, FUNCTIONS_PER_FILE to a group by address: those in `fast` to
+    part<group>.c and the rest, counting their runs, to cold<group>.c. Groups don't move
+    when tiers change, so a function changing tier rewrites only its own group's files.
+    Groups are written on every core where processes can fork. Returns the file names
+    written and the instructions not yet translated."""
+    global _GROUP_INPUT
+    _GROUP_INPUT = (program, functions, addresses, fast, set(addresses))
+    groups = range((len(addresses) + FUNCTIONS_PER_FILE - 1) // FUNCTIONS_PER_FILE)
+    jobs = jobs or os.cpu_count() or 1
+    if jobs > 1 and len(groups) > 1 and "fork" in multiprocessing.get_all_start_methods():
+        with multiprocessing.get_context("fork").Pool(jobs) as pool:
+            results = pool.map(group_texts, groups, chunksize=4)
+    else:
+        results = map(group_texts, groups)
+    unknown = Counter()
+    written = set()
+    for group_number, (tiers, missing) in zip(groups, results):
+        unknown += missing
+        for tier, texts in tiers.items():
+            if texts:
+                name = f"{tier}{group_number:04}.c"
+                write_if_changed(out / name, "\n".join(['#include "functions.h"'] + texts) + "\n")
+                written.add(name)
+    for stale in out.glob("*.c"):  # Groups from an earlier build with other tiers or fewer functions.
+        if GROUP_FILE.fullmatch(stale.name) and stale.name not in written:
+            stale.unlink()
+    return written, unknown
+
+
+# Functions in the quick tier count their runs into title_counts, by their index in the table.
+COUNTING = ("extern uint32_t title_counts[];\n"
+            "#define POLL_COUNTED(i) do { title_counts[i]++; POLL(); } while (0)\n")
+
+
+def option_values(name):
+    """Every value given after `name` on the command line."""
+    return [sys.argv[i + 1] for i, item in enumerate(sys.argv[:-1]) if item == name]
+
+
+def read_profile(path):
+    """{address: count} from a console's profile.txt. A missing file gives none."""
+    if not path.exists():
+        return {}
+    counts = {}
+    for line in path.read_text().splitlines():
+        if line and not line.startswith("#"):
+            address, count = line.split()
+            counts[int(address, 16)] = counts.get(int(address, 16), 0) + int(count)
+    return counts
+
+
+def choose_fast(counts, share=HOT_SHARE):
+    """The fewest functions, most-run first, that together hold `share` of all counted runs."""
+    total = sum(counts.values())
+    chosen, covered = set(), 0
+    for address, count in sorted(counts.items(), key=lambda item: (-item[1], item[0])):
+        if covered >= share * total:
+            break
+        chosen.add(address)
+        covered += count
+    return chosen
+
+
 def main():
     dol = Path(sys.argv[1])
     program = Program(dol.read_bytes())
@@ -880,6 +980,8 @@ def main():
                     and entry[0] not in board}
     REPLACED.update(replaced)
     IDLE_LOOPS.update(idle_loops)
+    for path in option_values("--discovered"):
+        add_starts(program, functions, read_starts(Path(path)))
     (out / "game.c").unlink(missing_ok=True)  # Written by earlier versions, before titles were libraries.
     # After resolving, as finding a function can depend on counting its neighbours.
     if "--all-code" in sys.argv:
@@ -895,32 +997,28 @@ def main():
     check_replaced(starts)
     addresses = sorted(starts)
     declarations = "\n".join(f"void {function_name(a)}(void);" for a in addresses)
-    write_if_changed(out / "functions.h", f'#include "../../runtime/cpu.h"\n{declarations}\n')
+    write_if_changed(out / "functions.h", f'#include "../../runtime/cpu.h"\n{COUNTING}{declarations}\n')
 
-    unknown = Counter()
-    files = 0
-    for first in range(0, len(addresses), FUNCTIONS_PER_FILE):
-        group = addresses[first:first + FUNCTIONS_PER_FILE]
-        parts = ['#include "functions.h"']
-        for start in group:
-            text, _, missing = emit_function(program, start, functions[start], starts)
-            unknown += missing
-            parts.append(text)
-        write_if_changed(out / f"part{files:04}.c", "\n".join(parts) + "\n")
-        files += 1
+    profile = option_values("--profile")
+    counting = bool(profile)
+    fast = choose_fast(read_profile(Path(profile[-1]))) if counting else set(addresses)
+    written, unknown = write_groups(program, functions, addresses, fast, out)
 
     table = ",\n".join(f"{{0x{a:x}u, {function_name(a)}}}" for a in addresses)
+    counts = f"uint32_t title_counts[{len(addresses)}];\n" if counting else ""
     write_if_changed(
         out / "table.c",
         '#include "functions.h"\n#include "../../runtime/title.h"\n'
-        f"const TitleFunction title_functions[] = {{\n{table}\n}};\n",
+        f"const TitleFunction title_functions[] = {{\n{table}\n}};\n{counts}",
     )
-    print(f"{len(addresses)} functions in {files} files")
+    fast_count = len(fast & starts)
+    print(f"{len(addresses)} functions in {len(written)} files" +
+          (f", {fast_count} compiled for speed and {len(addresses) - fast_count} quickly" if counting else ""))
     print("not yet translated:", unknown.most_common(40))
     module_count = write_modules(dol.parent, out, exports)
     apploader = emit_apploader(dol.parent, out, program)
     write_if_changed(out / "title.c", title_description(dol.read_bytes(), (dol.parent.parent / "tmd.bin").read_bytes(), values,
-                                                        len(addresses), module_count, apploader))
+                                                        len(addresses), module_count, apploader, counting))
 
 
 if __name__ == "__main__":
