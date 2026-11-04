@@ -59,71 +59,91 @@ A build produces two files. `wii-recomp` is the console, the same program for ev
 
 ## Build and run
 
+Wii Recomp doesn't ship games or Nintendo's software. You bring your own, and everything is translated and compiled on your own computer:
+
+- **A computer:** a Mac (developed on an Intel Mac) or a Raspberry Pi 5 with Raspberry Pi OS.
+- **Your Wii's storage:** a NAND backup from your own Wii, which holds the Wii Menu and the console's settings.
+- **Your game discs,** as ISO, RVZ or WBFS files you made from them.
+
+You can play a game **directly**, which starts one game in a window and is the quickest way to try it, or **from the Wii Menu**, which works like a console: the menu starts, you put a disc in its drive, and you start the game from the Disc Channel.
+
+### 1. Install the tools
+
 You need `clang`, `ninja`, Python 3, GLFW, the Vulkan loader and shaderc.
 
-<details>
-<summary>Installing them</summary>
-
-**macOS** (Xcode's command line tools provide clang):
-
 ```sh
+# macOS (Xcode's command line tools provide clang)
 brew install ninja glfw molten-vk vulkan-loader shaderc
-```
 
-Or install the LunarG Vulkan SDK and set `VULKAN_SDK` to its folder.
-
-**Raspberry Pi OS:**
-
-```sh
+# Raspberry Pi OS
 sudo apt install clang ninja-build python3 libglfw3-dev libvulkan-dev mesa-vulkan-drivers libshaderc-dev libasound2-dev
 ```
 
-</details>
+On a Mac you can install the LunarG Vulkan SDK instead, and set `VULKAN_SDK` to its folder. `import_nand.py` also needs Python's `cryptography` package (`python3 -m pip install cryptography`).
 
-### Your Wii's storage and keys
+### 2. Add your Wii's storage
 
-Wii Recomp needs your own Wii's NAND and keys to work. The NAND holds the console's settings, the Wii Menu, and the certificates and tickets games check, and the keys decrypt it. Make a backup on your Wii with BootMii (Backup NAND), then:
+Make a backup on your Wii with BootMii (Backup NAND). Copy `nand.bin` into this repository's `wii/` folder, with `keys.bin` beside it if BootMii saved the keys as a separate file, then decrypt it once:
 
 ```sh
-# Put nand.bin (and keys.bin, if BootMii wrote it apart) in wii/, then decrypt them once
 python3 recomp/tools/import_nand.py
 ```
 
-That makes `wii/nand/`, which `wii-recomp` reads when no storage folder is named. [`wii/README.md`](wii/README.md) has the details. Everything in `wii/` except that README is ignored by git: the backup and keys belong to one console and hold its owner's data, so they never go in the repository. An already decrypted storage folder, such as Dolphin's NAND folder after its system update, also works in `wii/nand/`.
+This makes `wii/nand/`, the storage every run reads. A Wii storage folder that's already decrypted works too: copy Dolphin's NAND folder, after its system update, into `wii/nand/`. [`wii/README.md`](wii/README.md) has the details. Everything in `wii/` except that README is ignored by git. The backup and keys belong to one console and hold its owner's data, so they never go in the repository.
 
-### Build a game
+### 3. Build a game and play it directly
 
 ```sh
-# Unpack your disc (ISO, RVZ or WBFS) into extracted/
+# Unpack the disc into extracted/
 python3 recomp/tools/extract_disc.py "path/to/game.rvz"
 
-# Translate and compile it. A full build takes a few minutes.
+# Translate its code to C and compile it. A full build takes a few minutes.
 python3 recomp/translate/emit.py extracted/sys/main.dol recomp/build/generated
 python3 recomp/translate/build_file.py recomp/build
-mkdir -p recomp/build/obj
-(cd recomp/build && ninja)
+mkdir -p recomp/build/obj && (cd recomp/build && ninja)
 
 # Play
 recomp/build/wii-recomp extracted/sys
 ```
 
-The storage is read from `wii/nand/`, or from a folder given after the disc. Wii Recomp only reads it, and writes saves to `recomp/build/saves`. Some games need the console settings it holds, such as SYSCONF, and won't start without them.
+The build makes `wii-recomp`, the console, which is the same program for every game, and `title.dylib` (`title.so` on Linux), the game's translated code. Saves go to `recomp/build/saves`; your Wii's storage is only read. The keyboard and mouse stand in for the Wii Remote: Enter is A, the arrows are the D-pad, the mouse points, and Space steps on the Balance Board. [`recomp/README.md`](recomp/README.md) lists every key and setting.
 
 `extract_disc.py` uses [nodtool](https://github.com/encounter/nod), and downloads a pinned, checksummed copy if it isn't installed. For games that build their C++ method tables at run time, such as The Last Story, add `--all-code` to `emit.py`.
 
-### Play from a disc image, or from the Wii Menu
+### 4. Play from the Wii Menu
+
+The Wii Menu is a program too, so it's translated and compiled once, like a game. Games for the menu are built with `--virtual-bluetooth`: their own Wii Remote code then talks to the console's Bluetooth, as on a Wii, and that's also what real Wii Remotes need.
 
 ```sh
-# Pack the disc and its native code into one file
-python3 recomp/tools/make_disc.py extracted game.wrd --native darwin-x86_64=recomp/build/title.dylib
-recomp/build/wii-recomp game.wrd
+# Build the Wii Menu from your Wii's storage (once)
+python3 recomp/translate/prepare_title.py wii/nand 00000001 00000002 recomp/build-menu/disc
+python3 recomp/translate/emit.py recomp/build-menu/disc/sys/main.dol recomp/build-menu/generated --virtual-bluetooth
+python3 recomp/translate/build_file.py recomp/build-menu vulkan
+mkdir -p recomp/build-menu/obj && (cd recomp/build-menu && ninja)
 
-# Or set up a console with the Wii Menu, and put the disc in its drive
+# Set up a console: its own copy of your storage, the menu, and an empty drive
 python3 recomp/tools/prepare_console.py wii/nand console --menu recomp/build-menu
-cp game.wrd console/drive/ && recomp/build/wii-recomp --console console
+
+# Build the game for the menu, and pack it as a disc image
+python3 recomp/translate/emit.py extracted/sys/main.dol recomp/build/generated --virtual-bluetooth
+python3 recomp/translate/build_file.py recomp/build && (cd recomp/build && ninja)
+python3 recomp/tools/make_disc.py extracted game.wrd --native darwin-x86_64=recomp/build/title.dylib
+
+# Put the disc in the drive, and turn the console on
+cp game.wrd console/drive/
+recomp/build/wii-recomp --console console
 ```
 
-[`recomp/README.md`](recomp/README.md) covers the controls, the settings, benchmarking, and a map of the source.
+A **`.wrd` disc image** is a game prepared for the console: the disc's files, unencrypted, plus the game's translated code for each computer it was built for (`darwin-x86_64` on an Intel Mac, `linux-aarch64` on a Pi). The console reads it like a disc in its drive. It holds the game, so it's yours alone: don't share it.
+
+The menu shows the game's banner in the Disc Channel, and Start runs it. The simulated Wii Remote has a Classic Controller plugged in, and a game that sees one may hide its pointer. Wii Fit Plus is one, so start the console with `WII_RECOMP_ATTACHMENT=none` for it. The console stays a single program: when you start a game, it restarts itself with the game's code, as a Wii does.
+
+### What doesn't work yet
+
+- **A plain ISO in the drive.** Each game has to be prepared as above first. One command that turns a disc image into a `.wrd` is on the [roadmap](ROADMAP.md) (stage 10).
+- **Going back to the Wii Menu.** Home, then Wii Menu, freezes. Close the window instead.
+- **Real Wii Remotes and the Balance Board** are built but haven't been tried with real hardware. Until then the keyboard and mouse drive a simulated remote and board. See [Real Wii Remotes](recomp/README.md#real-wii-remotes-and-the-balance-board).
+- **Playing from the Wii Menu** has been tested on an Intel Mac only. On a Raspberry Pi 5, games have been played directly.
 
 ## Repository layout
 
