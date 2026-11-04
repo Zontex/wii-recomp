@@ -1,0 +1,6 @@
+# Bug-catching checks only (syntax errors, undefined names, unused code); no style rules.
+target-version = "py312"
+extend-exclude = ["extracted", "recomp/build", "recomp/build-*", "console", "wii"]
+
+[lint]
+select = ["E9", "F"]
