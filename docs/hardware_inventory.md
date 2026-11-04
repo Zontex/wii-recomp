@@ -809,8 +809,8 @@ The AX work is rewritten in C. There's no DSP interpreter, so each program needs
 | `ctl.0x10_rumble` | 0x10 rumble | partial | `runtime/wii_remote.c:109` | Accepted, not felt. Rumble bit in other reports ignored. |
 | `ctl.0x11_leds` | 0x11 LEDs | partial | `runtime/wii_remote.c:109` | Accepted, not shown. |
 | `ctl.0x12_data_mode` | 0x12 data mode | done | `runtime/wii_remote.c:95` |  |
-| `ctl.0x13_0x1a_ir_enable` | 0x13, 0x1A IR enable | partial | `runtime/wii_remote.c:132` | A bare acknowledgement. The camera works from its register writes anyway. |
-| `ctl.0x14_speaker_enable` | 0x14 speaker enable | missing | `runtime/wii_remote.c:112` | Bare ack. |
+| `ctl.0x13_0x1a_ir_enable` | 0x13, 0x1A IR enable | partial | `runtime/wii_remote.c:152` | 0x13 switches the camera flag in status reports, which WPAD checks before keeping the pointer on. 0x1A is a bare acknowledgement. The camera works from its register writes. |
+| `ctl.0x14_speaker_enable` | 0x14 speaker enable | missing | `runtime/wii_remote.c:154` | Status reports carry the speaker flag, but no sound is played. Reported when switched on. |
 | `ctl.0x15_status_request` | 0x15 status request | done | `runtime/wii_remote.c:101` |  |
 | `ctl.0x16_write_memory` | 0x16 write memory | partial | `runtime/wii_remote.c:105` | Attachment space only. EEPROM, speaker and camera writes dropped. |
 | `ctl.0x17_read_memory` | 0x17 read memory | partial | `runtime/wii_remote.c:103`, `:53`, `:65` | Calibration and attachment. Mii block reads zero. |

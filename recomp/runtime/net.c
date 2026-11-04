@@ -12,7 +12,7 @@
 
 enum {
   KD_SUSPEND_SCHEDULER = 1, KD_TRY_SUSPEND_SCHEDULER = 2, KD_RESUME_SCHEDULER = 3, KD_LOCK_SOCKET = 8, KD_UNLOCK_SOCKET = 9,
-  KD_SAVE_MAIL_NOW = 0x0d, KD_REQUEST_USER_ID = 0x0f, KD_GET_SCHEDULER_STAT = 0x1e, SCHEDULER_BYTES = 256, KD_SET_SCRIPT_MODE = 0x22, USER_ID_BYTES = 16,
+  KD_SAVE_MAIL_NOW = 0x0d, KD_REQUEST_USER_ID = 0x0f, KD_GET_SCHEDULER_STAT = 0x1e, SCHEDULER_BYTES = 256, KD_SET_SCRIPT_MODE = 0x22, KD_REQUEST_SHUTDOWN = 0x28, USER_ID_BYTES = 16,
   TIME_GET_UNIVERSAL = 0x14, TIME_SET_RTC_COUNTER = 0x17, TIME_GET_DIFFERENCE = 0x18,
   NCD_GET_CONFIG = 3, NCD_SET_CONFIG = 4, NCD_READ_CONFIG = 5, NCD_WRITE_CONFIG = 6, NCD_GET_LINK_STATUS = 7,
   LINK_NONE = 2, CONFIG_BYTES = 0x1b5c,
@@ -49,7 +49,8 @@ int net_kd_request(uint32_t command, uint32_t request) {
     case KD_LOCK_SOCKET:        // Nothing else uses the network to lock it from.
     case KD_UNLOCK_SOCKET:
     case KD_SAVE_MAIL_NOW:      // No mail arrives, so there's none to save.
-    case KD_SET_SCRIPT_MODE: {  // Scripts come from the network, so none ever run.
+    case KD_SET_SCRIPT_MODE:    // Scripts come from the network, so none ever run.
+    case KD_REQUEST_SHUTDOWN: { // Sent before the console resets or goes back to the Wii Menu. Nothing runs to stop.
       uint32_t out = ioctl_out(request, 4);
       if (out) wr32(out, 0);
       return 0;

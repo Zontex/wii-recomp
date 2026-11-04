@@ -14,10 +14,10 @@
 #include "wii_remote.h"
 
 enum {
-  OUTPUT_RUMBLE = 0x10, OUTPUT_LEDS = 0x11, OUTPUT_DATA_MODE = 0x12, OUTPUT_STATUS = 0x15, OUTPUT_WRITE = 0x16, OUTPUT_READ = 0x17,
+  OUTPUT_RUMBLE = 0x10, OUTPUT_LEDS = 0x11, OUTPUT_DATA_MODE = 0x12, OUTPUT_CAMERA_CLOCK = 0x13, OUTPUT_SPEAKER = 0x14, OUTPUT_STATUS = 0x15, OUTPUT_WRITE = 0x16, OUTPUT_READ = 0x17,
   REPORT_STATUS = 0x20, REPORT_MEMORY = 0x21, REPORT_ACK = 0x22, REPORT_BYTES = 22, MEMORY_PIECE = 16, MEMORY_HEADER = 6,
   ADDRESS_SPACE_SHIFT = 24, ATTACHMENT_SPACE = 0x04a4, CAMERA_SPACE = 0x04b0, READ_NO_DEVICE = 7, ACK_WANTED = 2, CONTINUOUS = 4,
-  STATUS_ATTACHMENT = 2, BATTERY_FULL = 0xc8, CALIBRATION_START = 0x16, CALIBRATION_COPY = 0x20, REPORT_TICKS = 607500,  // 100 a second.
+  STATUS_ATTACHMENT = 2, STATUS_SPEAKER = 4, STATUS_CAMERA = 8, SWITCH_ON = 4, BATTERY_FULL = 0xc8, CALIBRATION_START = 0x16, CALIBRATION_COPY = 0x20, REPORT_TICKS = 607500,  // 100 a second.
 };
 
 // Where each data mode puts things: motion, camera and attachment bytes, by position.
@@ -33,12 +33,21 @@ static const Mode modes[] = {
 
 static struct {
   const Mode *mode;
-  int continuous;
+  int continuous, camera_on, speaker_on;
+  uint8_t lights;
   uint64_t next_report;
   uint8_t last_report[REPORT_BYTES];
 } remotes[BLUETOOTH_DEVICES];
 
 static int is_board(int device) { return device == BLUETOOTH_BOARD; }
+
+// The remote has a Classic Controller plugged in, unless WII_RECOMP_ATTACHMENT=none. A game
+// that sees one may switch its pointer off and expect the Classic Controller's buttons.
+static int has_attachment(int device) {
+  static int plugged = -1;
+  if (plugged < 0) plugged = !getenv("WII_RECOMP_ATTACHMENT") || strcmp(getenv("WII_RECOMP_ATTACHMENT"), "none");
+  return is_board(device) || plugged;
+}
 
 // The keyboard, pipe and controllers press the first remote's buttons. The board has a
 // single button, its power switch, which nothing presses.
@@ -51,7 +60,9 @@ static void buttons_into(int device, uint8_t *to) {
 static void report_status(int device) {
   uint8_t report[7] = {REPORT_STATUS};
   buttons_into(device, report + 1);
-  report[3] = STATUS_ATTACHMENT;
+  // Its flags: an attachment, the speaker and camera as the game last switched them, and its lights.
+  report[3] = (uint8_t)((has_attachment(device) ? STATUS_ATTACHMENT : 0) | (remotes[device].speaker_on ? STATUS_SPEAKER : 0) |
+                        (remotes[device].camera_on ? STATUS_CAMERA : 0) | remotes[device].lights);
   report[6] = BATTERY_FULL;
   bluetooth_send_report(device, report, sizeof report);
 }
@@ -92,7 +103,7 @@ static void report_read(int device, uint32_t address, uint32_t bytes) {
     report[3] = (uint8_t)((part - 1) << 4);
     report[4] = (uint8_t)((offset + done) >> 8);
     report[5] = (uint8_t)(offset + done);
-    if (space && !from_attachment && !from_camera) {
+    if ((space && !from_attachment && !from_camera) || (from_attachment && !has_attachment(device))) {
       // Other registers belong to devices that aren't there, such as Wii MotionPlus.
       report[3] |= READ_NO_DEVICE;
       bluetooth_send_report(device, report, sizeof report);
@@ -136,10 +147,15 @@ void wii_remote_output(int device, const uint8_t *data, uint32_t bytes) {
     }
     acknowledge(device, report);
   } else if (report == OUTPUT_LEDS || report == OUTPUT_RUMBLE) {
+    if (report == OUTPUT_LEDS) remotes[device].lights = data[1] & 0xf0;
+    if (data[1] & ACK_WANTED) acknowledge(device, report);
+  } else if (report == OUTPUT_CAMERA_CLOCK || report == OUTPUT_SPEAKER) {
+    if (report == OUTPUT_CAMERA_CLOCK) remotes[device].camera_on = (data[1] & SWITCH_ON) != 0;
+    else remotes[device].speaker_on = (data[1] & SWITCH_ON) != 0;
+    if (report == OUTPUT_SPEAKER && remotes[device].speaker_on) gap_hit("ctl.0x14_speaker_enable", data[1]);  // Its sound isn't played.
     if (data[1] & ACK_WANTED) acknowledge(device, report);
   } else {
-    if (report == 0x14 && (data[1] & 4)) gap_hit("ctl.0x14_speaker_enable", data[1]);
-    else if (report == 0x18) gap_hit("ctl.0x18_speaker_data", 0);
+    if (report == 0x18) gap_hit("ctl.0x18_speaker_data", 0);
     acknowledge(device, report);
   }
 }
@@ -165,7 +181,9 @@ void wii_remote_update(int device, uint64_t now) {
   } else if (mode->camera_bytes) {
     memset(report + mode->camera_at, 0xff, mode->camera_bytes);
   }
-  if (mode->attachment_bytes) {
+  if (mode->attachment_bytes && !has_attachment(device)) {
+    memset(report + mode->attachment_at, 0, mode->attachment_bytes);
+  } else if (mode->attachment_bytes) {
     if (is_board(device)) board_fill(report + mode->attachment_at, mode->attachment_bytes);
     else attachment_fill(report + mode->attachment_at, mode->attachment_bytes);
   }

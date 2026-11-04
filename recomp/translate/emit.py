@@ -852,11 +852,16 @@ def main():
     out = Path(sys.argv[2])
     out.mkdir(parents=True, exist_ok=True)
     functions, _ = find_functions(program)
-    replaced, idle_loops, values = resolve(program, functions, load_entries())
+    entries = load_entries()
+    replaced, idle_loops, values = resolve(program, functions, entries)
     if "--virtual-bluetooth" in sys.argv:
-        # The program's own controller code runs, including an older KPADRead left as a stub.
+        # The program's own controller code runs, including an older KPADRead left as a stub,
+        # and so does its board code, which the simulated board answers. WPADRead reads the
+        # remote too, so standing in for it with the board's sensors blanks the remote.
+        board = {entry["reason"] for entry in entries if entry.get("group") == "board"}
         replaced = {address: entry for address, entry in replaced.items()
-                    if entry[1] not in DIRECT_INPUT and "Bluetooth" not in entry[0] and not entry[0].startswith("KPADRead")}
+                    if entry[1] not in DIRECT_INPUT and "Bluetooth" not in entry[0] and not entry[0].startswith("KPADRead")
+                    and entry[0] not in board}
     REPLACED.update(replaced)
     IDLE_LOOPS.update(idle_loops)
     (out / "game.c").unlink(missing_ok=True)  # Written by earlier versions, before titles were libraries.
