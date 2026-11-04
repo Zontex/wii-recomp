@@ -105,6 +105,17 @@ static uint32_t ios_version(void) {
   return title->ios_version << 16 | revision;
 }
 
+// Where each IOS keeps its own memory at the top of MEM2, which is where the game's
+// arena ends. From Dolphin's VersionInfo.cpp: up to IOS 22 it starts at 0x93400000,
+// IOS 28 at 0x93800000, and from IOS 30 on at 0x93600000. Games size their heaps to the
+// arena, so a top set too low leaves a game short: Wii Fit Plus (IOS 53) is 2 MB short
+// and can't fit its main menu.
+static uint32_t ios_mem2_end(uint32_t ios) {
+  if (ios <= 22) return 0x93400000u;
+  if (ios == 28) return 0x93800000u;
+  return 0x93600000u;
+}
+
 void set_up_low_memory(const Boot *boot) {
   memcpy(host(0x80000000u), boot->header, 0x20);
   uint32_t table_size = (uint32_t)boot->table_bytes;
@@ -130,13 +141,20 @@ void set_up_low_memory(const Boot *boot) {
   wr32(0x80003110, arena_high);        // The OS's real memory limit, below the file table.
   wr32(0x80003118, MEM2_SIZE);
   wr32(0x8000311c, MEM2_SIZE);
-  wr32(0x80003120, 0x93400000u);
+  // The IOS's IPC buffer is the 128 KB below its memory, and the arena stops there.
+  uint32_t mem2_end = ios_mem2_end(title->ios_version), ipc_buffer = mem2_end - 0x20000u;
+  wr32(0x80003120, mem2_end);
   wr32(0x80003124, 0x90000800u);
-  wr32(0x80003128, 0x933e0000u);
-  wr32(0x80003130, 0x933e0000u);
-  wr32(0x80003134, 0x93400000u);
+  wr32(0x80003128, ipc_buffer);        // End of the MEM2 arena.
+  wr32(0x80003130, ipc_buffer);
+  wr32(0x80003134, mem2_end);
   wr32(0x80003138, 0x11);         // Graphics chip revision.
   wr32(0x80003140, ios_version());
   wr32(0x80003144, IOS_BUILD_DATE);
+  // From IOS 28 on, the 128 KB above it is the IOS's own too.
+  if (title->ios_version >= 28) {
+    wr32(0x80003148, mem2_end);
+    wr32(0x8000314c, mem2_end + 0x20000u);
+  }
   wr32(0x80003188, ios_version());       // The version the game asked to run on.
 }

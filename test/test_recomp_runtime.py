@@ -47,6 +47,9 @@ class Runtime(unittest.TestCase):
     def test_interpreter(self):
         self.build_and_run(INTERPRETER)
 
+    def test_guest_memory_window(self):
+        self.build_and_run([HERE / "c/test_guest_memory.c", RUNTIME / "guest_memory.c"])
+
     def test_interpreter_logs_each_address_once(self):
         program = self.compile(INTERPRETER)
         result = subprocess.run([str(program), "logs"], capture_output=True, text=True, timeout=20)

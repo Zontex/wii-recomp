@@ -9,6 +9,7 @@ FIFO breakpoints, for games that keep several frames in the FIFO. Wii Fit sets o
 needs it ignored, as it sends two tokens a frame. --virtual-bluetooth runs the game's own
 Wii Remote code against the virtual Bluetooth chip in place of direct input.
 """
+import re
 import struct
 import sys
 from collections import Counter
@@ -240,7 +241,22 @@ def trap(address, word, name):
     return f"if ({test}) trap_taken({address_text(address)});"
 
 
+# Displacement forms through r1, the stack pointer. The stack is always memory, so these
+# use the accessors that skip the hardware check (cpu.h). That's about half of all
+# stores: every prologue, epilogue and spill.
+STACK_FORMS = {"lwz", "lbz", "lhz", "lha", "lwzu", "lbzu", "lhzu", "lhau", "stw", "stb", "sth", "stwu", "stbu", "sthu",
+               "lmw", "stmw", "lfs", "lfd", "lfsu", "lfdu", "stfs", "stfd", "stfsu", "stfdu"}
+ACCESS = re.compile(r"\b((?:rd|wr)(?:8|16|32|64))\(")
+
+
 def emit(address, word, name):
+    text = emit_any(address, word, name)
+    if ra(word) == 1 and name in STACK_FORMS:
+        text = ACCESS.sub(r"\1s(", text)
+    return text
+
+
+def emit_any(address, word, name):
     """Returns C for one instruction that isn't a branch, or None if not handled."""
     d, a, b = rt(word), ra(word), rb(word)
     imm, uimm = s16(word), word & 0xffff

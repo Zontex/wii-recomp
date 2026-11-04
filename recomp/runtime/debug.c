@@ -87,6 +87,7 @@ void stage_frame(float gap_ms) {
 
 void debug_poll(uint64_t seconds_running) {
   static int done;
+  guest_memory_report();
   gap_flush();
   report_activity(seconds_running);
   static const char *after;

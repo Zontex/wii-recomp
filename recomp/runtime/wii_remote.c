@@ -8,6 +8,7 @@
 #include "bluetooth.h"
 #include "gaps.h"
 #include "input.h"
+#include "remote_link.h"
 #include "wii_attachment.h"
 #include "wii_board.h"
 #include "wii_camera.h"
@@ -41,6 +42,10 @@ static struct {
 
 static int is_board(int device) { return device == BLUETOOTH_BOARD; }
 
+// Where the simulated devices' reports go: to the game, or into the link for loopback.
+static void (*sink)(int device, const uint8_t *report, uint32_t bytes) = bluetooth_send_report;
+void wii_remote_simulated_sink(void (*to)(int device, const uint8_t *report, uint32_t bytes)) { sink = to; }
+
 // The remote has a Classic Controller plugged in, unless WII_RECOMP_ATTACHMENT=none. A game
 // that sees one may switch its pointer off and expect the Classic Controller's buttons.
 static int has_attachment(int device) {
@@ -64,14 +69,14 @@ static void report_status(int device) {
   report[3] = (uint8_t)((has_attachment(device) ? STATUS_ATTACHMENT : 0) | (remotes[device].speaker_on ? STATUS_SPEAKER : 0) |
                         (remotes[device].camera_on ? STATUS_CAMERA : 0) | remotes[device].lights);
   report[6] = BATTERY_FULL;
-  bluetooth_send_report(device, report, sizeof report);
+  sink(device, report, sizeof report);
 }
 
 static void acknowledge(int device, int output) {
   uint8_t report[5] = {REPORT_ACK};
   buttons_into(device, report + 1);
   report[3] = (uint8_t)output;
-  bluetooth_send_report(device, report, sizeof report);
+  sink(device, report, sizeof report);
 }
 
 // Calibration sits at the start of memory: zero and gravity for the three axes, which is
@@ -106,22 +111,22 @@ static void report_read(int device, uint32_t address, uint32_t bytes) {
     if ((space && !from_attachment && !from_camera) || (from_attachment && !has_attachment(device))) {
       // Other registers belong to devices that aren't there, such as Wii MotionPlus.
       report[3] |= READ_NO_DEVICE;
-      bluetooth_send_report(device, report, sizeof report);
+      sink(device, report, sizeof report);
       return;
     }
     if (from_attachment) attachment_bytes(device, offset + done, report + MEMORY_HEADER, part);
     else if (from_camera) camera_read(offset + done, report + MEMORY_HEADER, part);
     else read_memory(offset + done, report + MEMORY_HEADER, part);
-    bluetooth_send_report(device, report, sizeof report);
+    sink(device, report, sizeof report);
     done += part;
   } while (done < bytes);
 }
 
 static uint32_t big32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
 
-void wii_remote_connected(int device) { report_status(device); }
+void wii_remote_simulated_connected(int device) { report_status(device); }
 
-void wii_remote_output(int device, const uint8_t *data, uint32_t bytes) {
+void wii_remote_simulated_output(int device, const uint8_t *data, uint32_t bytes) {
   int report = data[0];
   (void)bytes;
   if (report == OUTPUT_DATA_MODE) {
@@ -163,7 +168,7 @@ void wii_remote_output(int device, const uint8_t *data, uint32_t bytes) {
 // Sends a device's current state as often as a real one does. Out of continuous mode,
 // only when something in the report changed, such as a button, where it points, or the
 // weight on the board.
-void wii_remote_update(int device, uint64_t now) {
+void wii_remote_simulated_update(int device, uint64_t now) {
   const Mode *mode = remotes[device].mode;
   if (!mode || now < remotes[device].next_report) return;
   remotes[device].next_report = now + REPORT_TICKS;
@@ -192,5 +197,48 @@ void wii_remote_update(int device, uint64_t now) {
     fprintf(stderr, "bluetooth: device %d sends buttons %02x%02x at %llu\n", device, report[2], report[1], (unsigned long long)now);
   }
   memcpy(remotes[device].last_report, report, sizeof report);
-  bluetooth_send_report(device, report, mode->bytes);
+  sink(device, report, mode->bytes);
+}
+
+// --- Each slot: a real device through the link, or a simulated one here ---
+
+enum { OUTPUT_SPEAKER_DATA = 0x18, OUTPUT_RUMBLE_ONLY = 0x10, RUMBLE_BIT = 1 };
+
+// A real device hears from the game as soon as it's connected, as the simulated one does:
+// the status a remote sends when asked.
+void wii_remote_connected(int device) {
+  if (!link_linked(device)) {
+    wii_remote_simulated_connected(device);
+    return;
+  }
+  const uint8_t ask[2] = {OUTPUT_STATUS, 0};
+  link_send(device, ask, sizeof ask);
+}
+
+// The game's reports go to the real device unchanged. Speaker data does too, unless
+// WII_RECOMP_SPEAKER=off: then only its rumble bit is passed on, as a rumble report.
+void wii_remote_output(int device, const uint8_t *report, uint32_t bytes) {
+  if (!link_linked(device)) {
+    wii_remote_simulated_output(device, report, bytes);
+    return;
+  }
+  static int speaker_off = -1;
+  if (speaker_off < 0) speaker_off = getenv("WII_RECOMP_SPEAKER") && !strcmp(getenv("WII_RECOMP_SPEAKER"), "off");
+  static uint8_t rumble[BLUETOOTH_DEVICES];
+  if (bytes >= 2) rumble[device] = report[1] & RUMBLE_BIT;
+  if (speaker_off && report[0] == OUTPUT_SPEAKER_DATA) {
+    const uint8_t only_rumble[2] = {OUTPUT_RUMBLE_ONLY, rumble[device]};
+    link_send(device, only_rumble, sizeof only_rumble);
+    return;
+  }
+  link_send(device, report, bytes);
+}
+
+void wii_remote_update(int device, uint64_t now) {
+  if (!link_linked(device)) {
+    wii_remote_simulated_update(device, now);
+    return;
+  }
+  uint8_t report[LINK_REPORT_BYTES];
+  for (int bytes; (bytes = link_poll(device, report)) > 0;) bluetooth_send_report(device, report, (uint32_t)bytes);
 }

@@ -4,6 +4,8 @@
 #include <stdint.h>
 #include <string.h>
 
+#include "guest_memory.h"
+
 typedef struct {
   uint32_t r[32];
   double f[32];   // Paired singles: first value.
@@ -16,8 +18,6 @@ typedef struct {
 } Cpu;
 
 extern Cpu cpu;
-extern uint8_t *mem1;
-extern uint8_t *mem2;
 
 typedef void (*GuestFunction)(void);
 void dispatch(uint32_t address);
@@ -58,52 +58,78 @@ uint32_t decrementer_get(void);
 void locked_cache_transfer(void);
 #define POLL() do { if (--interrupt_budget < 0) poll_interrupts(); } while (0)
 
-#define MEM1_SIZE (24u << 20)
-#define MEM2_SIZE (64u << 20)
+// Memory is one window at a fixed address (guest_memory.h). An access costs a mask, one
+// compare that sends the hardware registers to hw_read and hw_write, and the access
+// itself: no pointer to load and no range to look up. The hardware block is masked
+// 0x08000000 to 0x0fffffff, which also holds the picture memory at 0xc8000000.
+static inline int is_hardware(uint32_t address) { return (address & 0x38000000u) == 0x08000000u; }
+static inline uint8_t *flat(uint32_t address) { return GUEST_BASE + (address & 0x3fffffffu); }
 
+// A pointer for runtime code that copies whole blocks (DMA, the disc, graphics), or 0
+// where there's no memory to point at.
 static inline uint8_t *host(uint32_t address) {
   uint32_t physical = address & 0x3fffffff;
-  if (physical < MEM1_SIZE) return mem1 + physical;
-  if (physical >= 0x10000000 && physical < 0x10000000 + MEM2_SIZE) return mem2 + physical - 0x10000000;
+  if (physical < MEM1_SIZE || physical - MEM2_START < MEM2_SIZE || physical - LOCKED_CACHE_PHYSICAL < LOCKED_CACHE_SIZE) {
+    return GUEST_BASE + physical;
+  }
   return 0;
 }
 
-static inline uint32_t rd8(uint32_t a) {
-  uint8_t *p = host(a);
-  return p ? *p : hw_read(a, 1);
+#define GUEST_LOAD(bits, swap)                                  \
+  static inline uint32_t rd##bits(uint32_t a) {                 \
+    if (__builtin_expect(is_hardware(a), 0)) return hw_read(a, bits / 8); \
+    uint##bits##_t v;                                           \
+    memcpy(&v, flat(a), bits / 8);                              \
+    return swap(v);                                             \
+  }                                                             \
+  /* The stack is always memory, so r1's accesses skip the check (emit.py). */ \
+  static inline uint32_t rd##bits##s(uint32_t a) {              \
+    uint##bits##_t v;                                           \
+    memcpy(&v, flat(a), bits / 8);                              \
+    return swap(v);                                             \
+  }
+#define GUEST_STORE(bits, swap)                                 \
+  static inline void wr##bits(uint32_t a, uint32_t v) {         \
+    if (__builtin_expect(is_hardware(a), 0)) { hw_write(a, v & (uint32_t)(uint##bits##_t)~0u, bits / 8); return; } \
+    uint##bits##_t s = swap((uint##bits##_t)v);                 \
+    memcpy(flat(a), &s, bits / 8);                              \
+  }                                                             \
+  static inline void wr##bits##s(uint32_t a, uint32_t v) {      \
+    uint##bits##_t s = swap((uint##bits##_t)v);                 \
+    memcpy(flat(a), &s, bits / 8);                              \
+  }
+#define NO_SWAP(v) (v)
+GUEST_LOAD(8, NO_SWAP)
+GUEST_LOAD(16, __builtin_bswap16)
+GUEST_LOAD(32, __builtin_bswap32)
+GUEST_STORE(8, NO_SWAP)
+GUEST_STORE(16, __builtin_bswap16)
+GUEST_STORE(32, __builtin_bswap32)
+
+static inline uint64_t rd64(uint32_t a) {
+  if (__builtin_expect(is_hardware(a), 0)) return ((uint64_t)hw_read(a, 4) << 32) | hw_read(a + 4, 4);
+  uint64_t v;
+  memcpy(&v, flat(a), 8);
+  return __builtin_bswap64(v);
 }
-static inline uint32_t rd16(uint32_t a) {
-  uint8_t *p = host(a);
-  if (!p) return hw_read(a, 2);
-  uint16_t v;
-  memcpy(&v, p, 2);
-  return __builtin_bswap16(v);
+static inline uint64_t rd64s(uint32_t a) {
+  uint64_t v;
+  memcpy(&v, flat(a), 8);
+  return __builtin_bswap64(v);
 }
-static inline uint32_t rd32(uint32_t a) {
-  uint8_t *p = host(a);
-  if (!p) return hw_read(a, 4);
-  uint32_t v;
-  memcpy(&v, p, 4);
-  return __builtin_bswap32(v);
+static inline void wr64(uint32_t a, uint64_t v) {
+  if (__builtin_expect(is_hardware(a), 0)) {
+    hw_write(a, (uint32_t)(v >> 32), 4);
+    hw_write(a + 4, (uint32_t)v, 4);
+    return;
+  }
+  uint64_t s = __builtin_bswap64(v);
+  memcpy(flat(a), &s, 8);
 }
-static inline uint64_t rd64(uint32_t a) { return ((uint64_t)rd32(a) << 32) | rd32(a + 4); }
-static inline void wr8(uint32_t a, uint32_t v) {
-  uint8_t *p = host(a);
-  if (p) *p = (uint8_t)v; else hw_write(a, v & 0xff, 1);
+static inline void wr64s(uint32_t a, uint64_t v) {
+  uint64_t s = __builtin_bswap64(v);
+  memcpy(flat(a), &s, 8);
 }
-static inline void wr16(uint32_t a, uint32_t v) {
-  uint8_t *p = host(a);
-  if (!p) { hw_write(a, v & 0xffff, 2); return; }
-  uint16_t s = __builtin_bswap16((uint16_t)v);
-  memcpy(p, &s, 2);
-}
-static inline void wr32(uint32_t a, uint32_t v) {
-  uint8_t *p = host(a);
-  if (!p) { hw_write(a, v, 4); return; }
-  uint32_t s = __builtin_bswap32(v);
-  memcpy(p, &s, 4);
-}
-static inline void wr64(uint32_t a, uint64_t v) { wr32(a, (uint32_t)(v >> 32)); wr32(a + 4, (uint32_t)v); }
 
 static inline float as_float(uint32_t v) { float f; memcpy(&f, &v, 4); return f; }
 static inline uint32_t float_bits(float f) { uint32_t v; memcpy(&v, &f, 4); return v; }

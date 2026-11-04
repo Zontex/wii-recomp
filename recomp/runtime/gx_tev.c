@@ -15,7 +15,7 @@ enum {
   BP_KONST_SELECT = 0xf6, SWAP_TABLES = 4, COLOR_VALUE_MASK = 0x7ff, STAGE_COUNT_SHIFT = 10, STAGE_COUNT_MASK = 15,
   BP_Z_TEXTURE_BIAS = 0xf4, BP_Z_TEXTURE = 0xf5, BP_Z_MODE = 0x40, Z_TEST_BIT = 0, Z_UPDATE_BIT = 4, BP_PIXEL_FORMAT = 0x43, EARLY_DEPTH_BIT = 6,
   BP_INDIRECT_MATRIX = 0x06, BP_INDIRECT_STAGE = 0x10, BP_INDIRECT_SCALE = 0x25, BP_INDIRECT_SOURCE = 0x27,
-  BP_TEXTURE_MODE_LOW = 0x80, BP_TEXTURE_MODE_HIGH = 0xa0, MODE_MIP_SHIFT = 5, MODE_DIAGONAL_BIT = 8, MODE_BIAS_SHIFT = 9, BIAS_STEPS = 32, BIASES_PER_VALUE = 4,
+  BP_TEXTURE_MODE_LOW = 0x80, BP_TEXTURE_MODE_HIGH = 0xa0, MODE_MAGNIFY_BIT = 4, MODE_MIP_SHIFT = 5, MODE_MINIFY_BIT = 7, MODE_DIAGONAL_BIT = 8, MODE_BIAS_SHIFT = 9, BIAS_STEPS = 32, BIASES_PER_VALUE = 4,
   BP_COORDINATE_SCALE = 0x30, COORDINATE_SCALE_MASK = 0xffff, BP_IMAGE_LOW = 0x88, BP_IMAGE_HIGH = 0xa8, MATRIX_WORDS = 3, MATRIX_VALUE_BITS = 11, MATRIX_ONE = 1024, MATRIX_SCALE_ZERO = 17,
   INDIRECT_COUNT_SHIFT = 16, INDIRECT_COUNT_MASK = 7,
   BP_FOG_RANGE = 0xe8, BP_FOG_A = 0xee, BP_FOG_B_MAGNITUDE = 0xef, BP_FOG_B_SHIFT = 0xf0, BP_FOG_C = 0xf1, BP_FOG_COLOR = 0xf2,
@@ -173,7 +173,12 @@ static void read_map_biases(TevKey *key, TevValues *values, unsigned maps) {
     if (!(maps & (1u << map))) continue;
     uint32_t mode = gx.bp[map < 4 ? BP_TEXTURE_MODE_LOW + map : BP_TEXTURE_MODE_HIGH + map - 4];
     int8_t bias = (int8_t)(mode >> MODE_BIAS_SHIFT);
-    if ((mode >> MODE_DIAGONAL_BIT) & 1) key->diagonal_maps |= (uint8_t)(1u << map);
+    // The SDK sets the diagonal bit on nearly every texture, but the level of detail only
+    // changes the result where it picks a mip level or chooses between a magnify and a
+    // minify filter that differ. Elsewhere the plain lookup is the same and much cheaper:
+    // textureGrad costs a single full-screen draw 5 ms on the Pi 5's GPU.
+    int levels_matter = ((mode >> MODE_MIP_SHIFT) & 3) || ((mode >> MODE_MAGNIFY_BIT) & 1) != ((mode >> MODE_MINIFY_BIT) & 1);
+    if (((mode >> MODE_DIAGONAL_BIT) & 1) && levels_matter) key->diagonal_maps |= (uint8_t)(1u << map);
     if (!((mode >> MODE_MIP_SHIFT) & 3) || !bias) continue;
     key->biased_maps |= (uint8_t)(1u << map);
     values->map_bias[map / BIASES_PER_VALUE][map % BIASES_PER_VALUE] = (float)bias / BIAS_STEPS;

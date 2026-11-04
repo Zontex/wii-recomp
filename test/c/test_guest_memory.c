@@ -1,0 +1,80 @@
+// The guest memory window: mirrors, the hardware block, the locked cache, the stack
+// accessors, and a guard page a game touches.
+#include <stdio.h>
+#include <string.h>
+
+#include "cpu.h"
+
+Cpu cpu;
+static int failures;
+#define CHECK_EQ(got, want) do { unsigned long long g = (got), w = (want); \
+  if (g != w) { printf("FAILED line %d: %s = %llx, wanted %llx\n", __LINE__, #got, g, w); failures++; } } while (0)
+
+static uint32_t hardware_reads, hardware_writes, last_address, last_value;
+uint32_t hw_read(uint32_t address, int bytes) { hardware_reads++; last_address = address; return 0x1234u + (uint32_t)bytes; }
+void hw_write(uint32_t address, uint32_t value, int bytes) { (void)bytes; hardware_writes++; last_address = address; last_value = value; }
+
+static char gap_id[64];
+static uint32_t gap_detail;
+static int gap_count;
+void gap_hit(const char *id, uint32_t detail) { snprintf(gap_id, sizeof gap_id, "%s", id); gap_detail = detail; gap_count++; }
+
+int main(void) {
+  guest_memory_init();
+
+  // MEM1 is the same memory at 0x00, 0x80 and 0xc0, and MEM2 at 0x10, 0x90 and 0xd0.
+  wr32(0x80001000u, 0xdeadbeefu);
+  CHECK_EQ(rd32(0xc0001000u), 0xdeadbeefu);
+  CHECK_EQ(rd32(0x00001000u), 0xdeadbeefu);
+  CHECK_EQ(rd8(0x80001001u), 0xad);
+  CHECK_EQ(rd16(0x80001002u), 0xbeef);
+  CHECK_EQ(mem1[0x1000], 0xde);
+  wr64(0x90000010u, 0x0102030405060708ull);
+  CHECK_EQ(rd64(0xd0000010u), 0x0102030405060708ull);
+  CHECK_EQ(rd32(0x10000014u), 0x05060708u);
+  CHECK_EQ(mem2[0x10], 0x01);
+  CHECK_EQ(host(0x93ffffffu) - mem2, 0x3ffffffu);
+
+  // The hardware block and the picture memory go to hw_read and hw_write.
+  CHECK_EQ(rd32(0xcc003000u), 0x1238u);
+  CHECK_EQ(last_address, 0xcc003000u);
+  wr16(0xcd006c00u, 0x12345u);
+  CHECK_EQ(last_value, 0x2345u);
+  CHECK_EQ(rd32(0xc8000000u), 0x1238u);
+  CHECK_EQ(hardware_reads, 2);
+  CHECK_EQ(hardware_writes, 1);
+  CHECK_EQ(host(0xcc003000u) == 0, 1);
+
+  // The locked cache is memory too.
+  wr32(0xe0000100u, 0xcafef00du);
+  CHECK_EQ(rd32(0xe0000100u), 0xcafef00du);
+  CHECK_EQ(host(0xe0003fffu) != 0, 1);
+  CHECK_EQ(host(0xe0004000u) == 0, 1);
+  CHECK_EQ(hardware_reads, 2);
+
+  // The stack accessors reach the same memory without the check.
+  wr32s(0x80002000u, 0x11223344u);
+  CHECK_EQ(rd32(0x80002000u), 0x11223344u);
+  wr64s(0x80002008u, 0xaabbccddeeff0011ull);
+  CHECK_EQ(rd64s(0x80002008u), 0xaabbccddeeff0011ull);
+  CHECK_EQ(rd16s(0x80002002u), 0x3344);
+
+  // Past the end of MEM1 a Wii has nothing. The access still works, reading zero and
+  // then what was written, and it's named.
+  CHECK_EQ(rd32(0x81900000u), 0);
+  wr32(0x81900004u, 7);
+  CHECK_EQ(rd32(0x81900004u), 7);
+  guest_memory_report();
+  CHECK_EQ(strcmp(gap_id, "cpu.dsi_isi"), 0);
+  CHECK_EQ(gap_detail, 0x01900000u);
+  CHECK_EQ(gap_count, 1);
+  guest_memory_report();
+  CHECK_EQ(gap_count, 1);
+
+  // Starting over clears memory.
+  guest_memory_reserve();
+  CHECK_EQ(rd32(0x80001000u), 0);
+
+  if (!failures) printf("ok\n");
+  return failures != 0;
+}

@@ -20,13 +20,22 @@ enum {
 #define GQR_BASE 912
 #define INTERRUPTS_ENABLED 0x8000u
 
-// On Arm a function keeps its return address in its stack frame, and save_context
-// returns before anything resumes it, so a ucontext taken inside it would come back
-// to a frame already overwritten. There, a stub records the caller's own registers.
+// save_context returns before anything resumes it, so a ucontext taken inside it would
+// come back to a frame already overwritten: its saved registers and return address are
+// on the host stack, and later calls reuse that space. So a stub records the caller's
+// own registers instead, and load_context returns straight to the caller with them. On
+// the Intel Mac the old way only worked while no later call happened to overwrite those
+// slots; the flat guest memory changed the code's frames, and rbx came back as a guest
+// value.
 #if defined(__aarch64__)
 #define RECORDS_CALLER 1
 typedef struct {
   uint64_t x19_to_x30[12], stack, d8_to_d15[8], padding;
+} CallerRegisters;
+#elif defined(__x86_64__)
+#define RECORDS_CALLER 1
+typedef struct {
+  uint64_t rbx, rbp, r12, r13, r14, r15, return_address, stack;
 } CallerRegisters;
 #endif
 
@@ -79,6 +88,20 @@ static Slot *slot_for(uint32_t guest) {
 #define SYMBOL(prefix, name) NAME_WITH(prefix, name)
 
 // Puts the registers back and returns from the save_context that recorded them.
+#if defined(__x86_64__)
+__attribute__((naked, noreturn)) static void return_to_caller(const CallerRegisters *caller) {
+  __asm__(
+      "movq 0(%rdi), %rbx\n"
+      "movq 8(%rdi), %rbp\n"
+      "movq 16(%rdi), %r12\n"
+      "movq 24(%rdi), %r13\n"
+      "movq 32(%rdi), %r14\n"
+      "movq 40(%rdi), %r15\n"
+      "movq 48(%rdi), %rax\n"
+      "movq 56(%rdi), %rsp\n"
+      "jmpq *%rax\n");
+}
+#else
 __attribute__((naked, noreturn)) static void return_to_caller(const CallerRegisters *caller) {
   __asm__(
       "ldp x19, x20, [x0, #0]\n"
@@ -95,6 +118,7 @@ __attribute__((naked, noreturn)) static void return_to_caller(const CallerRegist
       "ldp d14, d15, [x0, #152]\n"
       "ret\n");
 }
+#endif
 #endif
 
 static uint32_t condition_bits(void) {
@@ -182,6 +206,28 @@ void load_context(void) {
 void save_context_recorded(const CallerRegisters *caller);
 
 // Returns 0 the first time, and 1 when something loads this context again.
+#if defined(__x86_64__)
+// On entry the return address is at the stack pointer, and the caller's stack is 8 above.
+// 72 bytes keep the stack 16-aligned for the call.
+__attribute__((naked)) void save_context(void) {
+  __asm__(
+      "subq $72, %rsp\n"
+      "movq %rbx, 0(%rsp)\n"
+      "movq %rbp, 8(%rsp)\n"
+      "movq %r12, 16(%rsp)\n"
+      "movq %r13, 24(%rsp)\n"
+      "movq %r14, 32(%rsp)\n"
+      "movq %r15, 40(%rsp)\n"
+      "movq 72(%rsp), %rax\n"
+      "movq %rax, 48(%rsp)\n"
+      "leaq 80(%rsp), %rax\n"
+      "movq %rax, 56(%rsp)\n"
+      "movq %rsp, %rdi\n"
+      "call " SYMBOL(__USER_LABEL_PREFIX__, save_context_recorded) "\n"
+      "addq $72, %rsp\n"
+      "ret\n");
+}
+#else
 __attribute__((naked)) void save_context(void) {
   __asm__(
       "sub sp, sp, #176\n"
@@ -203,6 +249,7 @@ __attribute__((naked)) void save_context(void) {
       "add sp, sp, #176\n"
       "ret\n");
 }
+#endif
 
 void save_context_recorded(const CallerRegisters *caller) {
   uint32_t c = cpu.r[3], return_pc = cpu.lr;

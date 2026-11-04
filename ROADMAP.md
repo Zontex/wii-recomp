@@ -129,6 +129,7 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 0 to 2.
 - [x] Titles, tickets and ES requests as the Wii Menu uses them
 - [x] A private console folder holding its own copy of the Wii storage, the Wii Menu and a drive slot (`recomp/tools/prepare_console.py`)
 - [x] Clean "no network" answers for WiiConnect24, the SD card slot and sockets
+- [x] Each IOS version's own memory at the top of MEM2, so a game's heap gets the full arena it was sized for
 - [ ] Storage that behaves like a NAND: open modes, owners and permissions, real usage, and writes a power cut can't corrupt
 - [ ] Every game's direct start through the same path
 - [ ] Fewer replacements of Nintendo's own library code, as the hardware and IOS models take their place
@@ -137,7 +138,8 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 0 to 2.
 
 - [x] A virtual Bluetooth chip, driven by each game's own Bluetooth code, with four remote slots and the Balance Board's
 - [x] A simulated Wii Remote with an IR camera for the pointer, a Classic Controller with attachment encryption, and a simulated Balance Board
-- [ ] Real Wii Remotes and the Balance Board, their reports passed straight through to the game, on Linux and on macOS if it allows raw access
+- [x] Real Wii Remotes and the Balance Board passed straight through to the game's own code: raw Bluetooth sockets on Linux, IOKit's HID on the Mac, the board in its own slot, remotes keeping their player number, waking with a button, and staying connected across the console's hand-over. Tested with stand-ins and with Wii Fit Plus on `WII_RECOMP_REMOTES=loopback`
+- [ ] Real remotes and a real board tried on the Pi and the Mac, with the report rate measured
 - [ ] Switch Pro Controllers and Joy-Cons through SDL2, as a Classic Controller or a Wii Remote and Nunchuk, with motion as tilt and the gyro as the pointer
 - [ ] Four players, and a settings file with sensible defaults
 
@@ -168,7 +170,8 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - [x] The Wii Menu at 60 fps across 16 screens on an Intel Mac
 - [x] A covered window no longer slowed to 10 fps by macOS
 - [x] 1080p on the Raspberry Pi 5, through tile-friendly passes
-- [ ] Every Wii Fit Plus scene at 60 fps on the Pi: the step-off screen holds 48 and the Body Test 55 to 60
+- [x] The Wii's memory as one window at a fixed address: a load or store is a few instructions with no pointer to load, and the stack skips the hardware check. Wii Fit Plus's translated code shrank by about 40%
+- [ ] Every Wii Fit Plus scene at 60 fps on the Pi: the step-off screen and the Body Test hold 60, and a step-on transition drops to about 32
 - [ ] A 60 fps option for 30 fps games, kept per title only where movement, animation and cutscene timing match at both rates
 
 ### 12. Compatibility (planned)
@@ -188,6 +191,7 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - An interpreter now catches any code the translator missed, and a differential test checks both against each other for every instruction family.
 - The recompiled Wii Menu runs at 60 fps through its screens, and starts Wii Fit Plus natively from a recompiled disc image in its drive.
 - On the Mac, the game no longer freezes for a second when macOS holds on to the window's pictures.
+- Real Wii Remotes and the Balance Board can drive a game's own Bluetooth code, and the Wii's memory became one window at a fixed address, making each load or store a few instructions.
 
 ## Out of scope
 

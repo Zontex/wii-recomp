@@ -11,6 +11,8 @@
 #include "cpu.h"
 #include "title.h"
 #include "ios.h"
+#include "input.h"
+#include "remote_link.h"
 #include "wii_remote.h"
 
 enum {
@@ -22,7 +24,7 @@ enum {
   OP_ACCEPT_CONNECTION = 0x0409, OP_REMOTE_NAME = 0x0419, OP_REMOTE_FEATURES = 0x041b, OP_REMOTE_VERSION = 0x041d, OP_CLOCK_OFFSET = 0x041f,
   EVENT_DISCONNECTED = 0x05, EVENT_PACKET_TYPE_CHANGED = 0x1d,
   OP_DISCONNECT = 0x0406, OP_PACKET_TYPE = 0x040f, OP_LINK_POLICY = 0x080d, OP_SUPERVISION_TIMEOUT = 0x0c37,
-  OP_SCAN_ENABLE = 0x0c1a, PAGE_SCAN = 2, LINK_ACL = 1, NAME_BYTES = 248, PARAMETERS = 3, HANDLE_MASK = 0x0fff,
+  OP_SCAN_ENABLE = 0x0c1a, OP_RESET = 0x0c03, REASON_REMOTE_LEFT = 0x13, PAGE_SCAN = 2, LINK_ACL = 1, NAME_BYTES = 248, PARAMETERS = 3, HANDLE_MASK = 0x0fff,
   OP_READ_LOCAL_VERSION = 0x1001, OP_READ_LOCAL_FEATURES = 0x1003, OP_READ_BUFFER_SIZE = 0x1005, OP_READ_ADDRESS = 0x1009,
   STATUS_OK = 0, ACL_PACKET_BYTES = 339, SCO_PACKET_BYTES = 64, ACL_PACKETS = 10, SCO_PACKETS = 0,
 };
@@ -50,31 +52,66 @@ static const uint8_t chip_address[6] = {0x11, 0x22, 0x33, 0x44, 0x55, 0x66};
 static const uint8_t remote_class[3] = {0x04, 0x25, 0x00};
 static const char remote_name[] = "Nintendo RVL-CNT-01", board_name[] = "Nintendo RVL-WBC-01";
 
-// A device's address ends in its slot, so either can be found from the other.
+// A device's address ends in its slot, so either can be found from the other. A real
+// device (remote_link.h) takes a slot's address too, so the game never sees its own:
+// pairing with the real device is the backend's business.
+enum { SOURCE_NONE, SOURCE_SIMULATED, SOURCE_LINK };
 typedef struct {
-  int present, called, connected;
+  int present, called, connected, source;
+  int hung_up;      // The game hung up, so the device stays quiet until a button wakes it.
+  uint64_t called_at;
   int key_deleted;  // The game deleted its stored link key and hasn't written one since.
   uint8_t address[6];
 } Device;
 
 static Device devices[BLUETOOTH_DEVICES];
 static int scanning;
+static void queue_event(int code, const uint8_t *parameters, uint32_t bytes);
 
 static uint32_t handle_of(int device) { return BLUETOOTH_FIRST_HANDLE + (uint32_t)device; }
 static const char *name_of(int device) { return device == BLUETOOTH_BOARD ? board_name : remote_name; }
 
-// The simulated remote is always there. The board is there for games built to use one,
-// which are the ones with the board's calibration flag.
+// The simulated remote is there unless a real one holds its slot, and the simulated board
+// likewise, in games built to use one: the ones with the board's calibration flag. With
+// WII_RECOMP_REMOTES=real or loopback only linked devices are there.
+static int simulated_here(int device) {
+  int mode = link_mode(), wanted = device == 0 || (device == BLUETOOTH_BOARD && title->calibration_flag);
+  if (mode == LINK_SIMULATED) return wanted;
+  return mode == LINK_AUTO && wanted && !link_linked(device);
+}
+
+// Every slot is registered with the game when real devices may come, so one that links
+// later is a device the game already knows. With simulated ones only, just those.
+static int registered(int device) { return link_mode() == LINK_SIMULATED ? simulated_here(device) : 1; }
+
+// A device leaves: the game hears the link dropped, as when a remote's batteries go.
+static void drop(int device, int reason) {
+  uint32_t handle = BLUETOOTH_FIRST_HANDLE + (uint32_t)device;
+  if (devices[device].connected) {
+    const uint8_t gone[] = {STATUS_OK, (uint8_t)handle, (uint8_t)(handle >> 8), (uint8_t)reason};
+    queue_event(EVENT_DISCONNECTED, gone, sizeof gone);
+    bluetooth_forget_channels(device);
+  }
+  devices[device].connected = devices[device].called = 0;
+}
+
 static void find_devices(void) {
-  static int found;
-  if (found) return;
-  found = 1;
-  devices[0].present = 1;
-  devices[BLUETOOTH_BOARD].present = title->calibration_flag != 0;
+  static int addressed;
+  link_start();
+  if (!addressed) {
+    addressed = 1;
+    for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
+      static const uint8_t base[6] = {0x01, 0x00, 0x1f, 0x19, 0x00, 0x00};
+      memcpy(devices[i].address, base, sizeof base);
+      devices[i].address[5] = (uint8_t)i;
+    }
+  }
   for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
-    static const uint8_t base[6] = {0x01, 0x00, 0x1f, 0x19, 0x00, 0x00};
-    memcpy(devices[i].address, base, sizeof base);
-    devices[i].address[5] = (uint8_t)i;
+    int source = link_linked(i) ? SOURCE_LINK : simulated_here(i) ? SOURCE_SIMULATED : SOURCE_NONE;
+    if (source != devices[i].source && devices[i].connected) drop(i, REASON_REMOTE_LEFT);
+    if (source != devices[i].source) devices[i].hung_up = 0;
+    devices[i].source = source;
+    devices[i].present = source != SOURCE_NONE;
   }
 }
 
@@ -90,6 +127,8 @@ static int device_by_address(const uint8_t *address) {
   }
   return -1;
 }
+
+static void next_device_calls(void);
 
 static Packet packets[MAX_PACKETS];
 static int packet_count;
@@ -118,6 +157,7 @@ static void send_events(void) {
 
 static void queue_event(int code, const uint8_t *parameters, uint32_t bytes) {
   if (event_count == MAX_EVENTS) { fprintf(stderr, "stop: bluetooth: too many events waiting\n"); exit(11); }
+  if (getenv("WII_RECOMP_BLUETOOTH_LOG")) fprintf(stderr, "bluetooth event %02x, %u bytes\n", code, bytes);
   Event *event = &events[event_count++];
   event->bytes[0] = (uint8_t)code;
   event->bytes[1] = (uint8_t)bytes;
@@ -196,7 +236,27 @@ static void receive_data(uint32_t address, uint32_t bytes) {
   packet_done(handle);
 }
 
+// Devices arrive, leave and wake between the game's commands. One that called and got
+// no answer for ten seconds calls again, as a real remote does.
+enum { TICKS_PER_SECOND = 60750000, CALL_AGAIN_SECONDS = 10 };
 void bluetooth_update(uint64_t now) {
+  link_update(now);
+  for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
+    if (link_take_lost(i)) drop(i, REASON_REMOTE_LEFT);
+    if (link_take_wake(i)) {  // Newly linked, or woken by a press: it may call again.
+      if (devices[i].connected) drop(i, REASON_REMOTE_LEFT);
+      devices[i].hung_up = 0;
+    }
+  }
+  find_devices();
+  for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
+    // A simulated device the game hung up on wakes with a press, as a real one does.
+    if (devices[i].hung_up && devices[i].source == SOURCE_SIMULATED && input_buttons()) devices[i].hung_up = devices[i].called = 0;
+    if (devices[i].called && !devices[i].connected && now - devices[i].called_at > (uint64_t)CALL_AGAIN_SECONDS * TICKS_PER_SECOND) {
+      devices[i].called = 0;
+    }
+  }
+  next_device_calls();
   for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
     if (devices[i].connected) wii_remote_update(i, now);
   }
@@ -214,12 +274,13 @@ static void next_device_calls(void) {
     if (devices[i].present && devices[i].called && !devices[i].connected) return;  // Still being answered.
   }
   for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
-    if (!devices[i].present || devices[i].called) continue;
+    if (!devices[i].present || devices[i].called || devices[i].hung_up || devices[i].connected) continue;
     uint8_t parameters[10];
     memcpy(parameters, devices[i].address, 6);
     memcpy(parameters + 6, remote_class, sizeof remote_class);
     parameters[9] = LINK_ACL;
     devices[i].called = 1;
+    devices[i].called_at = time_base();
     queue_event(EVENT_CONNECTION_REQUEST, parameters, sizeof parameters);
     return;
   }
@@ -279,6 +340,7 @@ static int rare_command(int opcode, uint32_t parameters, uint32_t handle, const 
     const uint8_t done[] = {STATUS_OK, 0};
     command_status(opcode);
     queue_event(EVENT_INQUIRY_COMPLETE, done, sizeof done);
+    link_guest_searching();  // A real one in pairing mode is linked, and calls in.
   } else if (opcode == OP_INQUIRY_CANCEL) {
     const uint8_t results[] = {STATUS_OK};
     command_complete(opcode, results, sizeof results);
@@ -357,7 +419,7 @@ static void run_command(uint32_t address, uint32_t bytes) {
     // Every device we have, then how many. Nothing checks the keys: both ends are here.
     int count = 0;
     for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
-      if (!devices[i].present || devices[i].key_deleted) continue;
+      if (!registered(i) || devices[i].key_deleted) continue;
       uint8_t keys[1 + 6 + LINK_KEY_BYTES] = {1};
       memcpy(keys + 1, devices[i].address, 6);
       memset(keys + 7, 0x5a, LINK_KEY_BYTES);
@@ -370,7 +432,7 @@ static void run_command(uint32_t address, uint32_t bytes) {
     // An address, then whether to delete every key. Answers how many went.
     int all = rd8(parameters + 6), deleted = 0;
     for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
-      if (!devices[i].present || devices[i].key_deleted || (!all && !same_address(parameters, devices[i].address))) continue;
+      if (!registered(i) || devices[i].key_deleted || (!all && !same_address(parameters, devices[i].address))) continue;
       devices[i].key_deleted = 1;
       deleted++;
     }
@@ -381,7 +443,7 @@ static void run_command(uint32_t address, uint32_t bytes) {
     int count = rd8(parameters), written = 0;
     for (int k = 0; k < count; k++) {
       for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
-        if (devices[i].present && same_address(parameters + 1 + (uint32_t)k * (6 + LINK_KEY_BYTES), devices[i].address)) {
+        if (registered(i) && same_address(parameters + 1 + (uint32_t)k * (6 + LINK_KEY_BYTES), devices[i].address)) {
           devices[i].key_deleted = 0;
           written++;
         }
@@ -423,9 +485,22 @@ static void run_command(uint32_t address, uint32_t bytes) {
     command_status(opcode);
     queue_event(EVENT_DISCONNECTED, gone, sizeof gone);
     if (device >= 0) {
-      devices[device].connected = 0;
+      devices[device].connected = devices[device].called = 0;
+      devices[device].hung_up = 1;
       bluetooth_forget_channels(device);
+      link_guest_disconnected(device);  // A real device turns off, or sleeps until a press.
     }
+  } else if (opcode == OP_RESET) {
+    // A new title's Bluetooth code starts the chip over: every link drops, and the devices
+    // call again once it scans, as remotes reconnect after a Wii starts a game.
+    for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
+      if (devices[i].connected) bluetooth_forget_channels(i);
+      devices[i].connected = devices[i].called = devices[i].hung_up = 0;
+    }
+    scanning = 0;
+    packet_count = 0;
+    const uint8_t results[] = {STATUS_OK};
+    command_complete(opcode, results, sizeof results);
   } else if (opcode == OP_REMOTE_NAME) {
     command_status(opcode);
     if (device_by_address(named_address) >= 0) remote_name_complete(device_by_address(named_address));
@@ -474,14 +549,14 @@ void bluetooth_register_remote(uint8_t *settings, size_t bytes) {
       fprintf(stderr, "stop: bluetooth: the settings' list of paired devices is %u bytes, too short\n", value_bytes);
       exit(11);
     }
-    int registered = 0;
+    int count = 0;
     for (int device = 0; device < BLUETOOTH_DEVICES; device++) {
-      if (!devices[device].present) continue;
-      write_record(value + 1 + registered++ * PAIRED_RECORD_BYTES, device);
+      if (!registered(device)) continue;
+      write_record(value + 1 + count++ * PAIRED_RECORD_BYTES, device);
       write_record(value + active_at + device * PAIRED_RECORD_BYTES, device);
     }
-    fprintf(stderr, "bluetooth: registered %d simulated devices, was %u paired\n", registered, value[0]);
-    value[0] = (uint8_t)registered;
+    fprintf(stderr, "bluetooth: registered %d devices, was %u paired\n", count, value[0]);
+    value[0] = (uint8_t)count;
     return;
   }
 }

@@ -16,6 +16,8 @@ This project is licensed under the GNU General Public License, version 2 or late
   - Paired devices (`recomp/runtime/bluetooth.c`, `bluetooth_register_remote`): the layout of the settings' BT.DINF, with the board in the fifth active record, follows `Source/Core/Core/IOS/USB/Bluetooth/BTEmu.cpp` and `BTEmu.h`.
   - Serial interface (`recomp/runtime/si.c`): the communication and status register bits, and an empty port's transfer ending with a communication error and "no response", follow `Source/Core/Core/HW/SI/SI.cpp` and `SI.h`.
   - Disc drive (`recomp/runtime/dvd.c`, `drive.c`): the drive request numbers, the open-partition buffers, and the unencrypted area's layout of partition table and region follow `Source/Core/Core/IOS/DI/DI.cpp` and `Source/Core/DiscIO/VolumeWii.cpp`.
+  - Real Wii Remotes (`recomp/runtime/remote_link.c`, `remote_link_linux.c`, `remote_link_mac.c`): reaching a remote over raw L2CAP sockets on PSM 0x11 and 0x13, searching with the LAP for devices in pairing mode, and telling the board from a remote by its attachment ID at 0xa400fe follow `Source/Core/Core/HW/WiimoteReal/IOLinux.cpp` and `WiimoteReal.cpp` (`IsBalanceBoard`). Using IOKit's HID on the Mac follows Dolphin's move to `IOhidapi.cpp`.
+- [WiiCompiled](https://github.com/patchzyy/Wiicompiled) (GPL-3.0) showed two designs we built our own versions of, with none of its code: passing a physical Wii Remote's reports straight to the game's own Bluetooth code, and a flat guest memory at a fixed host address.
 - [Hector Martin (marcan)](https://github.com/marcan) and others documented the Wii Remote and its attachments.
 - [WiiBrew](https://wiibrew.org) and YAGCD document the hardware.
 

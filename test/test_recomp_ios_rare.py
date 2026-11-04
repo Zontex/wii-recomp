@@ -1,6 +1,7 @@
 """Rarely used IOS and Bluetooth requests, each answered as a Wii would, in small C harnesses."""
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -35,9 +36,20 @@ class RareRequests(unittest.TestCase):
         self.assertEqual((saves / "title/b").read_bytes(), b"yes!")
 
     def test_bluetooth_rare_commands_and_channels(self):
-        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "gaps.c"]
+        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "remote_link.c", "gaps.c"]
         result = self.build_and_run([HERE / "c/test_bluetooth_rare.c"] + [RUNTIME / name for name in sources])
         self.assertIn("gap: ctl.sdp_queries 0x1", result.stderr)  # Refused service discovery is reported.
+
+    def test_real_devices_through_the_link(self):
+        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "remote_link.c", "gaps.c"]
+        result = self.build_and_run([HERE / "c/test_remote_link.c"] + [RUNTIME / name for name in sources], self.folder / "remotes.txt")
+        self.assertIn("remotes: the board 00:23:31:00:00:09 is player 5", result.stderr)
+        self.assertIn("00:23:31:00:00:09 4", (self.folder / "remotes.txt").read_text())  # Its slot is remembered.
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux's Bluetooth backend")
+    def test_linux_remote_sockets(self):
+        sources = [HERE / "c/test_remote_link_linux.c", RUNTIME / "remote_link_linux.c", RUNTIME / "remote_link.c"]
+        self.build_and_run(sources, self.folder / "remotes.txt")
 
 
 if __name__ == "__main__":

@@ -29,7 +29,7 @@ The same system runs on macOS, which is where most of it is developed, with othe
 | **Wii Menu 4.3** | Runs natively at 60 fps on an Intel Mac through the health warning, first-time setup, channel grid and settings. With a recompiled disc image in its drive, it shows the game's banner and starts it. |
 | **The Last Story** (SLSEXJ) | Reaches gameplay with a simulated Wii Remote and Classic Controller, through the game's own Bluetooth code. Some surfaces draw wrong, and heavy scenes are slow. |
 
-Physical Wii Remotes and the Balance Board aren't supported yet. When a game uses a hardware feature the runtime doesn't have, the runtime logs the feature by name. Each one is fixed once, for every game.
+Real Wii Remotes and the Balance Board connect over Bluetooth on Linux and the Mac, and their reports go straight to the game's own code. That path is tested with stand-ins and hasn't met real hardware yet; see [Real Wii Remotes](recomp/README.md#real-wii-remotes-and-the-balance-board). When a game uses a hardware feature the runtime doesn't have, the runtime logs the feature by name. Each one is fixed once, for every game.
 
 ## How it works
 
@@ -51,7 +51,7 @@ flowchart LR
 1. **Find the code.** The translator follows branches and pointers from the program's entry point, so no symbols are needed. `--all-code` also sweeps for code that is reached only through tables built at run time.
 2. **Find system functions by their contents.** The few system functions the runtime replaces are matched by hashes of their instructions, so a game needs no address list. If a match is unclear, the build stops instead of guessing.
 3. **Write C.** Each PowerPC instruction becomes plain C, and clang does the optimizing. Any code the translator missed runs on a built-in PowerPC interpreter, and is logged so the next build translates it.
-4. **Run.** The runtime models the hardware the game talks to: the graphics command stream and its timing, the Wii's colour stages as Vulkan shaders, the AX sound mixer, IOS for disc, storage and Bluetooth, and a simulated Wii Remote and Balance Board.
+4. **Run.** The runtime models the hardware the game talks to: the graphics command stream and its timing, the Wii's colour stages as Vulkan shaders, the AX sound mixer, IOS for disc, storage and Bluetooth, and real or simulated Wii Remotes and Balance Board. The Wii's memory is one block at a fixed address, so a load or store in translated code is a few instructions.
 
 The game's own code, its operating system and thread scheduler included, runs almost unchanged.
 
@@ -136,8 +136,19 @@ The tests need no Nintendo files. Set `VULKAN_SDK` to a folder with the Vulkan l
 - [`docs/hardware_inventory.md`](docs/hardware_inventory.md): every part of the console, marked done, partial or missing.
 - [`docs/native_ios.md`](docs/native_ios.md): how the native IOS runs the Wii Menu, and what comes next.
 
-## License
+## Credits
 
-GPL-2.0-or-later, see [`LICENSE`](LICENSE). Parts of the graphics and IOS models follow the behaviour of [Dolphin](https://dolphin-emu.org/), as listed in [`CREDITS.md`](CREDITS.md).
+Wii Recomp stands on years of other people's work on the Wii.
 
-Wii Recomp isn't affiliated with or endorsed by Nintendo. Wii is a trademark of Nintendo.
+- [Dolphin](https://dolphin-emu.org/) is the reference for how the hardware behaves. The graphics, IOS, Bluetooth and real Wii Remote code follow its behaviour, and every part taken from it is listed, file by file, in [`CREDITS.md`](CREDITS.md).
+- [WiiCompiled](https://github.com/patchzyy/Wiicompiled) showed two designs we built our own versions of: real Wii Remotes passed straight to a game's own code, and guest memory at a fixed address. None of its code is used.
+- [nod](https://github.com/encounter/nod) reads disc images for `extract_disc.py`.
+- [WiiBrew](https://wiibrew.org), YAGCD, and Hector Martin and others documented the console, the Wii Remote and its attachments.
+
+## Legal
+
+Wii Recomp is licensed under the GNU General Public License, version 2 or later. See [`LICENSE`](LICENSE).
+
+The repository holds no Nintendo code, data or assets: no disc images, system software, keys, saves, or code translated from a game. Everything a game needs comes from a disc you own and a Wii storage folder you made, and it's translated and compiled on your own machine. The translated output stays there. Don't share it, and don't ask for games here.
+
+Wii Recomp isn't affiliated with or endorsed by Nintendo. Wii, Wii Remote, Balance Board and Wii Fit are trademarks of Nintendo. Other names belong to their owners.

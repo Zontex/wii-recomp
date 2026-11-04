@@ -15,7 +15,7 @@ enum {
   SIGNAL_DISCONNECT = 6, SIGNAL_DISCONNECT_RESPONSE = 7, PSM_SDP = 1,
   // A connect response's result: done, no service on that PSM, or a channel to it is open already.
   CONNECT_DONE = 0, CONNECT_NO_SERVICE = 2, CONNECT_NO_ROOM = 4,
-  HID_INPUT = 0xa1, HID_OUTPUT = 0xa2,
+  HID_INPUT = 0xa1, HID_OUTPUT = 0xa2, HID_SET_OUTPUT_REPORT = 0x52,
 };
 
 static struct {
@@ -137,5 +137,7 @@ void bluetooth_receive_packet(int device, const uint8_t *packet) {
   uint32_t length = get16(packet + 4), channel = get16(packet + 6);
   const uint8_t *frame = packet + ACL_HEADER + L2CAP_HEADER;
   if (channel == CID_SIGNAL) handle_signal(device, frame);
-  else if (length && frame[0] == HID_OUTPUT) wii_remote_output(device, frame + 1, length - 1);
+  // Reports come as data on the interrupt channel, or as SET_REPORT on control, which
+  // some games use for the first few.
+  else if (length && (frame[0] == HID_OUTPUT || frame[0] == HID_SET_OUTPUT_REPORT)) wii_remote_output(device, frame + 1, length - 1);
 }

@@ -544,6 +544,24 @@ static inline int can_hold_code(uint32_t address) {
 
 static void bad_address(uint32_t address) {
   fprintf(stderr, "stop: no code at %08x (return address %08x)\n", address, cpu.lr);
+  // What a crash needs to be traced back: the registers, and the return addresses
+  // saved up the stack.
+  for (int i = 0; i < 32; i += 4)
+    fprintf(stderr, "  r%-2d %08x %08x %08x %08x\n", i, cpu.r[i], cpu.r[i + 1], cpu.r[i + 2], cpu.r[i + 3]);
+  // A bad jump is mostly a method call on a broken object, which arrives in r3.
+  for (uint32_t at = cpu.r[3], n = 0; n < 2 && host(at) && host(at + 63); n++, at = rd32(at)) {
+    fprintf(stderr, "  at %08x:", at);
+    for (int i = 0; i < 64; i += 4) fprintf(stderr, " %08x", rd32(at + i));
+    fprintf(stderr, "\n");
+  }
+  fprintf(stderr, "  ctr %08x\n  called from", cpu.ctr);
+  uint32_t frame = cpu.r[1];
+  for (int depth = 0; depth < 24 && host(frame) && host(frame + 4); depth++) {
+    frame = rd32(frame);
+    if (!frame || !host(frame + 4)) break;
+    fprintf(stderr, " %08x", rd32(frame + 4));
+  }
+  fprintf(stderr, "\n");
   exit(4);
 }
 

@@ -14,5 +14,5 @@ void fpscr_mode_changed(uint32_t fpscr) { (void)fpscr; }
 #define CHECK(test) do { if (!(test)) { printf("FAILED line %d: %s\n", __LINE__, #test); failures++; } } while (0)
 #define CHECK_EQ(got, want) do { unsigned long long g = (got), w = (want); \
   if (g != w) { printf("FAILED line %d: %s = %llx, wanted %llx\n", __LINE__, #got, g, w); failures++; } } while (0)
-static void memory_start(void) { mem1 = calloc(1, MEM1_SIZE); mem2 = calloc(1, MEM2_SIZE); }
+static void memory_start(void) { guest_memory_reserve(); }
 static int finish(void) { if (!failures) printf("ok\n"); return failures != 0; }

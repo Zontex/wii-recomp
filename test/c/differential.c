@@ -8,7 +8,8 @@
 #include "interp.h"
 
 Cpu cpu;
-uint8_t *mem1, *mem2;
+// Outside memory, guest_memory.c opens a zero page, and would name it in gaps.txt.
+void gap_hit(const char *id, uint32_t detail) { (void)id; (void)detail; }
 int interrupt_budget;
 
 // Everything guest code can do apart from registers and memory.
@@ -200,6 +201,8 @@ static uint32_t random_base(void) {
 
 static void aim_at_memory(const Case *c) {
   uint32_t base = random_base() + below(64);
+  // r1 is the stack, which is always memory: its displacement forms skip the hardware check.
+  while (c->base == 1 && c->index < 0 && (base & 0x38000000u) == 0x08000000u) base = random_base() + below(64);
   if (c->base > 0) cpu.r[c->base] = base;
   if (c->index >= 0) cpu.r[c->index] = c->base > 0 ? below(256) : base;
 }
@@ -367,8 +370,7 @@ static int check_decoding(void) {
 
 int main(int count, char **arguments) {
   int states = count > 1 ? atoi(arguments[1]) : 200, bad_cases = 0, bad_states = 0;
-  mem1 = calloc(1, MEM1_SIZE);
-  mem2 = calloc(1, MEM2_SIZE);
+  guest_memory_init();
   windows[0] = mem1 + MEM1_WINDOW;
   windows[1] = mem2 + MEM2_WINDOW;
   windows[2] = mem1;

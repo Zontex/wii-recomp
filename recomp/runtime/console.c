@@ -10,6 +10,7 @@
 
 #include "console.h"
 #include "drive.h"
+#include "remote_link.h"
 #include "title.h"
 
 #define MENU_TITLE "00000001-00000002"
@@ -66,6 +67,7 @@ void console_start(const char *program, const char *folder, int boot_disc, Boot 
   set_default("WII_RECOMP_CACHE", "cache/native");
   set_default("WII_RECOMP_DISCOVERED", "cache/discovered.txt");
   set_default("WII_RECOMP_GAPS", "cache/gaps.txt");
+  set_default("WII_RECOMP_REMOTE_SLOTS", "remotes.txt");
   char path[PATH_MAX * 2];
   snprintf(path, sizeof path, "%s/cache", console_folder);
   mkdir(path, 0755);
@@ -109,6 +111,7 @@ void console_hand_over(uint32_t address) {
 void console_restart(int boot_disc) {
   char *arguments[] = {program_path, "--console", console_folder, boot_disc ? "--boot-disc" : 0, 0};
   fprintf(stderr, "console: starting %s\n", boot_disc ? "the disc" : "the Wii Menu");
+  link_prepare_handover();  // Real remotes stay connected into the next title.
   fflush(stderr);
   execv(program_path, arguments);
   perror(program_path);

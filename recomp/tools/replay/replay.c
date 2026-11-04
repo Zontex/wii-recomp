@@ -17,12 +17,11 @@ enum {
   COMMAND_BP = 0x61, BP_COMMAND_BYTES = 5, XF_REGISTERS_START = 0x1000,
   BP_DRAW_DONE = 0x45, BP_TOKEN = 0x47, BP_TOKEN_NOW = 0x48, BP_COPY_ORIGIN = 0x49, BP_COPY_SIZE = 0x4a, BP_COPY = 0x52,
   BP_PRELOAD = 0x63, BP_LOAD_PALETTE = 0x65, BP_PERFORMANCE = 0x67, COPY_HEIGHT_SHIFT = 10,
-  MEM2_START = 0x10000000, PHYSICAL_MASK = 0x1fffffff, FRAME_NAME_DIGITS = 4,
+  PHYSICAL_MASK = 0x1fffffff, FRAME_NAME_DIGITS = 4,
   EXIT_USAGE = 2, EXIT_STOP = 10, RGB_BYTES = 3, RGBA_BYTES = 4,
 };
 
 Cpu cpu;
-uint8_t *mem1, *mem2;
 
 static uint8_t *picture;
 static int picture_width, picture_height, pictures_in_frame;
@@ -166,8 +165,7 @@ int main(int argc, char **argv) {
   if (dff->mem1_bytes > MEM1_SIZE || dff->mem2_bytes > MEM2_SIZE) stop_because(argv[1], "it was recorded with more memory than a Wii has");
   if (!dff->frame_count) stop_because(argv[1], "it holds no frames");
   make_folder(argv[2]);
-  mem1 = calloc(1, MEM1_SIZE);
-  mem2 = calloc(1, MEM2_SIZE);
+  guest_memory_init();
   if (!mem1 || !mem2) stop_because("no memory for the Wii's", strerror(errno));
 
   gx_backend = &gx_backend_vulkan;

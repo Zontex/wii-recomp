@@ -29,6 +29,24 @@ Keys: arrows for the D-pad, Enter for A, Backspace for B, `1`, `2`, `=` for plus
 
 A game built with `emit.py --virtual-bluetooth` reads the simulated Wii Remote and Balance Board through its own Bluetooth code. That remote has a Classic Controller plugged in; set `WII_RECOMP_ATTACHMENT=none` to unplug it, as a game such as Wii Fit Plus expects, since with one plugged in it turns its pointer off and its Home Menu waits for Classic Controller buttons.
 
+### Real Wii Remotes and the Balance Board
+
+On the same `--virtual-bluetooth` builds, real remotes and a real board pass their reports straight to the game's own code, so the pointer, motion, attachments, rumble, the speaker and the board's sensors work with nothing simulated (`runtime/remote_link.c`). `WII_RECOMP_REMOTES` chooses:
+
+| Value | Devices |
+| --- | --- |
+| `auto` (default) | Real ones as they link. Until a real remote links, the simulated remote holds player 1, and the simulated board holds its slot until a real board links. |
+| `real` | Real ones only. |
+| `simulated` | The simulated ones only. |
+| `loopback` | The simulated ones, run behind the link on a thread of their own as though they were real. This tests the whole real-device path with no radio. |
+
+The board always takes the fifth slot, where games look for it. Each remote keeps its player number between runs, by address, in `remotes.txt` beside the program (in the console folder with `--console`). When a game hangs up on a remote, the remote turns off, and any button brings it back, as on a Wii. `WII_RECOMP_SPEAKER=off` keeps speaker sound from the remote and passes only its rumble.
+
+- **Raspberry Pi and other Linux:** run `sudo recomp/tools/remotes_setup.sh` once, and again after each build. It stops bluetoothd taking the remotes' channels and lets the program listen for them. Pair each remote and the board once with `sudo recomp/tools/remotes_setup.sh pair` after pressing its red SYNC button. From then on any button connects it. Without pairing, hold 1 and 2 as the game starts, or while the game searches for remotes. Remotes stay connected when the console hands over from the Wii Menu to a disc. `--undo` puts bluetoothd back.
+- **Mac:** pair the remote once in System Settings > Bluetooth while holding 1 and 2, and allow Input Monitoring if macOS asks. macOS can't turn a remote off, so when a game hangs up, the remote sleeps until a button is pressed.
+
+None of this has been tried with real hardware yet: the link, the Bluetooth chip's side and the Linux sockets are tested with stand-ins (`test/test_recomp_ios_rare.py`), and Wii Fit Plus plays through setup on `loopback`.
+
 Set `WII_RECOMP_CONTROL=<path>` to drive it from a script through a pipe at that path, one command per line: `press a`, `hold a`, `release a`, `pointer x y`, `board on <kg> <lean x> <lean y>`, `board off`. Saves go to `recomp/build/saves`, or to `WII_RECOMP_SAVES`.
 
 Set `WII_RECOMP_MUTE=1` to skip the sound device, and `WII_RECOMP_AUDIO_WAV=<path>` to save what the mixer makes.
@@ -62,9 +80,11 @@ Each frame of the recording gives one PNG, of its last copy to the screen. A fra
   - `console.c`: the console folder, and handing over between the Wii Menu and the disc.
   - `drive.c`, `dvd.c`: what's in the drive, and the drive as programs see it. `apploader.c` runs a disc's apploader as its native code.
   - `dispatch.c`, `interp.c`: indirect calls, and an interpreter for any address with no translated code, such as a module loaded at run time. `dispatch` logs each such address once. `test/test_recomp_differential.py` runs every instruction both ways and compares the results. Run it directly to list any disagreements.
+  - `guest_memory.h`, `guest_memory.c`: the Wii's memory, one window at a fixed host address. A load or store is a mask, one compare that sends the hardware block to `hardware.c`, and the access, and an access through the stack pointer skips the compare. Where a Wii has no memory, the first touch opens a zero page and is named in `gaps.txt` as `cpu.dsi_isi`. A real crash prints the faulting address and function first.
   - `threads.c`, `interrupts.c`: the game's threads, interrupts and clocks.
   - `hardware.c`: hardware registers.
-  - `input.c`: the Wii Remote and Balance Board.
+  - `input.c`: keyboard, mouse and control pipe input for the simulated Wii Remote and Balance Board.
+  - `bluetooth.c`, `bluetooth_channels.c`, `wii_remote.c`: the virtual Bluetooth chip and each slot's device. `remote_link.c` links real devices into the slots, through `remote_link_linux.c` or `remote_link_mac.c`, or `remote_link_loopback.c` for testing.
   - `audio.c`, `ax.c`, `audio_output_mac.c`: sound. `ax.c` does the audio processor's mixing from the game's own voices and command lists, `audio.c` paces it and hands samples to the output thread, and the output file is the only per-platform part.
   - `ios.c`, `devices.c`, `es.c`, `files.c`, `fs.c`: stand-ins for the Wii's system services and storage.
   - `gx_fifo.c`, `gx_vertex.c`, `gx_transform.c`, `gx_light.c`, `gx_texture.c`, `gx_tev.c`, `gx_shader.c`, `gx_copy.c`, `gx_draw.c`, `window.c`: graphics, from command stream to window. The vertex and color stages become small shaders written for each setup the game uses, cached by key in `gx_shader.c`.

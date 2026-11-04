@@ -23,8 +23,6 @@
 #include "title.h"
 
 Cpu cpu;
-uint8_t *mem1;
-uint8_t *mem2;
 
 #define STACK_BYTES (1024u * 1024u * 1024u)
 
@@ -107,7 +105,7 @@ static void use_folders_beside(const char *program) {
   const char *folder = dirname(full);  // Linux's changes `full`, so it's called once.
   const char *names[][2] = {{"WII_RECOMP_SAVES", "saves"}, {"WII_RECOMP_SHADER_CACHE", "shader-cache"},
                             {"WII_RECOMP_DISCOVERED", "discovered.txt"}, {"WII_RECOMP_CACHE", "native-cache"},
-                            {"WII_RECOMP_GAPS", "gaps.txt"}};
+                            {"WII_RECOMP_GAPS", "gaps.txt"}, {"WII_RECOMP_REMOTE_SLOTS", "remotes.txt"}};
   for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
     snprintf(path, sizeof path, "%s/%s", folder, names[i][1]);
     setenv(names[i][0], path, 0);
@@ -146,8 +144,7 @@ int main(int count, char **arguments) {
     boot_from_disc(&boot);
   }
   use_folders_beside(arguments[0]);
-  mem1 = calloc(1, MEM1_SIZE);
-  mem2 = calloc(1, MEM2_SIZE);
+  guest_memory_init();
   time_start();
   hardware_start();
   audio_start();

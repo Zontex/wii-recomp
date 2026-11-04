@@ -28,8 +28,8 @@ Statuses:
 | 5. Hardware blocks | 25 | 12 | 6 | 0 | 6 | 16 | 65 |
 | 6. Audio microcodes | 9 | 3 | 7 | 0 | 0 | 3 | 22 |
 | 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
-| 8. Controllers | 34 | 15 | 8 | 0 | 6 | 2 | 65 |
-| **All** | **335** | **109** | **48** | **4** | **37** | **56** | **589** |
+| 8. Controllers | 34 | 16 | 7 | 0 | 6 | 2 | 65 |
+| **All** | **335** | **110** | **47** | **4** | **37** | **56** | **589** |
 
 ## Biggest gaps
 
@@ -200,19 +200,19 @@ Dolphin lists 223 instruction handlers in `Interpreter_Tables.cpp`. Every one is
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
-| `cpu.standard_map_0x8_0x9_0xc_0xd` | Standard map (0x8, 0x9, 0xC, 0xD) | done | `runtime/cpu.h:56-61` | Top bits are masked, so cached and uncached views match. |
+| `cpu.standard_map_0x8_0x9_0xc_0xd` | Standard map (0x8, 0x9, 0xC, 0xD) | done | `runtime/guest_memory.h`, `runtime/cpu.h` | Memory is one window at a fixed host address, indexed by the address with its top two bits cleared, so cached and uncached views are the same bytes. One compare sends the hardware block to `hw_read`. |
 | `cpu.game_defined_bat_maps` | Game-defined BAT maps | missing | `runtime/cpu.h:61` | Memory is the fixed retail map. |
 | `cpu.page_tables_segment_registers` | Page tables, segment registers | partial | `translate/emit.py:439-446`, `runtime/cpu.h:15` | `mtsr`, `mfsr`, `mtsrin`, `mfsrin` keep their values. No address goes through them. |
 | `cpu.tlbie_tlbsync` | `tlbie tlbsync` | not needed | `translate/emit.py:102` | No TLB. |
 | `cpu.real_mode_entry` | Real-mode entry | not needed | `translate/system_functions.json` | Replaced by signature. |
-| `cpu.mem1_24_mb_mem2_64_mb` | MEM1 24 MB, MEM2 64 MB | done | `runtime/cpu.h:53-54` |  |
+| `cpu.mem1_24_mb_mem2_64_mb` | MEM1 24 MB, MEM2 64 MB | done | `runtime/guest_memory.h` | At 0 and 0x10000000 in the window. |
 | `cpu.external_interrupt` | External interrupt | done | `runtime/interrupts.c:95-97` | Polled every 2,000 checks. |
 | `cpu.decrementer` | Decrementer | done | `runtime/interrupts.c:98-102` |  |
 | `cpu.system_call` | System call | done | `runtime/processor.c` | See `cpu.sc`. |
 | `cpu.program_trap_illegal` | Program (trap, illegal) | missing | `runtime/interp.c:56` | An unknown opcode stops the program. |
 | `cpu.floating_point_unavailable` | Floating-point unavailable | not needed |  | Floats are always on. |
 | `cpu.floating_point_program` | Floating-point program | on demand | `runtime/processor.c:48`, `runtime/interrupts.c:106` | Arithmetic never sets FPSCR's exception bits. Reported once if a game turns exceptions on in both MSR and FPSCR. |
-| `cpu.dsi_isi` | DSI, ISI | missing | `runtime/hardware.c:141`, `runtime/interp.c:536` | Bad data addresses fall into hardware register reads, logged once. Bad code addresses stop with exit 4. |
+| `cpu.dsi_isi` | DSI, ISI | missing | `runtime/guest_memory.c`, `runtime/interp.c:536` | No exception is raised. A data access where a Wii has no memory opens a zero page there and is named with this ID and its address. Bad code addresses stop with exit 4. |
 | `cpu.alignment` | Alignment | not needed |  | Accesses just work. |
 | `cpu.machine_check_reset` | Machine check, reset | on demand |  | Not raised during normal play. |
 | `cpu.performance_monitor_thermal_breakpoint` | Performance monitor, thermal, breakpoint | not needed |  |  |
@@ -222,7 +222,7 @@ Dolphin lists 223 instruction handlers in `Interpreter_Tables.cpp`. Every one is
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
-| `cpu.16_kb_at_0xe0000000` | 16 KB at 0xE0000000 | done | `runtime/hardware.c:111-123` | Reached through `hw_read`, so slower than memory. |
+| `cpu.16_kb_at_0xe0000000` | 16 KB at 0xE0000000 | done | `runtime/guest_memory.h`, `runtime/hardware.c:182` | In the memory window, so as quick as memory. |
 | `cpu.enable_bit_hid2_lce` | Enable bit (HID2 LCE) | not needed |  | Always on. |
 | `cpu.dma_between_memory_and_locked_cache` | DMA between memory and locked cache | done | `runtime/hardware.c:127-139` |  |
 | `cpu.dma_queue_length_in_hid2` | DMA queue length in HID2 | done |  | Always reads 0, which is right as DMA finishes at once. |
@@ -851,6 +851,6 @@ The AX work is rewritten in C. There's no DSP interpreter, so each program needs
 | `ctl.udraw_drawsome_tablets` | uDraw, Drawsome tablets | on demand |  | Few titles. Built when one is tested. |
 | `ctl.shinkansen_controller` | Shinkansen controller | not needed |  | One game in Japan. |
 | `ctl.wii_motionplus` | Wii MotionPlus | missing | `runtime/wii_remote.c:76` | Reports no device. |
-| `ctl.balance_board_over_bluetooth` | Balance Board over Bluetooth | done | `runtime/wii_board.c`, `runtime/bluetooth.c:71` | Simulated board on the virtual chip, present when the title has a calibration flag. |
-| `ctl.real_wii_remotes_wiimotereal` | Real Wii Remotes (`WiimoteReal`) | missing |  | No host Bluetooth layer. |
+| `ctl.balance_board_over_bluetooth` | Balance Board over Bluetooth | done | `runtime/wii_board.c`, `runtime/bluetooth.c`, `runtime/remote_link.c` | A real board takes slot 5, found by name or by its attachment ID `04 02`. Otherwise the simulated board, in games with a calibration flag. |
+| `ctl.real_wii_remotes_wiimotereal` | Real Wii Remotes (`WiimoteReal`) | partial | `runtime/remote_link.c`, `remote_link_linux.c`, `remote_link_mac.c` | Remotes and the board pass their reports straight to the game's own code. Linux uses raw L2CAP sockets, the Mac IOKit's HID. Tested with a loopback stand-in and fake sockets; not yet with a real remote. |
 | `ctl.passthrough_bluetooth_adapter` | Passthrough Bluetooth adapter | not needed |  |  |

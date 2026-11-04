@@ -12,8 +12,6 @@
 #include "ios.h"
 
 #define REGISTER_SPACE 0x01000000u
-#define LOCKED_CACHE_START 0xe0000000u
-#define LOCKED_CACHE_SIZE 0x4000u
 #define SPR_CACHE_DMA_HIGH 922
 #define SPR_CACHE_DMA_LOW 923
 #define CACHE_DMA_TRIGGER 2u
@@ -179,21 +177,9 @@ void audio_dma_interrupt(void) {
   update_dsp_interrupt();
 }
 
-// The processor's locked cache, a small fast memory that Wii Fit never uses. It isn't
-// in normal memory, so reaching it through here keeps every other access as quick.
-static uint8_t locked_cache[LOCKED_CACHE_SIZE];
-
-static int in_locked_cache(uint32_t address) { return address - LOCKED_CACHE_START < LOCKED_CACHE_SIZE; }
-
-static uint32_t locked_cache_read(uint32_t address, int bytes) {
-  uint32_t value = 0;
-  for (int i = 0; i < bytes; i++) value = value << 8 | locked_cache[(address + (uint32_t)i - LOCKED_CACHE_START) % LOCKED_CACHE_SIZE];
-  return value;
-}
-
-static void locked_cache_write(uint32_t address, uint32_t value, int bytes) {
-  for (int i = 0; i < bytes; i++) locked_cache[(address + (uint32_t)i - LOCKED_CACHE_START) % LOCKED_CACHE_SIZE] = (uint8_t)(value >> ((bytes - 1 - i) * 8));
-}
+// The processor's locked cache, a small fast memory that video decoding uses. It sits in
+// the guest memory window (guest_memory.h), so the game reaches it as quickly as memory.
+#define locked_cache (GUEST_BASE + LOCKED_CACHE_PHYSICAL)
 
 // Moves whole cache lines between main memory and the locked cache, which video decoding
 // relies on. The transfer starts when its low register is written with the trigger bit.
@@ -303,7 +289,6 @@ static uint32_t dtv_status(void) {
 }
 
 uint32_t hw_read(uint32_t address, int bytes) {
-  if (in_locked_cache(address)) return locked_cache_read(address, bytes);
   uint32_t value = get(address, bytes);
   if (address == PI_CAUSE) value = interrupt_cause();
   else if (is_register(address, AI_SAMPLE_COUNT)) value = audio_samples();
@@ -316,10 +301,6 @@ uint32_t hw_read(uint32_t address, int bytes) {
 }
 
 void hw_write(uint32_t address, uint32_t value, int bytes) {
-  if (in_locked_cache(address)) {
-    locked_cache_write(address, value, bytes);
-    return;
-  }
   note_unmodelled(address, WRITES, first_touch("write", address, value));
   if (address == PI_CAUSE) {
     cause &= ~value;

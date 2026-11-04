@@ -32,7 +32,9 @@ class Instructions(unittest.TestCase):
         self.case(0x80600010, "lwz", "cpu.r[3] = rd32((uint32_t)(16));")
 
     def test_store_with_update_writes_base_last(self):
-        self.case(0x9421ffe0, "stwu", "{ uint32_t e = (cpu.r[1] + -32); wr32(e, cpu.r[1]); cpu.r[1] = e; }")
+        # Through r1, the stack: always memory, so the store skips the hardware check.
+        self.case(0x9421ffe0, "stwu", "{ uint32_t e = (cpu.r[1] + -32); wr32s(e, cpu.r[1]); cpu.r[1] = e; }")
+        self.case(0x9423ffe0, "stwu", "{ uint32_t e = (cpu.r[3] + -32); wr32(e, cpu.r[1]); cpu.r[3] = e; }")
 
     def test_rotate_mask(self):
         self.case(0x5464043e, "rlwinm", "cpu.r[4] = rotl(cpu.r[3], 0) & 0xffffu;")
