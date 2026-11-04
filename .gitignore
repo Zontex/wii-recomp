@@ -18,6 +18,12 @@ __pycache__/
 
 # Wii storage backups hold personal data and the console's unique keys.
 nand/
+# wii/ holds your own Wii's BootMii backup (nand.bin, keys.bin) and the storage
+# decrypted from it (wii/nand/). Never committed, wherever those files end up.
+wii/*
+!wii/README.md
+nand.bin
+keys.bin
 *.wad
 
 # Translated games are the game in another form, so they stay on your machine.

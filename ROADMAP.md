@@ -130,6 +130,8 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 0 to 2.
 - [x] A private console folder holding its own copy of the Wii storage, the Wii Menu and a drive slot (`recomp/tools/prepare_console.py`)
 - [x] Clean "no network" answers for WiiConnect24, the SD card slot and sockets
 - [x] Each IOS version's own memory at the top of MEM2, so a game's heap gets the full arena it was sized for
+- [x] Your own Wii's BootMii NAND backup and keys decrypted into the storage the console reads (`recomp/tools/import_nand.py`, `wii/`)
+- [ ] Miis and saves from that backup used by every title, so a game picks up where it was left on the Wii
 - [ ] Storage that behaves like a NAND: open modes, owners and permissions, real usage, and writes a power cut can't corrupt
 - [ ] Every game's direct start through the same path
 - [ ] Fewer replacements of Nintendo's own library code, as the hardware and IOS models take their place
@@ -177,6 +179,7 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 ### 12. Compatibility (planned)
 
 - [ ] A list of titles, homebrew and SDK demos
+- [x] Automatic play for any title (`recomp/tools/autoplay/`): scripted sessions per game that read the screen and act, with Wii Fit Plus's first-time setup as the first
 - [ ] An automatic script for each: boots, reaches gameplay, sound, picture comparison and frame rate
 - [ ] Run on every change to shared code
 

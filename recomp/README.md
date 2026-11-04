@@ -11,7 +11,7 @@ python3 recomp/translate/emit.py extracted/sys/main.dol recomp/build/generated
 python3 recomp/translate/build_file.py recomp/build
 mkdir -p recomp/build/obj
 (cd recomp/build && ninja)
-recomp/build/wii-recomp extracted/sys path/to/Wii/NAND
+recomp/build/wii-recomp extracted/sys          # storage from wii/nand/, see wii/README.md
 ```
 
 The build makes two things: `wii-recomp`, the console, which is the same for every game, and `title.dylib` (`title.so` on Linux), the game's translated code, which the console loads from beside itself.
@@ -20,8 +20,8 @@ To play from a disc image instead, pack the game and its native code into one fi
 
 ```sh
 python3 recomp/tools/make_disc.py extracted game.wrd --native darwin-x86_64=recomp/build/title.dylib
-recomp/build/wii-recomp game.wrd path/to/Wii/NAND
-python3 recomp/tools/prepare_console.py path/to/Wii/NAND console --menu recomp/build-menu
+recomp/build/wii-recomp game.wrd
+python3 recomp/tools/prepare_console.py wii/nand console --menu recomp/build-menu
 cp game.wrd console/drive/ && recomp/build/wii-recomp --console console
 ```
 
@@ -58,6 +58,20 @@ On a Raspberry Pi 5 the build draws at 5/2 of the Wii's resolution, enough for f
 For comparing, these turn each one off: `WII_RECOMP_DRAW_CLEARS=1`, `WII_RECOMP_NO_STRIP=1`, `WII_RECOMP_NO_EARLY_DEPTH=1`, `WII_RECOMP_KEEP_DEPTH=1`, `WII_RECOMP_KEEP_COPY_BACK=1`, `WII_RECOMP_KEEP_EMPTY_LAYERS=1`, `WII_RECOMP_NO_SIDE=1`, `WII_RECOMP_NO_SWAP=1`, `WII_RECOMP_KEEP_FOG=1`, `WII_RECOMP_NO_FLAT_DEPTH=1`, `WII_RECOMP_KEEP_DRAWN_BACK=1`, `WII_RECOMP_GX_INLINE=1`. `WII_RECOMP_COVER=1` turns one on: when a page proven opaque covers the whole picture, the drawing before it is thrown away. It has been checked on one screen, so it stays off by default. `WII_RECOMP_GPU_TIMES=1` prints what the chip spent on each pass of one frame in every 300.
 
 `recomp/tools/gap_report.py` merges `gaps.txt` files from any number of runs and titles into one table, most common first: `gap_report.py menu=recomp/build-menu/gaps.txt wiifit=recomp/build/gaps.txt`. It lists apart the rows marked done that a game still hit, and IDs with no row.
+
+### Automatic play
+
+`recomp/tools/autoplay/autoplay.py` plays a game by script and checks it got where it should, for testing any title without anyone at the keyboard. It drives the control pipe (buttons, the pointer, the Balance Board), saves the game's own pictures, and on a Mac reads the text on them with macOS's text recognition, so a session can click the button a screen names. It waits on the game's log, so nothing depends on the window.
+
+```sh
+python3 recomp/tools/autoplay/autoplay.py look                      # pictures every 5 s, no input
+python3 recomp/tools/autoplay/autoplay.py explore --keep runs/x     # reads each screen and presses on
+python3 recomp/tools/autoplay/autoplay.py setup --disc extracted/sys --saves <empty folder>
+```
+
+The game ID in the disc's `boot.bin` picks the session: first `autoplay/games/<game ID>/<session>.py`, then the shared `autoplay/sessions/`. The shared ones work for any game. A game's own folder holds what's particular to it: `games/RFPE01/setup.py` plays Wii Fit Plus's whole first-time setup, standing on the board when asked, and keeps the saves for later sessions to start from. To add a game, make its folder and build on `player.py`. Pictures and saves stay in `--keep` or a temporary folder, never in the repository. The exit status is 0 when the session passed.
+
+`recomp/tools/import_nand.py` decrypts a BootMii NAND backup in `wii/` into the storage folder `wii/nand/` (see `wii/README.md`). Its file system and encryption follow Dolphin's `NANDImporter.cpp`.
 
 `recomp/tools/perf_run.py` measures a fixed run with no input from a copy of `recomp/build/saves`: frame rate, worst frame, CPU, the Mac's speed limit, and what each slow frame spent its time on. It works on a Mac only, because it reads `pmset`.
 

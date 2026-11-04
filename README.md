@@ -80,6 +80,19 @@ sudo apt install clang ninja-build python3 libglfw3-dev libvulkan-dev mesa-vulka
 
 </details>
 
+### Your Wii's storage and keys
+
+Wii Recomp needs your own Wii's NAND and keys to work. The NAND holds the console's settings, the Wii Menu, and the certificates and tickets games check, and the keys decrypt it. Make a backup on your Wii with BootMii (Backup NAND), then:
+
+```sh
+# Put nand.bin (and keys.bin, if BootMii wrote it apart) in wii/, then decrypt them once
+python3 recomp/tools/import_nand.py
+```
+
+That makes `wii/nand/`, which `wii-recomp` reads when no storage folder is named. [`wii/README.md`](wii/README.md) has the details. Everything in `wii/` except that README is ignored by git: the backup and keys belong to one console and hold its owner's data, so they never go in the repository. An already decrypted storage folder, such as Dolphin's NAND folder after its system update, also works in `wii/nand/`.
+
+### Build a game
+
 ```sh
 # Unpack your disc (ISO, RVZ or WBFS) into extracted/
 python3 recomp/tools/extract_disc.py "path/to/game.rvz"
@@ -91,10 +104,10 @@ mkdir -p recomp/build/obj
 (cd recomp/build && ninja)
 
 # Play
-recomp/build/wii-recomp extracted/sys path/to/Wii/NAND
+recomp/build/wii-recomp extracted/sys
 ```
 
-The last argument is a Wii storage folder, such as Dolphin's NAND folder after its system update. Wii Recomp only reads it and writes saves to `recomp/build/saves`. Some games need the console settings it holds, such as SYSCONF, and won't start without one.
+The storage is read from `wii/nand/`, or from a folder given after the disc. Wii Recomp only reads it, and writes saves to `recomp/build/saves`. Some games need the console settings it holds, such as SYSCONF, and won't start without them.
 
 `extract_disc.py` uses [nodtool](https://github.com/encounter/nod), and downloads a pinned, checksummed copy if it isn't installed. For games that build their C++ method tables at run time, such as The Last Story, add `--all-code` to `emit.py`.
 
@@ -103,10 +116,10 @@ The last argument is a Wii storage folder, such as Dolphin's NAND folder after i
 ```sh
 # Pack the disc and its native code into one file
 python3 recomp/tools/make_disc.py extracted game.wrd --native darwin-x86_64=recomp/build/title.dylib
-recomp/build/wii-recomp game.wrd path/to/Wii/NAND
+recomp/build/wii-recomp game.wrd
 
 # Or set up a console with the Wii Menu, and put the disc in its drive
-python3 recomp/tools/prepare_console.py path/to/Wii/NAND console --menu recomp/build-menu
+python3 recomp/tools/prepare_console.py wii/nand console --menu recomp/build-menu
 cp game.wrd console/drive/ && recomp/build/wii-recomp --console console
 ```
 
@@ -118,9 +131,10 @@ cp game.wrd console/drive/ && recomp/build/wii-recomp --console console
 | --- | --- |
 | `recomp/translate` | The translator: finds code, matches system functions, writes C and the ninja file |
 | `recomp/runtime` | The console: CPU state, hardware, graphics, sound, IOS, Bluetooth and the window |
-| `recomp/tools` | Disc extraction, disc images, console setup, frame replay and benchmarks |
+| `recomp/tools` | Disc extraction, NAND import, disc images, console setup, automatic play (`autoplay/`), frame replay and benchmarks |
 | `test` | Unit, translator and graphics tests, all on made-up data |
 | `docs` | The hardware inventory and the native IOS plan |
+| `wii` | Your Wii's NAND backup, keys and decrypted storage. Ignored by git except its README |
 
 ## Tests
 
@@ -149,6 +163,6 @@ Wii Recomp stands on years of other people's work on the Wii.
 
 Wii Recomp is licensed under the GNU General Public License, version 2 or later. See [`LICENSE`](LICENSE).
 
-The repository holds no Nintendo code, data or assets: no disc images, system software, keys, saves, or code translated from a game. Everything a game needs comes from a disc you own and a Wii storage folder you made, and it's translated and compiled on your own machine. The translated output stays there. Don't share it, and don't ask for games here.
+The repository holds no Nintendo code, data or assets: no disc images, system software, keys, saves, or code translated from a game. Everything a game needs comes from a disc you own and a NAND backup and keys from your own Wii, and it's translated and compiled on your own machine. `.gitignore` keeps `wii/`, disc images and extracted files out of the repository. The translated output stays there. Don't share it, and don't ask for games here.
 
 Wii Recomp isn't affiliated with or endorsed by Nintendo. Wii, Wii Remote, Balance Board and Wii Fit are trademarks of Nintendo. Other names belong to their owners.

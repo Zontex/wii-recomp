@@ -112,6 +112,15 @@ static void use_folders_beside(const char *program) {
   }
 }
 
+// With no Wii storage folder named, the one import_nand.py makes from a BootMii backup
+// in wii/, if it's there.
+static const char *default_storage(void) {
+  struct stat info;
+  if (!stat("wii/nand", &info) && S_ISDIR(info.st_mode)) return "wii/nand";
+  if (!stat("wii/nand.bin", &info)) fprintf(stderr, "storage: wii/nand.bin isn't decrypted yet: run python3 recomp/tools/import_nand.py\n");
+  return 0;
+}
+
 static int is_folder(const char *path) {
   struct stat info;
   if (stat(path, &info)) { perror(path); exit(1); }
@@ -127,7 +136,7 @@ int main(int count, char **arguments) {
   // window server's waits don't hold the game's frames back on. See gx_vulkan_window.c.
   setenv("MVK_CONFIG_SPECIALIZED_QUEUE_FAMILIES", "1", 0);
   if (count < 2 || (!strcmp(arguments[1], "--console") && count < 3)) {
-    fprintf(stderr, "usage: wii-recomp <disc image, or folder holding main.dol, boot.bin and fst.bin> [Wii storage folder]\n"
+    fprintf(stderr, "usage: wii-recomp <disc image, or folder holding main.dol, boot.bin and fst.bin> [Wii storage folder, wii/nand by default]\n"
                     "       wii-recomp --console <console folder> [--boot-disc]\n");
     return 1;
   }
@@ -148,7 +157,7 @@ int main(int count, char **arguments) {
   time_start();
   hardware_start();
   audio_start();
-  files_start(count > 2 ? arguments[2] : 0);
+  files_start(count > 2 ? arguments[2] : count == 2 ? default_storage() : 0);
   pthread_attr_t attributes;
   pthread_attr_init(&attributes);
   pthread_attr_setstacksize(&attributes, STACK_BYTES);
