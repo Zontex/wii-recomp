@@ -685,13 +685,13 @@ static struct { GxTexture *texture; uint32_t frame; } newest_copy;
 static int passes_texture_through(const TevKey *key, const GxChannels *c) {
   enum { SWAP_IDENTITY = 0 | 1 << 2 | 2 << 4 | 3 << 6 };
   const TevStage *s = &key->stage[0];
-  if (key->stages != 1 || key->alpha_test || key->constant_alpha || key->logic_help || key->wrap_output || key->bump_alpha) return 0;
+  if (key->stages != 1 || key->alpha_test || key->early_depth || key->constant_alpha || key->logic_help || key->wrap_output || key->bump_alpha) return 0;
   if ((key->fog_type && !key->fog_none) || key->depth_mode || key->no_coordinates || (key->projected & 1)) return 0;
   if (s->color_in[0] != 15 || s->color_in[1] != 8 || s->color_in[2] != 10 || s->color_in[3] != 15) return 0;
   if (s->alpha_in[0] != 7 || s->alpha_in[1] != 4 || s->alpha_in[2] != 5 || s->alpha_in[3] != 7) return 0;
   if (s->color_bias || s->color_subtract || s->color_scale || s->color_target) return 0;
   if (s->alpha_bias || s->alpha_subtract || s->alpha_scale || s->alpha_target || s->map != 0 || s->coordinate != 0) return 0;
-  if (s->indirect || !s->texture_on || s->texture_swap != SWAP_IDENTITY) return 0;
+  if (s->indirect || !s->texture_on || s->texture_swap != SWAP_IDENTITY || key->diagonal_maps) return 0;
   // The raster must be the vertex color itself, unlit, for the white check to mean white.
   if (!s->reads_raster || s->raster != 0 || s->raster_swap != SWAP_IDENTITY || !gx_light_plain(0)) return 0;
   return c->red == GX_CHANNEL_RED && c->green == GX_CHANNEL_GREEN && c->blue == GX_CHANNEL_BLUE && c->alpha == GX_CHANNEL_ALPHA;
@@ -1415,7 +1415,7 @@ static int lays_empty_layer_over(int count) {
   const TevStage *s = &key->stage[0], *t = &key->stage[1];
   enum { TEST_LESS = 1, TEST_LEQUAL = 3, TEST_ALWAYS = 7, BIAS_COMPARE = 3, DEPTH_REPLACE = 2, BP_Z_TEXTURE_BIAS = 0xf4 };
   if (count != 4 || gx_used_maps != 3 || bindings[0].texture != empty_layer.layer || bindings[1].texture != empty_layer.depth) return refuse(__LINE__);
-  if (key->stages != 2 || key->alpha_test || key->constant_alpha || key->depth_mode != DEPTH_REPLACE || !key->depth_from_copy) return refuse(__LINE__);
+  if (key->stages != 2 || key->alpha_test || key->early_depth || key->constant_alpha || key->depth_mode != DEPTH_REPLACE || !key->depth_from_copy) return refuse(__LINE__);
   if (s->alpha_in[0] != 4 || s->alpha_in[1] != 6 || s->alpha_in[2] != 5 || s->alpha_in[3] != 7) return refuse(__LINE__);
   if (s->alpha_bias != BIAS_COMPARE || s->alpha_subtract || s->alpha_target || s->map != 0 || s->indirect) return refuse(__LINE__);
   if (t->alpha_in[0] != 7 || t->alpha_in[1] != 7 || t->alpha_in[2] != 7 || t->alpha_in[3] != 0) return refuse(__LINE__);

@@ -13,9 +13,9 @@
 enum {
   BP_GEN_MODE = 0x00, TEXTURE_COORDINATES_MASK = 15, BP_CONSTANT_ALPHA = 0x42, CONSTANT_ALPHA_ENABLE_BIT = 8, BP_TEV_ORDER = 0x28, BP_COLOR_STAGE = 0xc0, BP_ALPHA_STAGE = 0xc1, BP_ALPHA_TEST = 0xf3,
   BP_KONST_SELECT = 0xf6, SWAP_TABLES = 4, COLOR_VALUE_MASK = 0x7ff, STAGE_COUNT_SHIFT = 10, STAGE_COUNT_MASK = 15,
-  BP_Z_TEXTURE_BIAS = 0xf4, BP_Z_TEXTURE = 0xf5,
+  BP_Z_TEXTURE_BIAS = 0xf4, BP_Z_TEXTURE = 0xf5, BP_Z_MODE = 0x40, Z_TEST_BIT = 0, Z_UPDATE_BIT = 4, BP_PIXEL_FORMAT = 0x43, EARLY_DEPTH_BIT = 6,
   BP_INDIRECT_MATRIX = 0x06, BP_INDIRECT_STAGE = 0x10, BP_INDIRECT_SCALE = 0x25, BP_INDIRECT_SOURCE = 0x27,
-  BP_TEXTURE_MODE_LOW = 0x80, BP_TEXTURE_MODE_HIGH = 0xa0, MODE_MIP_SHIFT = 5, MODE_BIAS_SHIFT = 9, BIAS_STEPS = 32, BIASES_PER_VALUE = 4,
+  BP_TEXTURE_MODE_LOW = 0x80, BP_TEXTURE_MODE_HIGH = 0xa0, MODE_MIP_SHIFT = 5, MODE_DIAGONAL_BIT = 8, MODE_BIAS_SHIFT = 9, BIAS_STEPS = 32, BIASES_PER_VALUE = 4,
   BP_COORDINATE_SCALE = 0x30, COORDINATE_SCALE_MASK = 0xffff, BP_IMAGE_LOW = 0x88, BP_IMAGE_HIGH = 0xa8, MATRIX_WORDS = 3, MATRIX_VALUE_BITS = 11, MATRIX_ONE = 1024, MATRIX_SCALE_ZERO = 17,
   INDIRECT_COUNT_SHIFT = 16, INDIRECT_COUNT_MASK = 7,
   BP_FOG_RANGE = 0xe8, BP_FOG_A = 0xee, BP_FOG_B_MAGNITUDE = 0xef, BP_FOG_B_SHIFT = 0xf0, BP_FOG_C = 0xf1, BP_FOG_COLOR = 0xf2,
@@ -93,7 +93,7 @@ static void read_stage_indirect(TevKey *key, TevStage *s, int i, int fetches, in
   s->wrap_t = (command >> 16) & 7;
   s->add_previous = (command >> 20) & 1;
   if (kind >= INDIRECT_KINDS) {
-    debug_unsupported("indirect matrix kind", (uint32_t)kind);
+    debug_unsupported("gx.0x10_0x1f_indirect_stage_commands", "indirect matrix kind", (uint32_t)kind);
     matrix = 0;
   }
   if (fetch >= fetches || (!matrix && !bump)) return;
@@ -154,7 +154,7 @@ static void read_stage(TevKey *key, int i, int fetches, int needs_texture, int c
     uint32_t channel = (order >> 7) & 7;
     s->reads_raster = 1;
     s->raster = channel < RASTER_NONE || channel == RASTER_BUMP || channel == RASTER_BUMP_NORMALIZED ? (uint8_t)channel : RASTER_NONE;
-    if (channel >= RASTER_NONE && channel < RASTER_BUMP) debug_unsupported("stage raster source", channel);
+    if (channel >= RASTER_NONE && channel < RASTER_BUMP) debug_unsupported("gx.0x28_0x2f_stage_order", "stage raster source", channel);
     s->raster_swap = swap_table(alpha & 3);
   }
   if (uses_input(s, COLOR_KONST, COLOR_KONST, -1)) s->konst_color = (select >> shift) & 31;
@@ -173,6 +173,7 @@ static void read_map_biases(TevKey *key, TevValues *values, unsigned maps) {
     if (!(maps & (1u << map))) continue;
     uint32_t mode = gx.bp[map < 4 ? BP_TEXTURE_MODE_LOW + map : BP_TEXTURE_MODE_HIGH + map - 4];
     int8_t bias = (int8_t)(mode >> MODE_BIAS_SHIFT);
+    if ((mode >> MODE_DIAGONAL_BIT) & 1) key->diagonal_maps |= (uint8_t)(1u << map);
     if (!((mode >> MODE_MIP_SHIFT) & 3) || !bias) continue;
     key->biased_maps |= (uint8_t)(1u << map);
     values->map_bias[map / BIASES_PER_VALUE][map % BIASES_PER_VALUE] = (float)bias / BIAS_STEPS;
@@ -231,7 +232,7 @@ static void read_fog(TevKey *key, TevValues *values) {
   uint32_t a = gx.bp[BP_FOG_A], c = gx.bp[BP_FOG_C], color = gx.bp[BP_FOG_COLOR], range = gx.bp[BP_FOG_RANGE];
   int type = (int)((c >> FOG_TYPE_SHIFT) & 7);
   if (type == FOG_OFF) return;
-  if (type == 1 || type == 3) debug_unsupported("fog type, drawn as linear", (uint32_t)type);
+  if (type == 1 || type == 3) debug_unsupported("pixel.fog_linear_exp_exp2_backward_exp_backwar", "fog type, drawn as linear", (uint32_t)type);
   key->fog_type = (uint8_t)type;
   key->fog_orthographic = (c >> FOG_PROJECTION_BIT) & 1;
   float fog_a = fog_float(a), fog_c = fog_float(c);
@@ -319,9 +320,21 @@ static void read_indirect_values(const TevKey *key, TevValues *values) {
 
 // A stage can replace a pixel's depth with its texture's value. The game uses that
 // to reset depth from a flat texture, and to put a depth copy back after a layer.
+// Whether depth is tested before the color stages run (early z), as the SDK sets it unless told
+// otherwise. Bits from Dolphin's BPMemory.h.
+static int tests_depth_early(void) {
+  return ((gx.bp[BP_PIXEL_FORMAT] >> EARLY_DEPTH_BIT) & 1) && ((gx.bp[BP_Z_MODE] >> Z_TEST_BIT) & 1);
+}
+
 static void read_depth(TevKey *key, TevValues *values, int last_map) {
   uint32_t mode = gx.bp[BP_Z_TEXTURE], chosen = (mode >> 2) & 3;
   if (chosen == DEPTH_OFF) return;
+  // Depth tested first is stored before any texture could change it, as Dolphin's
+  // PixelShaderGen.cpp has it. Fog would still see the texture's depth there.
+  if (tests_depth_early()) {
+    if ((gx.bp[BP_FOG_C] >> FOG_TYPE_SHIFT) & 7) debug_unsupported("pixel.z_compare_location_early_z", "depth texture seen by fog after an early depth test", chosen);
+    return;
+  }
   key->depth_mode = chosen == DEPTH_ADD ? DEPTH_ADD : DEPTH_REPLACE;
   key->depth_from_copy = gx_copy_is_depth(last_map) ? 1 : 0;
   if (!key->depth_from_copy) key->depth_format = mode & 3;
@@ -358,6 +371,8 @@ unsigned gx_tev_read(TevKey *key, TevValues *values) {
     key->alpha_logic = (uint8_t)logic;
     values->alpha_settings[0] = (float)(test & 255) / 255;
     values->alpha_settings[1] = (float)((test >> 8) & 255) / 255;
+    // Tested first, depth is also stored where the alpha test then fails.
+    key->early_depth = tests_depth_early() && ((gx.bp[BP_Z_MODE] >> Z_UPDATE_BIT) & 1);
   }
   uint32_t output_alpha = gx.bp[BP_CONSTANT_ALPHA];
   if (gx_constant_alpha_used()) {
@@ -501,6 +516,15 @@ static void add_stage(ShaderText *text, const TevKey *key, int index) {
     gx_text_add(text, "    vec4 T = textureLod(map%d, stepped / map_size[%d].xy, 0.0).", s->map, s->map);
     add_swizzle(text, s->texture_swap);
     gx_text_add(text, ";\n");
+  } else if (s->texture_on && (key->diagonal_maps & (1u << s->map))) {
+    // The chip's level of detail adds each coordinate's change across and down a pixel,
+    // where GPUs take the longer of two slopes (Dolphin's software Rasterizer.cpp,
+    // CalculateLOD). Slopes along each axis, each that sum long, give the chip's value.
+    gx_text_add(text, "    vec2 D = abs(dFdx(uv%d)) + abs(dFdy(uv%d));\n", s->coordinate, s->coordinate);
+    if (key->biased_maps & (1u << s->map)) gx_text_add(text, "    D *= exp2(map_bias[%d].%c);\n", s->map / BIASES_PER_VALUE, "xyzw"[s->map % BIASES_PER_VALUE]);
+    gx_text_add(text, "    vec4 T = textureGrad(map%d, uv%d, vec2(D.x, 0.0), vec2(0.0, D.y)).", s->map, s->coordinate);
+    add_swizzle(text, s->texture_swap);
+    gx_text_add(text, ";\n");
   } else if (s->texture_on) {
     gx_text_add(text, "    vec4 T = texture(map%d, uv%d", s->map, s->coordinate);
     if (key->biased_maps & (1u << s->map)) gx_text_add(text, ", map_bias[%d].%c", s->map / BIASES_PER_VALUE, "xyzw"[s->map % BIASES_PER_VALUE]);
@@ -614,6 +638,8 @@ void gx_tev_write_shader(const TevKey *key, ShaderText *text) {
   const TevStage *last = &key->stage[key->stages - 1];
   unsigned maps, coordinates, channels;
   gx_tev_reads(key, &maps, &coordinates, &channels);
+  // A backend that can test depth before the shader runs, so a discard leaves depth written, defines this.
+  if (key->early_depth) gx_text_add(text, "#ifdef GX_EARLY_TESTS\nlayout(early_fragment_tests) in;\n#endif\n");
   gx_text_add(text,
     "GX_BLOCK(%d) uniform PixelValues {\n"
     "  vec4 reg[4]; vec4 konst[4]; vec4 alpha_settings;\n"

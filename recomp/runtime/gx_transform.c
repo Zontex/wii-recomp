@@ -10,7 +10,7 @@
 
 enum {
   XF_MATRICES = 0, XF_NORMAL_MATRICES = 0x400, XF_POST_MATRICES = 0x500, XF_PROJECTION = 0x1020, PROJECTION_ORTHOGRAPHIC = 6,
-  XF_TEXTURE_COUNT = 0x103f, XF_TEXTURE_GENERATION = 0x1040, XF_POST_MATRIX_INDEX = 0x1050, XF_POST_ENABLE = 0x1012,
+  XF_COLOR_COUNT = 0x1009, XF_TEXTURE_COUNT = 0x103f, XF_TEXTURE_GENERATION = 0x1040, XF_POST_MATRIX_INDEX = 0x1050, XF_POST_ENABLE = 0x1012,
   TEXTURE_SOURCE_FIRST = 5, SOURCE_POSITION = 0, SOURCE_NORMAL = 1, SOURCE_NONE = 2, SOURCE_TANGENT = 3, SOURCE_BINORMAL = 4,
   GENERATE_REGULAR = 0, GENERATE_EMBOSS = 1, GENERATE_COLOR0 = 2, GENERATE_COLOR1 = 3, POST_NORMALIZE_BIT = 8, POST_MATRIX_MASK = 63,
   NORMAL_MATRIX_MASK = 31, ALL_NORMALS = 3, COORDINATE_INPUT_BIT = 2, TEXGEN_KIND_MASK = 7, EMBOSS_SOURCE_SHIFT = 12, EMBOSS_LIGHT_SHIFT = 15, EMBOSS_MASK = 7,
@@ -44,7 +44,7 @@ static int read_source(uint32_t source, int normals) {
   if (source == SOURCE_NORMAL) return normals ? SOURCE_NORMAL : SOURCE_NONE;
   if (source == SOURCE_TANGENT || source == SOURCE_BINORMAL) return normals == ALL_NORMALS ? (int)source : SOURCE_NONE;
   if (source >= TEXTURE_SOURCE_FIRST && source < TEXTURE_SOURCE_FIRST + MAX_TEXTURE_MAPS) return (int)source;
-  debug_unsupported("texture coordinate source", source);
+  debug_unsupported("vtx.source_colors_row", "texture coordinate source", source);
   return SOURCE_NONE;
 }
 
@@ -62,10 +62,10 @@ static void read_coordinate(VertexKey *key, int index, int post_enabled, int nor
     c->emboss_source = (control >> EMBOSS_SOURCE_SHIFT) & EMBOSS_MASK;
     // Dolphin only takes the light's number when the vertex has the normals to use it.
     c->emboss_light = normals == ALL_NORMALS ? (control >> EMBOSS_LIGHT_SHIFT) & EMBOSS_MASK : 0;
-    if (c->emboss_source >= index) debug_unsupported("emboss from a later coordinate", c->emboss_source);
+    if (c->emboss_source >= index) debug_unsupported("vtx.emboss", "emboss from a later coordinate", c->emboss_source);
     return;
   }
-  if (kind != GENERATE_REGULAR) debug_unsupported("texture coordinate kind", kind);
+  if (kind != GENERATE_REGULAR) debug_unsupported("vtx.color_0_color_1_srtg", "texture coordinate kind", kind);
   c->source = (uint8_t)read_source(source, normals);
   c->keeps_z = (control >> COORDINATE_INPUT_BIT) & 1;
   c->projected = (control >> 1) & 1;
@@ -93,6 +93,13 @@ static unsigned coordinates_needed(unsigned read) {
   return made;
 }
 
+// The color channels the stages may see, by the game's count. Dolphin's VertexShaderGen.cpp
+// gives the stages 0 from the others, though a coordinate can still be made from them.
+unsigned gx_channels_counted(void) {
+  uint32_t count = gx.xf[XF_COLOR_COUNT] & 3;
+  return count >= 2 ? 3u : (1u << count) - 1;
+}
+
 // Only what the color stages read is worked out, so drawing with fewer inputs shares a
 // shader. The stages hear which coordinates must be divided by their third value, which
 // costs a little at every pixel, so it's only for those that can need it.
@@ -102,6 +109,8 @@ void gx_transform_read(TevKey *tev, VertexKey *key) {
   gx_tev_reads(tev, &maps, &coordinates, &channels);
   key->coordinates_read = (uint8_t)coordinates;
   key->channels_read = (uint8_t)channels;
+  key->channels_zero = (uint8_t)(channels & ~gx_channels_counted());
+  channels &= ~(unsigned)key->channels_zero;
   coordinates = coordinates_needed(coordinates);
   key->coordinates_made = (uint8_t)coordinates;
   int post_enabled = gx.xf[XF_POST_ENABLE] & 1, count = (int)(gx.xf[XF_TEXTURE_COUNT] & 15), normals = gx_vertex_normals(gx_vertex_format);
@@ -383,7 +392,8 @@ void gx_transform_write_shader(const VertexKey *key, ShaderText *text) {
     if (key->coordinates_read & (1u << i)) gx_text_add(text, "  v_uv%d = made%d%s;\n", i, i, key->coordinates_projected & (1u << i) ? "" : ".xy");
   }
   for (int channel = 0; channel < 2; channel++) {
-    if (key->channels_read & (1u << channel)) gx_text_add(text, "  v_color%d = color%d;\n", channel, channel);
+    if (key->channels_zero & (1u << channel)) gx_text_add(text, "  v_color%d = vec4(0.0);\n", channel);
+    else if (key->channels_read & (1u << channel)) gx_text_add(text, "  v_color%d = color%d;\n", channel, channel);
   }
   gx_text_add(text, "}\n");
 }

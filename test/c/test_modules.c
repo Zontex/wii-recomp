@@ -11,6 +11,7 @@ void hw_write(uint32_t a, uint32_t v, int n) {}
 int interrupt_budget;
 void poll_interrupts(void) {}
 void system_call(uint32_t address) {}
+void trap_taken(uint32_t address) { (void)address; }
 void locked_cache_transfer(void) {}
 uint64_t time_base(void) { return 0; }
 uint64_t guest_time_base(void) { return 0; }

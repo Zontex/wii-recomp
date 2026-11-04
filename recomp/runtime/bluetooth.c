@@ -7,6 +7,7 @@
 #include <string.h>
 
 #include "bluetooth.h"
+#include "gaps.h"
 #include "cpu.h"
 #include "title.h"
 #include "ios.h"
@@ -31,7 +32,7 @@ enum { SETTINGS_COUNT = 4, SETTINGS_OFFSETS = 6, SETTINGS_NAME_MASK = 31, SETTIN
 #define PAIRED_ITEM "BT.DINF"
 enum {
   EVENT_RETURN_LINK_KEYS = 0x15, EVENT_AUTHENTICATION_DONE = 0x06, OP_READ_LINK_KEYS = 0x0c0d, OP_AUTHENTICATE = 0x0411, OP_LINK_KEY_REPLY = 0x040b,
-  LINK_KEY_BYTES = 16, MAX_LINK_KEYS = 8,
+  LINK_KEY_BYTES = 16, MAX_LINK_KEYS = 8, OP_WRITE_LINK_KEYS = 0x0c11, OP_DELETE_LINK_KEYS = 0x0c12,
   EVENT_PACKETS_DONE = 0x13, PACKET_BYTES = 128, MAX_PACKETS = 64,
 };
 
@@ -52,6 +53,7 @@ static const char remote_name[] = "Nintendo RVL-CNT-01", board_name[] = "Nintend
 // A device's address ends in its slot, so either can be found from the other.
 typedef struct {
   int present, called, connected;
+  int key_deleted;  // The game deleted its stored link key and hasn't written one since.
   uint8_t address[6];
 } Device;
 
@@ -254,6 +256,78 @@ static void clock_offset(uint32_t handle) {
 
 // A command's parameters start after its opcode and length. Many name a connection or
 // an address first; a device that isn't ours gets an error, never a pretend answer.
+static int same_address(uint32_t guest, const uint8_t *address) {
+  for (int i = 0; i < 6; i++) if (rd8(guest + (uint32_t)i) != address[i]) return 0;
+  return 1;
+}
+
+// Commands the console sends seldom: calling a device itself, looking for new ones, pairing
+// one with no stored key, and power saving. Answers follow the Bluetooth specification's
+// events, with the details Dolphin's BTEmu.cpp gives. Returns 0 for a command not here.
+enum {
+  OP_INQUIRY = 0x0401, OP_INQUIRY_CANCEL = 0x0402, OP_CREATE_CONNECTION = 0x0405, OP_LINK_KEY_NEGATIVE = 0x040c,
+  OP_PIN_CODE_REPLY = 0x040d, OP_SNIFF_MODE = 0x0803, EVENT_INQUIRY_COMPLETE = 0x01, EVENT_MODE_CHANGE = 0x14,
+  EVENT_PIN_CODE_REQUEST = 0x16, EVENT_LINK_KEY_NOTIFICATION = 0x18, SNIFF = 2, COMBINATION_KEY = 0,
+  STATUS_UNKNOWN_CONNECTION = 0x02, STATUS_PAGE_TIMEOUT = 0x04, STATUS_ALREADY_CONNECTED = 0x0b,
+};
+
+static int rare_command(int opcode, uint32_t parameters, uint32_t handle, const uint8_t *address) {
+  int device = opcode == OP_SNIFF_MODE ? device_by_handle(handle) : device_by_address(address);
+  if (opcode == OP_INQUIRY) {
+    // Only a device whose sync button was pressed answers, and ours never are, so the
+    // search ends finding none: a status, then its end with no answers.
+    const uint8_t done[] = {STATUS_OK, 0};
+    command_status(opcode);
+    queue_event(EVENT_INQUIRY_COMPLETE, done, sizeof done);
+  } else if (opcode == OP_INQUIRY_CANCEL) {
+    const uint8_t results[] = {STATUS_OK};
+    command_complete(opcode, results, sizeof results);
+  } else if (opcode == OP_CREATE_CONNECTION) {
+    // The console calls a device. One of ours that isn't connected answers at once, and
+    // won't call the console as well. Any other address doesn't answer.
+    command_status(opcode);
+    if (device >= 0 && !devices[device].connected) {
+      devices[device].called = 1;
+      connection_complete(device);
+    } else {
+      uint8_t failed[11] = {device >= 0 ? STATUS_ALREADY_CONNECTED : STATUS_PAGE_TIMEOUT};
+      memcpy(failed + 3, address, 6);
+      failed[9] = LINK_ACL;
+      queue_event(EVENT_CONNECTION_COMPLETE, failed, sizeof failed);
+    }
+  } else if (opcode == OP_LINK_KEY_NEGATIVE) {
+    // The console has no key for the device, so the chip pairs them and first asks for a PIN.
+    uint8_t results[7] = {STATUS_OK};
+    memcpy(results + 1, address, 6);
+    command_complete(opcode, results, sizeof results);
+    if (device >= 0) queue_event(EVENT_PIN_CODE_REQUEST, address, 6);
+  } else if (opcode == OP_PIN_CODE_REPLY) {
+    // Paired: the chip hands over the new key, which it then keeps, and the link is trusted.
+    uint8_t results[7] = {STATUS_OK};
+    memcpy(results + 1, address, 6);
+    command_complete(opcode, results, sizeof results);
+    if (device >= 0) {
+      uint8_t key[6 + LINK_KEY_BYTES + 1];
+      memcpy(key, address, 6);
+      memset(key + 6, 0x5a, LINK_KEY_BYTES);
+      key[6 + LINK_KEY_BYTES] = COMBINATION_KEY;
+      devices[device].key_deleted = 0;
+      queue_event(EVENT_LINK_KEY_NOTIFICATION, key, sizeof key);
+      const uint8_t done[] = {STATUS_OK, (uint8_t)handle_of(device), (uint8_t)(handle_of(device) >> 8)};
+      queue_event(EVENT_AUTHENTICATION_DONE, done, sizeof done);
+    }
+  } else if (opcode == OP_SNIFF_MODE) {
+    // The device saves power, reporting at the longest interval the console allows.
+    const uint8_t changed[] = {device >= 0 ? STATUS_OK : STATUS_UNKNOWN_CONNECTION, (uint8_t)handle, (uint8_t)(handle >> 8), SNIFF,
+                               rd8(parameters + 2), rd8(parameters + 3)};
+    command_status(opcode);
+    queue_event(EVENT_MODE_CHANGE, changed, sizeof changed);
+  } else {
+    return 0;
+  }
+  return 1;
+}
+
 static void run_command(uint32_t address, uint32_t bytes) {
   int opcode = (int)(rd8(address) | rd8(address + 1) << 8);
   uint32_t parameters = address + PARAMETERS;
@@ -283,7 +357,7 @@ static void run_command(uint32_t address, uint32_t bytes) {
     // Every device we have, then how many. Nothing checks the keys: both ends are here.
     int count = 0;
     for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
-      if (!devices[i].present) continue;
+      if (!devices[i].present || devices[i].key_deleted) continue;
       uint8_t keys[1 + 6 + LINK_KEY_BYTES] = {1};
       memcpy(keys + 1, devices[i].address, 6);
       memset(keys + 7, 0x5a, LINK_KEY_BYTES);
@@ -291,6 +365,29 @@ static void run_command(uint32_t address, uint32_t bytes) {
       count++;
     }
     const uint8_t results[] = {STATUS_OK, MAX_LINK_KEYS, 0, (uint8_t)count, 0};
+    command_complete(opcode, results, sizeof results);
+  } else if (opcode == OP_DELETE_LINK_KEYS) {
+    // An address, then whether to delete every key. Answers how many went.
+    int all = rd8(parameters + 6), deleted = 0;
+    for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
+      if (!devices[i].present || devices[i].key_deleted || (!all && !same_address(parameters, devices[i].address))) continue;
+      devices[i].key_deleted = 1;
+      deleted++;
+    }
+    const uint8_t results[] = {STATUS_OK, (uint8_t)deleted, 0};
+    command_complete(opcode, results, sizeof results);
+  } else if (opcode == OP_WRITE_LINK_KEYS) {
+    // How many, then each address and key. The chip keeps them, so they're listed again.
+    int count = rd8(parameters), written = 0;
+    for (int k = 0; k < count; k++) {
+      for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
+        if (devices[i].present && same_address(parameters + 1 + (uint32_t)k * (6 + LINK_KEY_BYTES), devices[i].address)) {
+          devices[i].key_deleted = 0;
+          written++;
+        }
+      }
+    }
+    const uint8_t results[] = {STATUS_OK, (uint8_t)written};
     command_complete(opcode, results, sizeof results);
   } else if (opcode == OP_AUTHENTICATE) {
     int device = device_by_handle(handle);
@@ -341,7 +438,7 @@ static void run_command(uint32_t address, uint32_t bytes) {
   } else if (opcode == OP_CLOCK_OFFSET) {
     command_status(opcode);
     clock_offset(handle);
-  } else {
+  } else if (!rare_command(opcode, parameters, handle, named_address)) {
     const uint8_t results[] = {STATUS_OK};
     command_complete(opcode, results, sizeof results);
     if (opcode == OP_SCAN_ENABLE && (rd8(parameters) & PAGE_SCAN)) {

@@ -11,16 +11,80 @@
 
 enum {
   GET_STATS = 2, CREATE_DIR = 3, READ_DIR = 4, SET_ATTR = 5, GET_ATTR = 6, DELETE = 7, RENAME = 8, CREATE_FILE = 9,
-  GET_USAGE = 12, PATH_BYTES = 64, ATTR_PATH = 6, ATTR_BYTES = 0x4c, MAX_PATH = 1024, VECTOR_BYTES = 8,
+  GET_USAGE = 12, SHUTDOWN = 13, PATH_BYTES = 64, ATTR_PATH = 6, ATTR_BYTES = 0x4c, MAX_PATH = 1024, VECTOR_BYTES = 8,
   INVALID = -101, NOT_FOUND = -106, ALREADY_EXISTS = -105, BLOCK_BYTES = 0x4000, FREE_BLOCKS = 0x4000, FREE_INODES = 0x4000,
-  NAME_BYTES = 13, READ_WRITE = 3,
+  NAME_BYTES = 13, READ_WRITE = 3, FILE_NOT_EMPTY = -115,
+  // Where owner, group, permissions and attribute sit in a request's parameters (Dolphin's ISFSParams).
+  ATTR_OWNER = 0, ATTR_GROUP = 4, ATTR_MODES = ATTR_PATH + PATH_BYTES, ATTR_FLAGS = ATTR_MODES + 3,
 };
+
+#define ATTRIBUTES_FILE "/.attributes"  // In the save folder. Listings skip names that start with a dot.
+
+// Who owns a file or folder and what everyone may do with it. Anything not in the
+// attributes file is owned by 0 and open to all, as files the Wii storage folder brought.
+typedef struct {
+  uint32_t owner;
+  uint16_t group;
+  uint8_t modes[3], flags;
+} Attributes;
+
+static const Attributes default_attributes = {0, 0, {READ_WRITE, READ_WRITE, READ_WRITE}, 0};
 
 static uint32_t guest(uint32_t physical) { return physical | 0x80000000u; }
 
 static void read_path(uint32_t address, char *out) {
   memcpy(out, host(address), PATH_BYTES);
   out[PATH_BYTES - 1] = 0;
+}
+
+// The attributes file has a line for each path given attributes: owner, group, flags, the
+// three permissions, then the path. Lines for paths under `prefix` are dropped, or moved to
+// `moved_to` when that's given. With `set`, the line for `path` becomes `*set`.
+static void rewrite_attributes(const char *prefix, const char *moved_to, const char *path, const Attributes *set) {
+  char full[MAX_PATH], temporary[MAX_PATH + 8], line[PATH_BYTES + 64], name[PATH_BYTES + PATH_BYTES];
+  files_save_path(ATTRIBUTES_FILE, full, sizeof full);
+  snprintf(temporary, sizeof temporary, "%s.new", full);
+  FILE *in = fopen(full, "r");
+  if (!in && !set) return;  // Nothing kept, and nothing to keep.
+  files_make_parents(full);
+  FILE *out = fopen(temporary, "w");
+  if (!out) { if (in) fclose(in); return; }
+  size_t length = prefix ? strlen(prefix) : 0;
+  while (in && fgets(line, sizeof line, in)) {
+    unsigned owner, group, flags, modes[3];
+    if (sscanf(line, "%x %x %x %u %u %u %63[^\n]", &owner, &group, &flags, &modes[0], &modes[1], &modes[2], name) != 7) continue;
+    if (set && !strcmp(name, path)) continue;
+    if (prefix && !strncmp(name, prefix, length) && (!name[length] || name[length] == '/')) {
+      if (!moved_to) continue;
+      char renamed[PATH_BYTES + PATH_BYTES];
+      snprintf(renamed, sizeof renamed, "%s%s", moved_to, name + length);
+      snprintf(name, sizeof name, "%s", renamed);
+    }
+    fprintf(out, "%08x %04x %02x %u %u %u %s\n", owner, group, flags, modes[0], modes[1], modes[2], name);
+  }
+  if (set) fprintf(out, "%08x %04x %02x %u %u %u %s\n", set->owner, set->group, set->flags, set->modes[0], set->modes[1], set->modes[2], path);
+  if (in) fclose(in);
+  fclose(out);
+  rename(temporary, full);
+}
+
+static Attributes attributes_of(const char *path) {
+  char full[MAX_PATH], line[PATH_BYTES + 64], name[PATH_BYTES];
+  Attributes found = default_attributes;
+  files_save_path(ATTRIBUTES_FILE, full, sizeof full);
+  FILE *in = fopen(full, "r");
+  while (in && fgets(line, sizeof line, in)) {
+    unsigned owner, group, flags, modes[3];
+    if (sscanf(line, "%x %x %x %u %u %u %63[^\n]", &owner, &group, &flags, &modes[0], &modes[1], &modes[2], name) != 7) continue;
+    if (strcmp(name, path)) continue;
+    found = (Attributes){owner, (uint16_t)group, {(uint8_t)modes[0], (uint8_t)modes[1], (uint8_t)modes[2]}, (uint8_t)flags};
+  }
+  if (in) fclose(in);
+  return found;
+}
+
+static Attributes read_attributes(uint32_t in) {
+  return (Attributes){rd32(in + ATTR_OWNER), rd16(in + ATTR_GROUP), {rd8(in + ATTR_MODES), rd8(in + ATTR_MODES + 1), rd8(in + ATTR_MODES + 2)}, rd8(in + ATTR_FLAGS)};
 }
 
 static int create(const char *path, int folder) {
@@ -58,6 +122,7 @@ static int erase(const char *path) {
   if (!files_find(path, found, sizeof found)) return NOT_FOUND;
   files_save_path(path, full, sizeof full);
   remove_tree(full);  // Anything only in the Wii storage folder stays, untouched.
+  rewrite_attributes(path, 0, 0, 0);
   return 0;
 }
 
@@ -78,19 +143,54 @@ static int move(const char *from, const char *to) {
   files_save_path(from, saved, sizeof saved);
   files_make_parents(target);
   remove_tree(target);
-  if (!strcmp(source, saved)) return rename(source, target) ? NOT_FOUND : 0;
-  return copy_file(source, target);
+  int result = !strcmp(source, saved) ? (rename(source, target) ? NOT_FOUND : 0) : copy_file(source, target);
+  if (!result) {
+    rewrite_attributes(to, 0, 0, 0);
+    rewrite_attributes(from, to, 0, 0);
+  }
+  return result;
+}
+
+// SETATTR, as Dolphin's FS.cpp answers it. Changing the owner of a file with something in
+// it is refused, so a title can't hand its data to another. There are no callers'
+// identities here, so every caller may change anything, as the system menu may.
+static int set_attributes(uint32_t in) {
+  char path[PATH_BYTES], found[MAX_PATH];
+  read_path(in + ATTR_PATH, path);
+  if (path[0] != '/') return INVALID;
+  if (!files_find(path, found, sizeof found)) return NOT_FOUND;
+  Attributes now = attributes_of(path), wanted = read_attributes(in);
+  struct stat info;
+  if (wanted.owner != now.owner && !stat(found, &info) && S_ISREG(info.st_mode) && info.st_size) return FILE_NOT_EMPTY;
+  rewrite_attributes(0, 0, path, &wanted);
+  return 0;
+}
+
+// A new file or folder keeps the permissions and flags asked for. Its owner would be the
+// caller, whom we can't tell apart, so it's 0.
+static int create_with_attributes(uint32_t in, int folder) {
+  char path[PATH_BYTES];
+  read_path(in + ATTR_PATH, path);
+  int result = create(path, folder);
+  Attributes wanted = read_attributes(in);
+  wanted.owner = 0;
+  wanted.group = 0;
+  int usual = wanted.flags == default_attributes.flags && !memcmp(wanted.modes, default_attributes.modes, sizeof wanted.modes);
+  if (!result && !usual) rewrite_attributes(0, 0, path, &wanted);
+  return result;
 }
 
 static int get_attributes(const char *path, uint32_t out, uint32_t bytes) {
   char found[MAX_PATH];
   if (!files_find(path, found, sizeof found)) return NOT_FOUND;
   if (bytes >= ATTR_BYTES) {
+    Attributes attributes = attributes_of(path);
     memset(host(out), 0, ATTR_BYTES);
     snprintf((char *)host(out + ATTR_PATH), PATH_BYTES, "%s", path);
-    wr8(out + ATTR_PATH + PATH_BYTES, READ_WRITE);
-    wr8(out + ATTR_PATH + PATH_BYTES + 1, READ_WRITE);
-    wr8(out + ATTR_PATH + PATH_BYTES + 2, READ_WRITE);
+    wr32(out + ATTR_OWNER, attributes.owner);
+    wr16(out + ATTR_GROUP, attributes.group);
+    for (int i = 0; i < 3; i++) wr8(out + ATTR_MODES + i, attributes.modes[i]);
+    wr8(out + ATTR_FLAGS, attributes.flags);
   }
   return 0;
 }
@@ -160,12 +260,12 @@ int fs_request(uint32_t command, uint32_t request) {
   char path[PATH_BYTES], other[PATH_BYTES];
   switch (code) {
     case GET_STATS: write_stats(out); return 0;
-    case CREATE_DIR: read_path(in + ATTR_PATH, path); return create(path, 1);
-    case CREATE_FILE: read_path(in + ATTR_PATH, path); return create(path, 0);
+    case CREATE_DIR: case CREATE_FILE: return create_with_attributes(in, code == CREATE_DIR);
     case GET_ATTR: read_path(in, path); return get_attributes(path, out, rd32(request + 28));
     case DELETE: read_path(in, path); return erase(path);
     case RENAME: read_path(in, path); read_path(in + PATH_BYTES, other); return move(path, other);
-    case SET_ATTR: return 0;  // Owners and permissions aren't kept yet: docs/native_ios.md, stage 2.
+    case SET_ATTR: return set_attributes(in);
+    case SHUTDOWN: files_save_all(); return 0;  // IOS writes everything out before the power goes.
     default: return IOS_UNHANDLED;
   }
 }

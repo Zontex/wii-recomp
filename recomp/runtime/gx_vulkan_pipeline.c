@@ -26,7 +26,8 @@ static const char *const prefix =
   "#define GX_VARYING(n) layout(location = n)\n"
   "#define GX_BLOCK(n) layout(std140, set = 0, binding = n)\n"
   "#define GX_MAP(n) layout(set = 1, binding = n)\n"
-  "#define GX_DEPTH(z, w) ((z) + (w))\n";  // Vulkan's depth runs from 0, not -w.
+  "#define GX_DEPTH(z, w) ((z) + (w))\n"  // Vulkan's depth runs from 0, not -w.
+  "#define GX_EARLY_TESTS\n";  // Every Vulkan device can test depth before the shader.
 
 // A stage is known by a hash of its full text, so a compiled one can be found again
 // in a later run, and a pipeline by the hashes of its two stages and its state.
@@ -485,6 +486,11 @@ static VkSampler create_sampler(const GxSampling *sampling, int nearest_only) {
     .minLod = (float)sampling->min_level / LEVEL_STEPS,
     .maxLod = sampling->mip_mode == GX_MIP_NONE ? NO_MIPMAP_MAX_LOD : (float)sampling->max_level / LEVEL_STEPS,
   };
+  if (sampling->anisotropy && vk.max_anisotropy > 1 && !nearest_only) {
+    float wanted = (float)(1 << sampling->anisotropy);
+    info.anisotropyEnable = VK_TRUE;
+    info.maxAnisotropy = wanted < vk.max_anisotropy ? wanted : vk.max_anisotropy;
+  }
   VkSampler sampler;
   vk_check(vkCreateSampler(vk.device, &info, 0, &sampler), "creating a sampler");
   return sampler;
@@ -494,14 +500,14 @@ static VkSampler create_sampler(const GxSampling *sampling, int nearest_only) {
 VkSampler vk_sampler_find(const GxSampling *sampling, int depth) {
   int nearest_only = depth && !vk.depth_filters_linear;
   GxSampling keyed = *sampling;
-  keyed.unused = (uint8_t)(nearest_only + 1);  // So that no key is ever 0, which marks a free slot.
+  keyed.anisotropy = (uint8_t)(sampling->anisotropy | GX_SAMPLING_IN_USE | nearest_only << 6);  // No key is ever 0, a free slot.
   uint64_t key;
   memcpy(&key, &keyed, sizeof key);
   uint32_t slot = (uint32_t)((key * 0x9e3779b97f4a7c15ull) >> 40) & (SAMPLER_SLOTS - 1);
   while (samplers[slot].key && samplers[slot].key != key) slot = (slot + 1) & (SAMPLER_SLOTS - 1);
   if (samplers[slot].key) return samplers[slot].sampler;
   if (sampler_count >= vk.limits.maxSamplerAllocationCount || sampler_count >= SAMPLER_SLOTS / 2) {
-    debug_unsupported("more texture samplers than the device allows", SAMPLER_SLOTS / 2);
+    debug_unsupported("limit.texture_samplers", "more texture samplers than the device allows", SAMPLER_SLOTS / 2);
     return first_sampler;
   }
   samplers[slot].key = key;

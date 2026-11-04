@@ -5,23 +5,42 @@
 #include <string.h>
 
 #include "cpu.h"
+#include "drive.h"
 #include "hardware.h"
 #include "ios.h"
+#include "gaps.h"
 
-#define IPC_MESSAGE 0xcd000000u
-#define IPC_CONTROL 0xcd000004u
-#define IPC_REPLY 0xcd000008u
-#define IRQ_FLAGS 0xcd000030u
+// Hollywood's registers, as offsets the game reaches at both 0xCD000000 and 0xCD800000,
+// as Dolphin maps them (HW/WII_IPC.cpp).
+enum {
+  HOLLYWOOD_BASE = 0xcd000000u, HOLLYWOOD_MIRROR = 0x00800000u, HOLLYWOOD_SIZE = 0x400,
+  IPC_MESSAGE = 0x00, IPC_CONTROL = 0x04, IPC_REPLY = 0x08, VI_SOLID = 0x24, IRQ_FLAGS = 0x30, IRQ_MASK = 0x34,
+  GPIO_OUT = 0xc0, GPIO_DIRECTION = 0xc4, GPIO_IN = 0xc8,
+};
 #define IRQ_IPC_FLAG 0x40000000u
+#define VI_SOLID_ENABLE 1u  // The rest of the register is the colour, as WiiBrew describes it.
+// The pins the game's side owns, and which way each points at power-on, from Dolphin.
+// The slot light and sensor bar power have nothing to drive here, and Dolphin leaves
+// them alone too. The eject pin would throw the disc out.
+enum {
+  GPIO_SLOT_LIGHT = 0x20, GPIO_DISC_IN = 0x80, GPIO_SENSOR_BAR = 0x100, GPIO_EJECT = 0x200,
+  GPIO_AV_CLOCK = 0x4000, GPIO_AV_DATA = 0x8000,
+  GPIO_OWNED = GPIO_SLOT_LIGHT | GPIO_DISC_IN | GPIO_SENSOR_BAR | GPIO_EJECT | GPIO_AV_CLOCK | GPIO_AV_DATA,
+  GPIO_OUTPUTS = GPIO_SLOT_LIGHT | GPIO_SENSOR_BAR | GPIO_EJECT | GPIO_AV_CLOCK | GPIO_AV_DATA,
+};
 
 enum { CONTROL_SEND = 1, CONTROL_ACK = 2, CONTROL_REPLY = 4, CONTROL_RELAUNCH = 8,
        CONTROL_ENABLE_REPLY = 0x10, CONTROL_ENABLE_ACK = 0x20 };
-enum { REPLY_MARKER = 8, MAX_QUEUED = 64, MAX_OPEN = 32, NOT_FOUND = -106 };
+enum { REPLY_MARKER = 8, MAX_OPEN = 32, NOT_FOUND = -106 };
 
-static uint32_t message, reply_address;
+static uint32_t message, reply_address, vi_solid, irq_mask = IRQ_IPC_FLAG;
+static uint32_t gpio_out, gpio_direction = GPIO_OUTPUTS;
 static uint32_t ack, reply, enable_ack, enable_reply;
-static uint32_t queue[MAX_QUEUED];
-static int queued;
+// Replies wait here until the game takes them, one at a time. Any number can wait: devices
+// that hold requests, such as the Bluetooth chip, may finish many at once, and IOS never
+// drops a reply.
+static uint32_t *queue;
+static size_t queued, queue_room;
 static int open_device[MAX_OPEN];   // Device number plus one.
 static int open_file[MAX_OPEN];     // File handle plus one.
 
@@ -41,13 +60,17 @@ static int open_request(uint32_t request) {
   }
   int device = ios_find_device(path);
   int is_device = !strncmp(path, "/dev/", 5);
-  int file = device < 0 && !is_device ? files_open(path) : -1;
-  fprintf(stderr, "ios open %s -> %s\n", path, device >= 0 || file >= 0 ? "ok" : "not found");
-  if (device < 0 && file < 0) return is_device ? IOS_ENOENT : NOT_FOUND;
+  // The mode says whether the file may be read, written or both (Dolphin's FS.cpp keeps its low two bits).
+  int file = device < 0 && !is_device ? files_open(path, rd32(guest(request) + 16)) : IOS_ENOENT;
+  if (device >= 0 || file >= 0) fprintf(stderr, "ios open %s -> ok\n", path);
+  else fprintf(stderr, "ios open %s -> %d\n", path, file);
+  // /dev/usb/ven is only in IOS 57 to 59. The IOS we present has none, as on a Wii running it.
+  if (!strcmp(path, "/dev/usb/ven")) gap_hit("ios.dev_usb_ven", 0);
+  if (device < 0 && file < 0) return file;
   for (int fd = 3; fd < MAX_OPEN; fd++) {
     if (!open_device[fd] && !open_file[fd]) {
       open_device[fd] = device + 1;
-      open_file[fd] = file + 1;
+      open_file[fd] = file >= 0 ? file + 1 : 0;
       return fd;
     }
   }
@@ -90,9 +113,10 @@ void ios_complete(uint32_t request, int result) {
   wr32(request + 4, (uint32_t)result);
   wr32(request + 8, command);
   wr32(request, REPLY_MARKER);
-  if (queued == MAX_QUEUED) {  // Dropping a reply would leave the program waiting forever.
-    fprintf(stderr, "stop: more than %d IOS replies waiting\n", MAX_QUEUED);
-    exit(9);
+  if (queued == queue_room) {
+    queue_room = queue_room ? queue_room * 2 : 64;
+    queue = realloc(queue, queue_room * sizeof *queue);
+    if (!queue) { fprintf(stderr, "stop: no memory for IOS replies\n"); exit(9); }
   }
   queue[queued++] = request & ~0x80000000u;
 }
@@ -101,43 +125,73 @@ void ios_complete(uint32_t request, int result) {
 void ipc_update(void) {
   if (reply || ack || !queued) return;
   reply_address = queue[0];
-  memmove(queue, queue + 1, (size_t)--queued * sizeof queue[0]);
+  memmove(queue, queue + 1, --queued * sizeof queue[0]);
   reply = 1;
   update_irq();
 }
 
+// The register's offset, or -1 for an address outside Hollywood's registers.
+static int hollywood_offset(uint32_t address) {
+  uint32_t offset = (address & ~HOLLYWOOD_MIRROR) - HOLLYWOOD_BASE;
+  return offset < HOLLYWOOD_SIZE ? (int)offset : -1;
+}
+
 int ipc_read(uint32_t address, uint32_t *value) {
-  if (address == IPC_MESSAGE) *value = message;
-  else if (address == IPC_REPLY) *value = reply_address;
-  else if (address == IPC_CONTROL) {
-    *value = (ack ? CONTROL_ACK : 0) | (reply ? CONTROL_REPLY : 0)
-        | (enable_reply ? CONTROL_ENABLE_REPLY : 0) | (enable_ack ? CONTROL_ENABLE_ACK : 0);
-  } else if (address == IRQ_FLAGS) {
-    *value = irq_pending() ? IRQ_IPC_FLAG : 0;
-  } else {
-    return 0;
+  switch (hollywood_offset(address)) {
+    case IPC_MESSAGE: *value = message; break;
+    case IPC_REPLY: *value = reply_address; break;
+    case IPC_CONTROL:
+      *value = (ack ? CONTROL_ACK : 0) | (reply ? CONTROL_REPLY : 0)
+          | (enable_reply ? CONTROL_ENABLE_REPLY : 0) | (enable_ack ? CONTROL_ENABLE_ACK : 0);
+      break;
+    case IRQ_FLAGS: *value = irq_pending() ? IRQ_IPC_FLAG : 0; break;
+    case IRQ_MASK: *value = irq_mask; break;
+    case VI_SOLID: *value = vi_solid; break;
+    case GPIO_OUT: *value = gpio_out; break;
+    case GPIO_DIRECTION: *value = gpio_direction; break;
+    case GPIO_IN: *value = drive_has_disc() ? GPIO_DISC_IN : 0; break;
+    default: return 0;
   }
   return 1;
 }
 
 int ipc_write(uint32_t address, uint32_t value) {
-  if (address == IPC_MESSAGE) {
-    message = value;
-  } else if (address == IPC_CONTROL) {
-    if (value & CONTROL_ACK) ack = 0;
-    if (value & CONTROL_REPLY) reply = 0;
-    enable_reply = value & CONTROL_ENABLE_REPLY;
-    enable_ack = value & CONTROL_ENABLE_ACK;
-    if (value & CONTROL_SEND) {
-      handle(message);
-      ack = 1;
-    }
-    update_irq();
-  } else if (address == IRQ_FLAGS) {
-    clear_irq(IRQ_IPC);
-    update_irq();
-  } else {
-    return 0;
+  switch (hollywood_offset(address)) {
+    case IPC_MESSAGE: message = value; break;
+    case IPC_CONTROL:
+      if (value & CONTROL_ACK) ack = 0;
+      if (value & CONTROL_REPLY) reply = 0;
+      enable_reply = value & CONTROL_ENABLE_REPLY;
+      enable_ack = value & CONTROL_ENABLE_ACK;
+      // CONTROL_RELAUNCH needs nothing: the SDK sets it after taking every reply (Wii Fit
+      // writes 0x38 each time), and games reload IOS through ES.
+      if (value & CONTROL_SEND) {
+        handle(message);
+        ack = 1;
+      }
+      update_irq();
+      break;
+    case IRQ_FLAGS:
+      clear_irq(IRQ_IPC);
+      update_irq();
+      break;
+    case IRQ_MASK:
+      // Only IPC replies reach the game. Hollywood's timer, GPIO and other lines belong
+      // to IOS, and nothing here raises them.
+      irq_mask = value;
+      if (value & ~IRQ_IPC_FLAG) gap_hit("hw.other_hollywood_interrupts_timer_gpio", value);
+      break;
+    case VI_SOLID:
+      vi_solid = value;
+      if (value & VI_SOLID_ENABLE) gap_hit("hw.vi_solid_color_hollywood_0x24", value);
+      break;
+    case GPIO_OUT:
+      gpio_out = (value & GPIO_OWNED) | (gpio_out & ~GPIO_OWNED);
+      if (value & GPIO_EJECT) gap_hit("hw.second_disc_layer_disc_swap", value);
+      break;
+    case GPIO_DIRECTION: gpio_direction = (value & GPIO_OWNED) | (gpio_direction & ~GPIO_OWNED); break;
+    case GPIO_IN: break;  // Read only.
+    default: return 0;
   }
   return 1;
 }

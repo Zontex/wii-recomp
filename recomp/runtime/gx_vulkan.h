@@ -62,6 +62,7 @@ typedef struct {
   VkPhysicalDeviceLimits limits;
   PFN_vkCmdPushDescriptorSetKHR push_descriptors;  // Null where the driver lacks them.
   int depth_filters_linear, dual_source;
+  float max_anisotropy;  // 0 when the device can't filter along a slope.
 
   VkSwapchainKHR swapchain;
   VkExtent2D swap_extent;

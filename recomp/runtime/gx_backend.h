@@ -47,10 +47,13 @@ typedef struct { float x, y, width, height, depth_near, depth_far; } GxViewport;
 typedef struct { int x, y, width, height; } GxRectangle;
 typedef struct { uint8_t red, green, blue, alpha; } GxChannels;  // Where each channel reads from when sampled.
 
-// Levels of detail count in 16ths. Zeroed before filling, so it can be compared and hashed.
+// Levels of detail count in 16ths. Anisotropy is 0, or 1 and 2 for up to 2 and 4 samples
+// along a slope; backends mark a sampler table's slots in use in its top bits, as
+// GX_SAMPLING_IN_USE. Zeroed before filling, so it can be compared and hashed.
 typedef struct {
-  uint8_t wrap_s, wrap_t, magnify_linear, minify_linear, mip_mode, min_level, max_level, unused;
+  uint8_t wrap_s, wrap_t, magnify_linear, minify_linear, mip_mode, min_level, max_level, anisotropy;
 } GxSampling;
+#define GX_SAMPLING_IN_USE 0x80u
 _Static_assert(sizeof(GxSampling) == 8, "backends use a sampling as a 64-bit key");
 
 typedef struct {

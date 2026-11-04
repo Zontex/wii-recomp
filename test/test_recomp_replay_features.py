@@ -721,9 +721,15 @@ class Sampling(Scene):
         self.assert_pixel(picture, 280, 200, (0, 255, 0))
 
     def test_settings_not_done_are_named(self):
-        self.shown(self.state((1 << 19) | (1 << 8) | (1 << 21)), 40)
-        for name in ("texture anisotropy", "texture level of detail from diagonals", "texture level of detail clamp bit"):
-            self.assertIn(name, self.log)
+        self.shown(self.state(1 << 21), 40)
+        self.assertIn("texture level of detail clamp bit", self.log)
+
+    def test_anisotropy_and_diagonal_level_of_detail_take_effect(self):
+        # Both are done, so neither is named, and the stripes still show unblurred close up.
+        quad = textured_quad(100, 100, 260, 260)
+        picture = self.picture(self.state((1 << 19) | (1 << 8) | self.MINIFY_LINEAR), quad, self.stripes())
+        self.assertIn(self.pixel(picture, 105, 105)[0], (0, 255))
+        self.assertNotIn("unsupported graphics", self.log)
 
 
 def fog_value(value):

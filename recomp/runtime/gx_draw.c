@@ -74,10 +74,8 @@ static uint32_t cache_slot(uint32_t address, uint32_t image, uint32_t palette) {
 }
 
 static void report_unsupported_sampling(int map, uint32_t mode) {
-  if ((mode >> MODE_EDGE_LEVEL_BIT) & 1) debug_unsupported("texture level of detail from diagonals", (uint32_t)map);
-  if ((mode >> MODE_ANISOTROPY_SHIFT) & 3) debug_unsupported("texture anisotropy", (mode >> MODE_ANISOTROPY_SHIFT) & 3);
-  if ((mode >> MODE_LEVEL_CLAMP_BIT) & 1) debug_unsupported("texture level of detail clamp bit", (uint32_t)map);
-  if ((gx.bp[map < 4 ? BP_TEXTURE_CACHE_LOW + map : BP_TEXTURE_CACHE_HIGH + map - 4] >> CACHE_MANAGED_BIT) & 1) debug_unsupported("texture preloaded to texture memory", (uint32_t)map);
+  if ((mode >> MODE_LEVEL_CLAMP_BIT) & 1) debug_unsupported("gx.0x84_0x87_0xa4_0xa7_texture_mode_1", "texture level of detail clamp bit", (uint32_t)map);
+  if ((gx.bp[map < 4 ? BP_TEXTURE_CACHE_LOW + map : BP_TEXTURE_CACHE_HIGH + map - 4] >> CACHE_MANAGED_BIT) & 1) debug_unsupported("vtx.tmem_preload", "texture preloaded to texture memory", (uint32_t)map);
 }
 
 // A wrap mode of 3 clamps, as Dolphin's tests found. With no mip filter only the full
@@ -94,6 +92,9 @@ static void use_texture(int map, GxTexture *texture, int has_levels) {
   sampling.wrap_t = wraps[(mode >> 2) & 3];
   sampling.magnify_linear = (mode >> MODE_MAGNIFY_BIT) & 1;
   sampling.minify_linear = (mode >> MODE_MINIFY_BIT) & 1;
+  // 1 and 2 allow 2 and 4 samples along a slope, as Dolphin's samplers do. 3 means none.
+  uint32_t anisotropy = (mode >> MODE_ANISOTROPY_SHIFT) & 3;
+  sampling.anisotropy = anisotropy == 3 ? 0 : (uint8_t)anisotropy;
   if (has_levels && filter != MIP_FILTER_NONE) {
     uint8_t smallest = limits & 255, largest = (limits >> 8) & 255;
     sampling.mip_mode = filter == MIP_FILTER_LINEAR ? GX_MIP_LINEAR : GX_MIP_NEAREST;
@@ -147,7 +148,7 @@ static void approximate_logic(GxRenderState *state, int mode) {
     {0, 0, GX_FACTOR_ONE, GX_FACTOR_ZERO},                                    // Set, with the shader giving 1.
   };
   static const uint16_t exact = (1u << 0) | (1u << 3) | (1u << 5) | (1u << 10) | (1u << 12) | (1u << 15);
-  if (!((exact >> mode) & 1)) debug_unsupported("logic operation, approximated by blending", (uint32_t)mode);
+  if (!((exact >> mode) & 1)) debug_unsupported("pixel.logic_ops_16", "logic operation, approximated by blending", (uint32_t)mode);
   state->blend_on = table[mode].on;
   state->blend_subtract = state->blend_subtract_alpha = table[mode].subtract;
   state->blend_source = state->blend_source_alpha = table[mode].source;
@@ -260,7 +261,7 @@ static void viewport_depth(float *depth_near, float *depth_far) {
   *depth_near = (far - range) / DEPTH_STEPS;
   *depth_far = far / DEPTH_STEPS;
   if (!(*depth_near >= 0 && *depth_near <= 1 && *depth_far >= 0 && *depth_far <= 1)) {
-    debug_unsupported("viewport depth past the depth buffer", gx.xf[XF_VIEWPORT + VIEWPORT_FAR]);
+    debug_unsupported("pixel.depth_range", "viewport depth past the depth buffer", gx.xf[XF_VIEWPORT + VIEWPORT_FAR]);
     *depth_near = *depth_near > 0 ? (*depth_near < 1 ? *depth_near : 1) : 0;
     *depth_far = *depth_far > 0 ? (*depth_far < 1 ? *depth_far : 1) : 0;
   }
@@ -297,7 +298,7 @@ Vertex *gx_draw_reserve(int count) {
 // plain stage is worked out, and anything else counts as not known.
 int gx_output_is_opaque(void) {
   const TevKey *key = &gx_last_tev;
-  if (key->stages != 1 || key->alpha_test || key->constant_alpha) return 0;
+  if (key->stages != 1 || key->alpha_test || key->early_depth || key->constant_alpha) return 0;
   const TevStage *s = &key->stage[0];
   if (s->alpha_subtract || s->alpha_bias || s->alpha_scale || s->alpha_target) return 0;
   float least[4];
@@ -340,7 +341,7 @@ int gx_target_has_alpha(void) {
   static uint32_t last_format = PIXEL_FORMAT_UNSEEN;
   if (format != last_format) {
     int had_alpha = last_format == PIXEL_FORMAT_RGBA6, has_alpha = format == PIXEL_FORMAT_RGBA6;
-    if (last_format != PIXEL_FORMAT_UNSEEN && had_alpha != has_alpha && format != PIXEL_FORMAT_DEPTH) debug_unsupported("pixel format change, read without conversion", format);
+    if (last_format != PIXEL_FORMAT_UNSEEN && had_alpha != has_alpha && format != PIXEL_FORMAT_DEPTH) debug_unsupported("pixel.reinterpreting_efb_after_a_format_change", "pixel format change, read without conversion", format);
     last_format = format;
   }
   return format == PIXEL_FORMAT_RGBA6;
@@ -368,10 +369,10 @@ static void report_unsupported_expansion(int lines, uint32_t sizes) {
   int shift = lines ? LINE_OFFSET_SHIFT : POINT_OFFSET_SHIFT, bit = lines ? LINE_OFFSET_BIT : POINT_OFFSET_BIT;
   if ((sizes >> shift) & 7) {
     for (int i = 0; i < MAX_TEXTURE_MAPS; i++) {
-      if ((gx.bp[BP_COORDINATE_SCALE + i * 2] >> bit) & 1) debug_unsupported(lines ? "line texture offset" : "point texture offset", (sizes >> shift) & 7);
+      if ((gx.bp[BP_COORDINATE_SCALE + i * 2] >> bit) & 1) debug_unsupported(lines ? "gx.draw_lines_line_strip" : "gx.draw_points", lines ? "line texture offset" : "point texture offset", (sizes >> shift) & 7);
     }
   }
-  if ((sizes >> ASPECT_ADJUST_BIT) & 1) debug_unsupported("line and point aspect adjustment", sizes);
+  if ((sizes >> ASPECT_ADJUST_BIT) & 1) debug_unsupported("gx.draw_lines_line_strip", "line and point aspect adjustment", sizes);
 }
 
 // Lines and points become quads, as in Dolphin's GeometryShaderGen.cpp and ShaderGenCommon.cpp.

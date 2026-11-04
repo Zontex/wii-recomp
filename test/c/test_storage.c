@@ -60,7 +60,7 @@ int main(int count, char **arguments) {
   CHECK(!files_find("/missing", full, sizeof full));
 
   // Writing a storage file lands in saves on close.
-  int id = files_open("/shared2/only_storage");
+  int id = files_open("/shared2/only_storage", 3);
   CHECK(id >= 0);
   CHECK_EQ(put_bytes(id, "new"), 3);
   files_close(id);
@@ -69,7 +69,7 @@ int main(int count, char **arguments) {
   CHECK(strstr(full, saves) == full);
 
   // An untouched file isn't copied.
-  id = files_open("/shared2/read_only");
+  id = files_open("/shared2/read_only", 3);
   CHECK(id >= 0);
   files_close(id);
   CHECK(!exists(saves, "/shared2/read_only"));

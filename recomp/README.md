@@ -37,6 +37,8 @@ On a Raspberry Pi 5 the build draws at 5/2 of the Wii's resolution, enough for f
 
 For comparing, these turn each one off: `WII_RECOMP_DRAW_CLEARS=1`, `WII_RECOMP_NO_STRIP=1`, `WII_RECOMP_NO_EARLY_DEPTH=1`, `WII_RECOMP_KEEP_DEPTH=1`, `WII_RECOMP_KEEP_COPY_BACK=1`, `WII_RECOMP_KEEP_EMPTY_LAYERS=1`, `WII_RECOMP_NO_SIDE=1`, `WII_RECOMP_NO_SWAP=1`, `WII_RECOMP_KEEP_FOG=1`, `WII_RECOMP_NO_FLAT_DEPTH=1`, `WII_RECOMP_KEEP_DRAWN_BACK=1`, `WII_RECOMP_GX_INLINE=1`. `WII_RECOMP_COVER=1` turns one on: when a page proven opaque covers the whole picture, the drawing before it is thrown away. It has been checked on one screen, so it stays off by default. `WII_RECOMP_GPU_TIMES=1` prints what the chip spent on each pass of one frame in every 300.
 
+`recomp/tools/gap_report.py` merges `gaps.txt` files from any number of runs and titles into one table, most common first: `gap_report.py menu=recomp/build-menu/gaps.txt wiifit=recomp/build/gaps.txt`. It lists apart the rows marked done that a game still hit, and IDs with no row.
+
 `recomp/tools/perf_run.py` measures a fixed run with no input from a copy of `recomp/build/saves`: frame rate, worst frame, CPU, the Mac's speed limit, and what each slow frame spent its time on. It works on a Mac only, because it reads `pmset`.
 
 `recomp/tools/replay/` plays a Dolphin FIFO recording through the runtime's graphics files with no game and no window, and saves each frame as a PNG. In Dolphin, with a game running: Tools > FIFO Player, set Frames to Record, press Record, wait for it to finish, then Save.... Recordings hold the game's textures and models, so `*.dff` stays out of the repo. Only file version 6 is read, which is what Dolphin writes now.
@@ -66,3 +68,4 @@ Each frame of the recording gives one PNG, of its last copy to the screen. A fra
   - `gx_fifo.c`, `gx_vertex.c`, `gx_transform.c`, `gx_light.c`, `gx_texture.c`, `gx_tev.c`, `gx_shader.c`, `gx_copy.c`, `gx_draw.c`, `window.c`: graphics, from command stream to window. The vertex and color stages become small shaders written for each setup the game uses, cached by key in `gx_shader.c`.
   - `dff.c`: reads Dolphin's FIFO recordings, for `tools/replay`.
   - `debug.c`: set `WII_RECOMP_ACTIVITY=1` for per-second counts and a line for each frame over 20 ms, or `WII_RECOMP_DUMP_AFTER=<seconds>` to list what each thread is waiting for.
+  - `gaps.c`: every time a game asks for something we don't do, it's logged once as `gap: <id>`, where the ID is its row in `docs/hardware_inventory.md`. The list goes to `gaps.txt` beside the program (`cache/gaps.txt` in a console folder), or to `WII_RECOMP_GAPS`. `WII_RECOMP_GAPS_STRICT=1` stops at the first one, with exit code 12.

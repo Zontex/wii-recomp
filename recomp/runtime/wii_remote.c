@@ -6,6 +6,7 @@
 #include <string.h>
 
 #include "bluetooth.h"
+#include "gaps.h"
 #include "input.h"
 #include "wii_attachment.h"
 #include "wii_board.h"
@@ -27,6 +28,7 @@ typedef struct {
 static const Mode modes[] = {
   {0x30, 0, 0, 0, 3, 0, 0}, {0x31, 1, 0, 0, 6, 0, 0}, {0x32, 0, 3, 8, 11, 0, 0}, {0x33, 1, 0, 0, 18, 6, 12},
   {0x34, 0, 3, 19, 22, 0, 0}, {0x35, 1, 6, 16, 22, 0, 0}, {0x36, 0, 13, 9, 22, 3, 10}, {0x37, 1, 16, 6, 22, 6, 10},
+  {0x3d, 0, 1, 21, 22, 0, 0},  // Attachment only: its 21 bytes take the buttons' place too.
 };
 
 static struct {
@@ -116,6 +118,7 @@ void wii_remote_output(int device, const uint8_t *data, uint32_t bytes) {
     for (size_t i = 0; i < sizeof modes / sizeof modes[0]; i++) {
       if (modes[i].mode == data[2]) remotes[device].mode = &modes[i];
     }
+    if (data[2] == 0x3e || data[2] == 0x3f) gap_hit("ctl.0x3e_0x3f_interleaved", data[2]);
     memset(remotes[device].last_report, 0, sizeof remotes[device].last_report);
     acknowledge(device, report);
   } else if (report == OUTPUT_STATUS) {
@@ -135,6 +138,8 @@ void wii_remote_output(int device, const uint8_t *data, uint32_t bytes) {
   } else if (report == OUTPUT_LEDS || report == OUTPUT_RUMBLE) {
     if (data[1] & ACK_WANTED) acknowledge(device, report);
   } else {
+    if (report == 0x14 && (data[1] & 4)) gap_hit("ctl.0x14_speaker_enable", data[1]);
+    else if (report == 0x18) gap_hit("ctl.0x18_speaker_data", 0);
     acknowledge(device, report);
   }
 }

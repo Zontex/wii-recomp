@@ -16,31 +16,42 @@
 #include "debug.h"
 #include "title.h"
 #include "gx.h"
+#include "gaps.h"
 #include "hardware.h"
 
 enum {
   COMMAND_NOP = 0x00, COMMAND_CP = 0x08, COMMAND_XF = 0x10, COMMAND_XF_INDEXED_A = 0x20,
-  COMMAND_XF_INDEXED_D = 0x38, COMMAND_CALL_LIST = 0x40, COMMAND_INVALIDATE = 0x48, COMMAND_BP = 0x61,
+  COMMAND_XF_INDEXED_D = 0x38, COMMAND_CALL_LIST = 0x40, COMMAND_METRICS = 0x44, COMMAND_INVALIDATE = 0x48, COMMAND_BP = 0x61,
   COMMAND_DRAW = 0x80, COMMAND_DRAW_LAST = 0xbf,
 };
 enum {
   BP_MASK = 0xfe, BP_DRAW_DONE = 0x45, BP_TOKEN = 0x47, BP_TOKEN_NOW = 0x48, BP_COPY = 0x52,
   BP_LOAD_PALETTE = 0x65, BP_PIXEL_FORMAT = 0x43, PIXEL_FORMAT_MASK = 7, PIXEL_FORMAT_DEPTH = 3, BP_TEV_REGISTER = 0xe0, TEV_KONST_FLAG = 0x800000,
+  BP_GEN_MODE = 0x00, MULTISAMPLE_BIT = 9, Z_FREEZE_BIT = 19, BP_PRELOAD = 0x63,
+  PIXEL_FORMAT_RGB565_Z16 = 2, PIXEL_FORMAT_Y8 = 4, DEPTH_FORMAT_SHIFT = 3,
 };
+enum { XF_CLIP_DISABLE = 0x1005 };
 enum {
   PIPE_FIRST = 0xcc008000u, PIPE_LAST = 0xcc008fffu, CP_STATUS = 0xcc000000u, PE_STATUS = 0xcc00100au,
   PE_TOKEN_VALUE = 0xcc00100eu, CP_IDLE = 0x0c, PE_ENABLE_BITS = 3, PE_TOKEN_DONE = 4, PE_FINISH_DONE = 8,
   COPY_CLEAR_BIT = 11, COPY_TO_SCREEN_BIT = 14,
   PI_FIFO_BASE = 0xcc00300cu, PI_FIFO_END = 0xcc003010u, PI_FIFO_WRITE = 0xcc003014u, PI_ADDRESS_MASK = 0x1fffffffu,
+  PI_FIFO_RESET = 0xcc003018u, FIFO_RESET = 1,
   CP_CONTROL = 0xcc000002u, CP_FIFO_BASE = 0xcc000020u, CP_FIFO_END = 0xcc000024u,
   CP_FIFO_WRITE = 0xcc000034u, CP_FIFO_READ = 0xcc000038u, CP_REGISTERS_END = 0xcc000040u,
+  CP_DISTANCE_LOW = 0xcc000030u, CP_DISTANCE_HIGH = 0xcc000032u,
   CONTROL_READ_ENABLE = 1, CONTROL_INTERRUPT_ENABLE = 2, CONTROL_LINK = 0x10, CONTROL_BREAK_ENABLE = 0x20,
   MSR_INTERRUPTS = 0x8000,
   CP_BREAKPOINT = 0xcc00003cu, CP_STATUS_BREAK = 0x10, CP_STATUS_OVERFLOW = 1, CP_STATUS_UNDERFLOW = 2,
   CONTROL_OVERFLOW_ENABLE = 4, CONTROL_UNDERFLOW_ENABLE = 8, CP_CLEAR = 0xcc000004u, CP_HIGH_MARK = 0xcc000028u, CP_LOW_MARK = 0xcc00002cu,
 };
 enum { MAX_UNDRAWN_VERTICES = 3 };
-#define STREAM_BYTES (4u * 1024u * 1024u)
+// The stream holds at least one whole command, or the largest draw would wait forever.
+// That is 65,535 vertices of 129 bytes: nine matrix indexes, a position and nine normal
+// values as floats, two four-byte colors and eight pairs of float coordinates.
+enum { LARGEST_VERTEX_BYTES = 9 + 3 * 4 + 9 * 4 + 2 * 4 + 8 * 2 * 4, LARGEST_DRAW_BYTES = 3 + 65535 * LARGEST_VERTEX_BYTES };
+#define STREAM_BYTES (9u * 1024u * 1024u)
+_Static_assert(STREAM_BYTES >= LARGEST_DRAW_BYTES, "a draw must fit the stream");
 #define BURST_BYTES 32u
 #define CP_ARRAY_BASE 0xa0
 #define CP_ARRAY_STRIDE 0xb0
@@ -78,6 +89,30 @@ static void raise_pe(uint32_t done, uint32_t enable, int irq) {
   if (pe_enabled & enable) raise_irq(irq);
 }
 
+// Copy settings the picture copies don't follow yet. Bits from Dolphin's UPE_Copy.
+static void copy_gaps(uint32_t control) {
+  int to_screen = (control >> COPY_TO_SCREEN_BIT) & 1;
+  uint32_t gamma = (control >> 7) & 3, field = (control >> 12) & 3, y_scale = gx.bp[0x4e] & 0x1ff;
+  if (to_screen && gamma) gap_hit("pixel.gamma_on_xfb_copy_1_0_1_7_2_2", gamma);
+  if (to_screen && ((control >> 10) & 1) && y_scale != 0x100) gap_hit("pixel.copy_y_scale", y_scale);
+  if (field) gap_hit("pixel.field_copy_frame_to_field", field);
+  if (!to_screen && ((control >> 15) & 1)) gap_hit("pixel.copy_intensity_rgb_to_yuv", (control >> 3) & 15);
+}
+
+// Pixel settings we don't follow, named as the game sets them. Bits from Dolphin's BPMemory.h.
+static void setting_gaps(uint32_t reg, uint32_t data) {
+  if (reg == BP_GEN_MODE) {
+    if ((data >> MULTISAMPLE_BIT) & 1) gap_hit("pixel.multisample_and_aa_modes", MULTISAMPLE_BIT);
+    if ((data >> Z_FREEZE_BIT) & 1) gap_hit("pixel.z_freeze", Z_FREEZE_BIT);
+  } else if (reg == BP_PIXEL_FORMAT) {
+    uint32_t format = data & PIXEL_FORMAT_MASK;
+    if (format == PIXEL_FORMAT_RGB565_Z16) gap_hit("pixel.z16_precision_formats", (data >> DEPTH_FORMAT_SHIFT) & 7);
+    else if (format >= PIXEL_FORMAT_Y8) gap_hit("pixel.efb_y8_u8_v8_yuv420", format);
+  } else if (reg == BP_PRELOAD && data) {
+    gap_hit("gx.0x60_0x63_texture_preload", data);  // The SDK writes 0 here to end a sync.
+  }
+}
+
 static void write_bp(uint32_t value) {
   uint32_t reg = value >> 24, data = value & 0xffffff;
   if (reg == BP_MASK) {
@@ -87,6 +122,7 @@ static void write_bp(uint32_t value) {
   uint32_t mask = gx.bp[BP_MASK] ? gx.bp[BP_MASK] : 0xffffff;
   gx.bp[reg] = (gx.bp[reg] & ~mask) | (data & mask);
   gx.bp[BP_MASK] = 0;
+  if (reg == BP_GEN_MODE || reg == BP_PIXEL_FORMAT || reg == BP_PRELOAD) setting_gaps(reg, gx.bp[reg]);
   if (reg >= BP_TEV_REGISTER && reg < BP_TEV_REGISTER + 8) {
     uint32_t *bank = data & TEV_KONST_FLAG ? gx.tev_konst : gx.tev_color;
     bank[reg - BP_TEV_REGISTER] = gx.bp[reg];
@@ -106,6 +142,7 @@ static void write_bp(uint32_t value) {
     gx_load_palette();
   } else if (reg == BP_COPY) {
     gx_stats.copies++;
+    copy_gaps(data);
     if (data & (1u << COPY_TO_SCREEN_BIT)) {
       static uint64_t last_frame;
       uint64_t frame_time = time_base();
@@ -136,7 +173,8 @@ static void load_indexed(int command, uint32_t value) {
 // Parses one command, returns its bytes, or 0 if it isn't all here yet.
 static uint32_t parse_one(const uint8_t *p, uint32_t left) {
   int command = p[0];
-  if (command == COMMAND_NOP || command == COMMAND_INVALIDATE) return 1;
+  // 0x44 starts the chip's counters for a profiler, and is one byte, as Dolphin's OpcodeDecoding.cpp reads it.
+  if (command == COMMAND_NOP || command == COMMAND_INVALIDATE || command == COMMAND_METRICS) return 1;
   if (command == COMMAND_BP) {
     if (left < 5) return 0;
     write_bp(big32(p + 1));
@@ -152,6 +190,8 @@ static uint32_t parse_one(const uint8_t *p, uint32_t left) {
     uint32_t count = big16(p + 1) + 1, address = big16(p + 3), bytes = 5 + count * 4;
     if (left < bytes) return 0;
     for (uint32_t i = 0; i < count && address + i < XF_SIZE; i++) gx.xf[address + i] = big32(p + 5 + i * 4);
+    // Turning clipping off only changes what lies outside the view. Not followed.
+    if (address <= XF_CLIP_DISABLE && address + count > XF_CLIP_DISABLE && gx.xf[XF_CLIP_DISABLE]) gap_hit("gx.0x1005_clip_disable", gx.xf[XF_CLIP_DISABLE]);
     return bytes;
   }
   if (command >= COMMAND_XF_INDEXED_A && command <= COMMAND_XF_INDEXED_D && !(command & 7)) {
@@ -430,7 +470,28 @@ void gx_stream_report(void) {
   fprintf(stderr, "\n  vertex format %x %x, needs %u for one vertex of format 0\n", gx.cp[0x50], gx.cp[0x60], gx_vertices_size(0, 1));
 }
 
+// GXAbortFrame throws away what the chip hasn't drawn yet, as Dolphin's
+// ProcessorInterface.cpp does it: the CPU's half-filled burst and the commands read but
+// not run are dropped, and the chip's FIFO control goes back to linked, with reads and
+// interrupts off and the marks at their limits. Commands already handed to the commands
+// thread count as drawn, as this chip is never behind by more.
+static void fifo_reset(void) {
+  burst_used = 0;
+  stream_used = 0;
+  at_breakpoint = 0;
+  resume_state = RUNNING;
+  fifo_flags = 0;
+  hw_poke(CP_CONTROL, CONTROL_LINK, 2);
+  write_pair(CP_LOW_MARK, 0);
+  write_pair(CP_HIGH_MARK, PI_ADDRESS_MASK & ~31u);
+  clear_irq(IRQ_CP);
+}
+
 int graphics_write(uint32_t address, uint32_t value, int bytes) {
+  if (address == PI_FIFO_RESET) {
+    if (value & FIFO_RESET) fifo_reset();
+    return 1;
+  }
   if (address >= PIPE_FIRST && address <= PIPE_LAST) {
     feed_stream(value, bytes);
     return 1;
@@ -467,8 +528,19 @@ int graphics_write(uint32_t address, uint32_t value, int bytes) {
   return 0;
 }
 
+// How many bytes of the FIFO the chip has still to read, as Dolphin's CommandProcessor.cpp
+// works it out when the chip runs on its own thread: across the turn if the writer has
+// wrapped. The SDK reads it to tell how full the FIFO is.
+static uint32_t fifo_distance(void) {
+  uint32_t base = read_pair(CP_FIFO_BASE), limit = ring_limit(read_pair(CP_FIFO_END));
+  uint32_t read = read_pair(CP_FIFO_READ), write = read_pair(CP_FIFO_WRITE);
+  return write >= read ? write - read : (limit - read) + (write - base);
+}
+
 int graphics_read(uint32_t address, uint32_t *value) {
-  if (address == CP_STATUS) *value = CP_IDLE | (at_breakpoint ? CP_STATUS_BREAK : 0) | fifo_flags;
+  if (address == CP_DISTANCE_LOW) *value = fifo_distance() & 0xffff;
+  else if (address == CP_DISTANCE_HIGH) *value = fifo_distance() >> 16;
+  else if (address == CP_STATUS) *value = CP_IDLE | (at_breakpoint ? CP_STATUS_BREAK : 0) | fifo_flags;
   else if (address == PE_STATUS) *value = pe_enabled | pe_status;
   else if (address == PE_TOKEN_VALUE) {
     *value = pe_token;

@@ -15,6 +15,7 @@
 #include "gx_shot.h"
 #endif
 #include "input.h"
+#include "hardware.h"
 
 enum {
   CHANNEL_REMOTE = 0, CHANNEL_BOARD = 3, CHANNELS = 4,
@@ -236,7 +237,7 @@ static uint32_t button_named(const char *name) {
 }
 
 // One command per line: press a, hold a, release a, pointer x y, board on kg x y, board off,
-// shot <file> to save the next picture.
+// reset to press the console's reset button, shot <file> to save the next picture.
 static void run_command(const char *line) {
   char word[16], name[16], path[1024];
   float x = 0, y = 0, kilograms = state.kilograms;
@@ -245,6 +246,7 @@ static void run_command(const char *line) {
   else if (sscanf(line, "hold %15s", name) == 1) input_hold(button_named(name), 1);
   else if (sscanf(line, "release %15s", name) == 1) input_hold(button_named(name), 0);
   else if (sscanf(line, "pointer %f %f", &x, &y) == 2) input_pointer(x, y);
+  else if (!strncmp(line, "reset", 5)) reset_button_press();
   else if (sscanf(line, "board %15s %f %f %f", word, &kilograms, &x, &y) >= 1) {
     input_board(!strcmp(word, "on"), kilograms, x, y);
   } else if (!strncmp(line, "dump", 4)) gx_inspect_dump();

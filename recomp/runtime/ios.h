@@ -27,10 +27,16 @@ int dvd_request(uint32_t command, uint32_t request);
 int es_request(uint32_t command, uint32_t request);
 int stm_immediate(uint32_t command, uint32_t request);
 int stm_event_hook(uint32_t command, uint32_t request);
+void stm_reset_button(void);
 int net_kd_request(uint32_t command, uint32_t request);
 int net_kd_time(uint32_t command, uint32_t request);
 int net_ncd_manage(uint32_t command, uint32_t request);
 int sdio_request(uint32_t command, uint32_t request);
+int usb_oh0_request(uint32_t command, uint32_t request);
+int usb_hid_request(uint32_t command, uint32_t request);
+int usb_kbd_request(uint32_t command, uint32_t request);
+int aes_request(uint32_t command, uint32_t request);
+int sha_request(uint32_t command, uint32_t request);
 void wc24_request_user_id(uint8_t *out);
 int console_setting(const char *name, char *out, size_t limit);  // From setting.txt; 0 if it isn't there.
 // The disc's ticket, beside the extracted system folder. Returns 0 if there's none.
@@ -41,7 +47,8 @@ int files_storage_path(const char *path, char *out, unsigned long size);
 void files_make_parents(const char *full);
 int files_find(const char *path, char *out, unsigned long size);
 int fs_request(uint32_t command, uint32_t request);
-int files_open(const char *path);
+int files_open(const char *path, uint32_t mode);  // A handle, or an FS error such as FS_ENOENT.
+void files_save_all(void);
 void files_close(int id);
 const char *files_name(int id);  // The path an open file was opened by.
 int files_request(int id, uint32_t command, uint32_t request);

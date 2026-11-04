@@ -5,17 +5,22 @@
 #include <string.h>
 
 #include "bluetooth.h"
+#include "gaps.h"
 #include "wii_remote.h"
 
 enum {
   ACL_HEADER = 4, L2CAP_HEADER = 4, SIGNAL_HEADER = 4, ACL_FIRST_FRAGMENT = 0x2000, FRAME_BYTES = 64,
   CID_SIGNAL = 1, CID_CONTROL = 0x40, CID_INTERRUPT = 0x41, PSM_CONTROL = 0x11, PSM_INTERRUPT = 0x13,
   SIGNAL_CONNECT = 2, SIGNAL_CONNECT_RESPONSE = 3, SIGNAL_CONFIGURE = 4, SIGNAL_CONFIGURE_RESPONSE = 5,
+  SIGNAL_DISCONNECT = 6, SIGNAL_DISCONNECT_RESPONSE = 7, PSM_SDP = 1,
+  // A connect response's result: done, no service on that PSM, or a channel to it is open already.
+  CONNECT_DONE = 0, CONNECT_NO_SERVICE = 2, CONNECT_NO_ROOM = 4,
   HID_INPUT = 0xa1, HID_OUTPUT = 0xa2,
 };
 
 static struct {
   uint32_t host_control, host_interrupt, signal_id;
+  int host_opened;  // The console opened the channels, so it opens interrupt too, not the device.
 } channels[BLUETOOTH_DEVICES];
 
 static void put16(uint8_t *to, uint32_t value) {
@@ -69,6 +74,40 @@ void bluetooth_send_report(int device, const uint8_t *report, uint32_t bytes) {
   send_frame(device, channels[device].host_interrupt, frame, bytes + 1);
 }
 
+// The console opens a channel to the device, as it does after calling it itself. A real
+// Wii Remote refuses a second channel to the same service. It also answers service
+// discovery (SDP), which games on the SDK don't use for a paired remote, so that's
+// refused as a service it doesn't have, and reported.
+static void channel_wanted(int device, int id, const uint8_t *body) {
+  uint32_t psm = get16(body), host = get16(body + 2), mine = 0, result = CONNECT_NO_SERVICE;
+  uint32_t *open = psm == PSM_CONTROL ? &channels[device].host_control : psm == PSM_INTERRUPT ? &channels[device].host_interrupt : 0;
+  if (psm == PSM_SDP) gap_hit("ctl.sdp_queries", psm);
+  else if (!open) gap_hit("unlisted.ctl.l2cap_psm", psm);
+  else if (*open) result = CONNECT_NO_ROOM;
+  else {
+    *open = host;
+    mine = psm == PSM_CONTROL ? CID_CONTROL : CID_INTERRUPT;
+    channels[device].host_opened = 1;
+    result = CONNECT_DONE;
+  }
+  uint8_t reply[8] = {0};
+  put16(reply, mine);
+  put16(reply + 2, host);
+  put16(reply + 4, result);
+  send_signal(device, SIGNAL_CONNECT_RESPONSE, id, reply, sizeof reply);
+  if (result == CONNECT_DONE) configure_channel(device, host);
+}
+
+// The console closes one of the device's channels. Reports stop once interrupt is closed.
+static void channel_closed(int device, int id, const uint8_t *body) {
+  uint32_t mine = get16(body), host = get16(body + 2);
+  if (mine == CID_CONTROL && channels[device].host_control == host) channels[device].host_control = 0;
+  else if (mine == CID_INTERRUPT && channels[device].host_interrupt == host) channels[device].host_interrupt = 0;
+  else fprintf(stderr, "bluetooth: device %d: the console closed channel %04x, which isn't open\n", device, mine);
+  if (!channels[device].host_control && !channels[device].host_interrupt) channels[device].host_opened = 0;
+  send_signal(device, SIGNAL_DISCONNECT_RESPONSE, id, body, 4);  // The same two channel numbers back.
+}
+
 static void handle_signal(int device, const uint8_t *frame) {
   int code = frame[0], id = frame[1];
   const uint8_t *body = frame + SIGNAL_HEADER;
@@ -82,10 +121,15 @@ static void handle_signal(int device, const uint8_t *frame) {
     put16(reply, get16(body) == CID_CONTROL ? channels[device].host_control : channels[device].host_interrupt);
     send_signal(device, SIGNAL_CONFIGURE_RESPONSE, id, reply, sizeof reply);
   } else if (code == SIGNAL_CONFIGURE_RESPONSE) {
-    if (get16(body) == CID_CONTROL) open_channel(device, PSM_INTERRUPT, CID_INTERRUPT);
-    else wii_remote_connected(device);
+    if (get16(body) != CID_CONTROL) wii_remote_connected(device);
+    else if (!channels[device].host_opened && !channels[device].host_interrupt) open_channel(device, PSM_INTERRUPT, CID_INTERRUPT);
+  } else if (code == SIGNAL_CONNECT) {
+    channel_wanted(device, id, body);
+  } else if (code == SIGNAL_DISCONNECT) {
+    channel_closed(device, id, body);
   } else {
     fprintf(stderr, "bluetooth: device %d: L2CAP signal %02x\n", device, code);
+    gap_note("unlisted.ctl.l2cap_signal", code);
   }
 }
 

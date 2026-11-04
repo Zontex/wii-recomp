@@ -14,7 +14,7 @@ int interrupt_budget;
 // Everything guest code can do apart from registers and memory.
 typedef struct {
   uint64_t hardware_hash, guest_time_offset;
-  uint32_t unknown_count, polls, system_calls, system_call_address;
+  uint32_t unknown_count, polls, system_calls, system_call_address, traps, trap_address;
   uint32_t decrementer_writes, decrementer_value, cache_transfers;
 } Effects;
 
@@ -50,7 +50,9 @@ void decrementer_set(uint32_t value) { effects.decrementer_writes++; effects.dec
 uint32_t decrementer_get(void) { return DECREMENTER_NOW; }
 void locked_cache_transfer(void) { effects.cache_transfers++; }
 void poll_interrupts(void) { interrupt_budget = 0; effects.polls++; }
+void fpscr_mode_changed(uint32_t fpscr) { (void)fpscr; }
 void system_call(uint32_t address) { effects.system_calls++; effects.system_call_address = address; }
+void trap_taken(uint32_t address) { effects.traps++; effects.trap_address = address; }
 void unimplemented(uint32_t address, const char *name) { effects.unknown_count++; }
 
 GuestFunction translated_at(uint32_t address) {
@@ -250,6 +252,8 @@ static int compare(const char *name, uint32_t word, int state, int any_nan) {
   SAME("cache_transfers", 0, first.effects.cache_transfers, second.effects.cache_transfers);
   SAME("system_calls", 0, first.effects.system_calls, second.effects.system_calls);
   SAME("system_call_address", 0, first.effects.system_call_address, second.effects.system_call_address);
+  SAME("traps", 0, first.effects.traps, second.effects.traps);
+  SAME("trap_address", 0, first.effects.trap_address, second.effects.trap_address);
   return found;
 }
 

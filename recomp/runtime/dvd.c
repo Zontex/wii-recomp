@@ -5,14 +5,16 @@
 #include "cpu.h"
 #include "debug.h"
 #include "drive.h"
+#include "gaps.h"
 #include "ios.h"
 #include "ios_vectors.h"
 
 enum {
-  INQUIRY = 0x12, READ_DISC_ID = 0x70, READ = 0x71, GET_COVER_REGISTER = 0x7a, CLEAR_COVER_INTERRUPT = 0x86, RESET = 0x8a, OPEN_PARTITION = 0x8b, CLOSE_PARTITION = 0x8c, UNENCRYPTED_READ = 0x8d,
-  GET_STATUS_REGISTER = 0x95, REQUEST_ERROR = 0xe0, STOP_MOTOR = 0xe3,
+  INQUIRY = 0x12, READ_DISC_ID = 0x70, READ = 0x71, GET_COVER_REGISTER = 0x7a, CLEAR_COVER_INTERRUPT = 0x86, GET_COVER_STATUS = 0x88, RESET = 0x8a, OPEN_PARTITION = 0x8b, CLOSE_PARTITION = 0x8c, UNENCRYPTED_READ = 0x8d,
+  GET_STATUS_REGISTER = 0x95, REQUEST_ERROR = 0xe0, STOP_MOTOR = 0xe3, EJECT_AT = 7, EJECT = 1,
   COVER_OPEN = 1, NO_MEDIUM = 0x01023a00,  // The drive's error for "no disc".
-  DRIVE_OK = 1, DRIVE_ERROR = 2,
+  DRIVE_OK = 1, DRIVE_ERROR = 2, SECURITY_ERROR = 32,
+  COVER_STATUS_EMPTY = 1, COVER_STATUS_DISC = 2,  // GetCoverStatus: no disc, or a disc in (Dolphin's DI.cpp).
   DISC_ID_BYTES = 0x20, TMD_LIMIT = 0x49e4, TMD_REGION_LETTER = 0x193, ALL_REGIONS = 'A',
   // The region area: the region, then an age from each of 16 rating boards, 0x80 if unrated.
   REGION_AT = 0x4e000, REGION_BYTES = 0x20, RATINGS_AT = 0x10, RATING_BOARDS = 16, UNRATED = 0x80,
@@ -101,10 +103,19 @@ int dvd_request(uint32_t command, uint32_t request) {
   uint32_t out_bytes = rd32(request + 28);
   uint32_t word_out = output != 0x80000000u && out_bytes >= 4 ? output : 0;
   switch (code) {
-    case RESET: case STOP_MOTOR: return DRIVE_OK;
+    case STOP_MOTOR:
+      // Throwing the disc out, so another can go in. The disc here never changes.
+      if (input != 0x80000000u && rd8(input + EJECT_AT) & EJECT) gap_hit("hw.second_disc_layer_disc_swap", code);
+      return DRIVE_OK;
+    case RESET: return DRIVE_OK;
     case GET_STATUS_REGISTER: if (word_out) wr32(word_out, 0); return DRIVE_OK;
     case REQUEST_ERROR: if (word_out) wr32(word_out, drive_has_disc() ? 0 : NO_MEDIUM); return DRIVE_OK;
     case GET_COVER_REGISTER: if (word_out) wr32(word_out, drive_has_disc() ? 0 : COVER_OPEN); return DRIVE_OK;
+    // Too small a buffer for the answer is a security error, as IOS gives.
+    case GET_COVER_STATUS:
+      if (!word_out) return SECURITY_ERROR;
+      wr32(word_out, drive_has_disc() ? COVER_STATUS_DISC : COVER_STATUS_EMPTY);
+      return DRIVE_OK;
   }
   if (!drive_has_disc() && (code == READ_DISC_ID || code == READ || code == UNENCRYPTED_READ)) return DRIVE_ERROR;
   if (code == READ_DISC_ID) return read_disc(0, DISC_ID_BYTES, output);

@@ -102,6 +102,8 @@ void poll_interrupts(void) {
   ipc_update();
   graphics_update();
   audio_update(now);
+  hardware_update(now);
+  floating_point_exceptions_check();
   if (!(cpu.msr & INTERRUPTS_ENABLED)) return;
   if (irq_pending()) {
     uint32_t handler = rd32(EXCEPTION_TABLE + EXCEPTION_EXTERNAL * 4);

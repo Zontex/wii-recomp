@@ -11,7 +11,7 @@
 // Written separately from translate/emit.py on purpose, as test_recomp_differential.py
 // runs each against the other. Where translated code is a deliberate approximation, this
 // is the same approximation, so a game behaves alike either way:
-// - tw and twi never trap, and stwcx. always succeeds.
+// - A trap that fires is reported to trap_taken, not delivered, and stwcx. always succeeds.
 // - Arithmetic leaves FPSCR's status bits alone and ignores its rounding mode. Only
 //   fctiw reads the mode.
 // - fres, frsqrte, ps_res and ps_rsqrte give exact results, not the hardware's estimates.
@@ -52,6 +52,16 @@ static inline uint32_t base_or_zero(int a) { return a ? cpu.r[a] : 0; }
 static inline uint32_t address_d(uint32_t word) { return base_or_zero(ra_field(word)) + simm(word); }
 static inline uint32_t address_x(uint32_t word) { return base_or_zero(ra_field(word)) + cpu.r[rb_field(word)]; }
 static inline int spr_of(uint32_t word) { return ra_field(word) | rb_field(word) << 5; }
+
+// tw and twi: each set bit of TO names a comparison that fires the trap.
+static void trap(uint32_t address, uint32_t word, uint32_t other) {
+  uint32_t value = cpu.r[ra_field(word)], to = (uint32_t)rd_field(word);
+  int32_t x = (int32_t)value, y = (int32_t)other;
+  if (((to & 16) && x < y) || ((to & 8) && x > y) || ((to & 4) && value == other) || ((to & 2) && value < other) ||
+      ((to & 1) && value > other)) {
+    trap_taken(address);
+  }
+}
 
 static void unknown(uint32_t address, uint32_t word) {
   static char text[40];
@@ -261,8 +271,8 @@ static void execute_31(uint32_t address, uint32_t word, int extended) {
     case 1014: zero_line(address_x(word)); return;  // dcbz
     case 54: case 86: case 246: case 278: case 470: case 758: case 982:  // dcbst dcbf dcbtst dcbt dcbi dcba icbi
     case 306: case 566: case 598: case 854:  // tlbie tlbsync sync eieio
-    case 4:  // tw
       return;
+    case 4: trap(address, word, cpu.r[b]); return;  // tw
 
     case 19: cpu.r[d] = condition_register(); return;  // mfcr
     case 144:  // mtcrf
@@ -435,7 +445,7 @@ void interpret_instruction(uint32_t address, uint32_t word) {
   int d = rd_field(word), a = ra_field(word), b = rb_field(word);
   uint32_t ra = cpu.r[a], rs = cpu.r[d], updated = ra + simm(word), mask_bits;
   switch (word >> 26) {
-    case 3: return;  // twi
+    case 3: trap(address, word, simm(word)); return;  // twi
     case 4: execute_paired(address, word); return;
     case 7: cpu.r[d] = ra * simm(word); return;  // mulli
     case 8: {  // subfic

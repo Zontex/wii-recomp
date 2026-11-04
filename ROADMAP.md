@@ -56,6 +56,7 @@ Each stage is **done**, **in progress** or **planned**, and each item is ticked 
 - [x] **Picture comparison** (`recomp/tools/compare_frames.py`): a numeric difference and a difference image per frame
 - [x] **CPU test harness** (`test/test_recomp_differential.py`): runs every instruction family through both the translator and the interpreter and compares the registers
 - [x] **Menu benchmark** (`recomp/tools/menu_bench.py`): tours 16 Wii Menu screens and reports frame rate and the worst frame for each
+- [x] **Gap counter** (`runtime/gaps.c`, `recomp/tools/gap_report.py`): names every request the runtime can't do by its inventory row, and ranks them across runs and titles
 
 ### 3. CPU complete (in progress)
 
@@ -97,6 +98,10 @@ Each stage is **done**, **in progress** or **planned**, and each item is ticked 
 - [x] On the Mac, pictures reach the window on a queue of their own, so macOS holding the window's pictures skips pictures instead of freezing the game for up to a second
 - [ ] Shaders compiled ahead of time from the disc, so even a first run doesn't stutter
 - [ ] Lower cost per draw, aimed at heavy scenes of 150,000 draws a second
+- [ ] **GPU pipe writes compiled to direct calls.** Each store the game makes to the pipe (`0xCC008000`) goes through `hw_write`, its register checks and a byte loop before the commands are read back. In three steps, each measured before the next:
+  1. The translator spots stores to the pipe's fixed address and calls a native pipe write directly. Same bytes in the same order, so exact.
+  2. Bursts are read as they're made, without the copy into the game's FIFO memory, where the game uses no FIFO breakpoints and never reads its FIFO back.
+  3. Whole `GXBegin` to `GXEnd` sequences fill vertex buffers directly, checked at run time against the vertex format they assume, falling back to the command reader when it differs.
 
 Done when every graphics row is done or marked not needed, and recordings from every available title match Dolphin within a set limit.
 

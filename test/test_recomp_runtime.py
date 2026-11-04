@@ -61,6 +61,34 @@ class Runtime(unittest.TestCase):
             self.assertEqual(result.returncode, status, result.stderr)
             self.assertIn(message, result.stderr)
 
+    def run_gaps(self, **environment):
+        program = self.compile([HERE / "c/test_gaps.c", RUNTIME / "gaps.c"])
+        listing = self.folder / "gaps.txt"
+        result = subprocess.run([str(program)], capture_output=True, text=True, timeout=20,
+                                env={**os.environ, "WII_RECOMP_GAPS": str(listing), **environment})
+        return result, listing
+
+    def test_gaps_log_once_and_count_in_the_file(self):
+        result, listing = self.run_gaps()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(re.findall(r"^gap: .*$", result.stderr, re.M), ["gap: ios.setattr 0x0", "gap: ios.setattr 0x2"])
+        lines = listing.read_text().splitlines()
+        self.assertEqual(lines[0], "# id detail count first_lr")
+        self.assertEqual(sorted(lines[1:]), ["cpu.sc 0x5 2 0x80001234", "ios.setattr 0x0 2 0x80001234",
+                                             "ios.setattr 0x2 1 0x80001234"])
+
+    def test_gaps_strict_mode_stops_at_the_first(self):
+        result, listing = self.run_gaps(WII_RECOMP_GAPS_STRICT="1")
+        self.assertEqual(result.returncode, 12, result.stderr)
+        self.assertIn("stop: ios.setattr isn't done yet", result.stderr)
+        self.assertEqual(listing.read_text().splitlines()[1:], ["ios.setattr 0x0 1 0x80001234"])
+
+    def test_clock_chip_on_the_expansion_bus(self):
+        self.build_and_run([HERE / "c/test_exi.c"])
+
+    def test_system_calls_and_floating_point_modes(self):
+        self.build_and_run([HERE / "c/test_processor.c", RUNTIME / "processor.c"])
+
     def test_helpers_shared_with_translated_code(self):
         self.build_and_run([HERE / "c/test_cpu_helpers.c", RUNTIME / "quantized.c"])
 
@@ -87,7 +115,7 @@ class Runtime(unittest.TestCase):
         saves.mkdir()
         before = tree(storage)
         os.chmod(storage / "shared2/read_only", 0o444)
-        self.build_and_run([HERE / "c/test_storage.c", RUNTIME / "fs.c", RUNTIME / "files.c"], storage, saves)
+        self.build_and_run([HERE / "c/test_storage.c", RUNTIME / "fs.c", RUNTIME / "files.c", RUNTIME / "gaps.c"], storage, saves)
         os.chmod(storage / "shared2/read_only", 0o644)
         self.assertEqual({k: v[0] for k, v in tree(storage).items()}, {k: v[0] for k, v in before.items()})
         self.assertEqual((saves / "shared2/only_storage").read_text()[:3], "new")

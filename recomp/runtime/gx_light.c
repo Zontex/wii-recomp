@@ -41,8 +41,9 @@ void gx_light_read(VertexKey *key, int channel) {
 }
 
 // Whether a channel, unlit, gives the vertex's own color and alpha or a white material, so
-// a white vertex means white out.
+// a white vertex means white out. A channel past the game's count gives 0.
 int gx_light_plain(int channel) {
+  if (!(gx_channels_counted() & (1u << channel))) return 0;
   uint32_t color = gx.xf[XF_COLOR_CHANNEL + channel], alpha = gx.xf[XF_ALPHA_CHANNEL + channel], material = gx.xf[XF_MATERIAL + channel];
   if ((color | alpha) & CONTROL_LIT) return 0;
   return ((color & CONTROL_VERTEX_BASE) || (material & 0xffffff00) == 0xffffff00) && ((alpha & CONTROL_VERTEX_BASE) || (material & 0xff) == 0xff);

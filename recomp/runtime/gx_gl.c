@@ -123,7 +123,13 @@ static GLuint compile(GLenum kind, const char *text) {
   return shader;
 }
 
-static GxStage stage_compile(int kind, const char *text) { return compile(kind == GX_STAGE_VERTEX ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER, text); }
+static GxStage stage_compile(int kind, const char *text) {
+  // OpenGL 3.3 can't test depth before the shader, so a discard there still keeps depth from being stored.
+  if (kind != GX_STAGE_VERTEX && strstr(text, "early_fragment_tests")) {
+    debug_unsupported("pixel.z_compare_location_early_z", "depth stored where the alpha test fails, on OpenGL", 0);
+  }
+  return compile(kind == GX_STAGE_VERTEX ? GL_VERTEX_SHADER : GL_FRAGMENT_SHADER, text);
+}
 
 static GxShader shader_link(GxStage vertex, GxStage fragment) {
   GLuint program = glCreateProgram();
@@ -259,14 +265,14 @@ static GLuint sampler_for(const GxSampling *sampling) {
   static const GLint wraps[] = {[GX_WRAP_CLAMP] = GL_CLAMP_TO_EDGE, [GX_WRAP_REPEAT] = GL_REPEAT, [GX_WRAP_MIRROR] = GL_MIRRORED_REPEAT};
   static uint32_t count;
   GxSampling keyed = *sampling;
-  keyed.unused = 1;  // So that no key is ever 0, which marks a free slot.
+  keyed.anisotropy = (uint8_t)(sampling->anisotropy | GX_SAMPLING_IN_USE);  // No key is ever 0, a free slot.
   uint64_t key;
   memcpy(&key, &keyed, sizeof key);
   uint32_t slot = (uint32_t)((key * 0x9e3779b97f4a7c15ull) >> 40) & (SAMPLER_SLOTS - 1);
   while (samplers[slot].key && samplers[slot].key != key) slot = (slot + 1) & (SAMPLER_SLOTS - 1);
   if (samplers[slot].key) return samplers[slot].sampler;
   if (count >= SAMPLER_SLOTS / 2) {
-    debug_unsupported("more texture samplers than the table holds", SAMPLER_SLOTS / 2);
+    debug_unsupported("limit.texture_samplers", "more texture samplers than the table holds", SAMPLER_SLOTS / 2);
     return 0;  // The texture's own settings.
   }
   count++;
@@ -279,6 +285,9 @@ static GLuint sampler_for(const GxSampling *sampling) {
   glSamplerParameteri(sampler, GL_TEXTURE_MIN_FILTER, minify_filter(sampling));
   glSamplerParameterf(sampler, GL_TEXTURE_MIN_LOD, (float)sampling->min_level / LEVEL_STEPS);
   glSamplerParameterf(sampler, GL_TEXTURE_MAX_LOD, (float)sampling->max_level / LEVEL_STEPS);
+  // EXT_texture_filter_anisotropic, which every Mac and Linux driver has. Its value is the
+  // same as GL 4.6's GL_TEXTURE_MAX_ANISOTROPY.
+  if (sampling->anisotropy) glSamplerParameterf(sampler, 0x84fe, (float)(1 << sampling->anisotropy));
   samplers[slot].sampler = sampler;
   return sampler;
 }

@@ -7,6 +7,7 @@
 
 #include "cpu.h"
 #include "debug.h"
+#include "gaps.h"
 #include "gx.h"
 
 enum {
@@ -35,17 +36,18 @@ void debug_threads(void) {
 }
 
 // Linear, as this is only ever reached on the way to something unusual.
-void debug_unsupported(const char *what, uint32_t value) {
+void debug_unsupported(const char *id, const char *what, uint32_t value) {
   enum { REMEMBERED = 256 };
   static struct { const char *what; uint32_t value; } seen[REMEMBERED];
   static int count;
+  gap_note(id, value);
   for (int i = 0; i < count; i++) {
     if (seen[i].value == value && !strcmp(seen[i].what, what)) return;
   }
   if (count == REMEMBERED) return;
   seen[count].what = what;
   seen[count++].value = value;
-  fprintf(stderr, "unsupported graphics: %s = 0x%x\n", what, value);
+  fprintf(stderr, "unsupported graphics: %s = 0x%x (%s)\n", what, value, id);
 }
 
 static void report_activity(uint64_t second) {
@@ -85,6 +87,7 @@ void stage_frame(float gap_ms) {
 
 void debug_poll(uint64_t seconds_running) {
   static int done;
+  gap_flush();
   report_activity(seconds_running);
   static const char *after;
   static int looked;

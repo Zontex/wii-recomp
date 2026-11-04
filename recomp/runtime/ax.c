@@ -6,6 +6,7 @@
 
 #include "audio.h"
 #include "cpu.h"
+#include "gaps.h"
 
 enum { COMMAND_SETUP, COMMAND_ADD, COMMAND_SUBTRACT, COMMAND_ADD_SUBTRACT, COMMAND_VOICES, COMMAND_AUX_A, COMMAND_AUX_B,
        COMMAND_AUX_C, COMMAND_SURROUND_AUX_A, COMMAND_SURROUND_AUX_B, COMMAND_COMPRESSOR, COMMAND_OUTPUT,
@@ -310,15 +311,19 @@ void ax_run_list(uint32_t list, int16_t *output) {
         run_aux((int)(command - COMMAND_AUX_A) + BUS_AUX_A, rd16(at), pair(at, 2), pair(at, 6));
         at += 10;
         break;
-      case COMMAND_SURROUND_AUX_A: case COMMAND_SURROUND_AUX_B: at += 26; break;
+      case COMMAND_SURROUND_AUX_A: case COMMAND_SURROUND_AUX_B:
+        gap_hit("audio.axwii_aux_surround_uploads_commands_8_9", command);
+        at += 26;
+        break;
       case COMMAND_COMPRESSOR: run_compressor(rd16(at), rd16(at + 2), pair(at, 4)); at += 8; break;
       case COMMAND_OUTPUT: case COMMAND_OUTPUT_SURROUND:
         write_output(rd16(at), pair(at, 2), pair(at, 6), output);
         at += 10;
         break;
-      case COMMAND_REMOTES: at += 16; break;
+      case COMMAND_REMOTES: gap_hit("audio.axwii_wii_remote_speaker_output", command); at += 16; break;
       default:  // Losing a frame of sound beats stopping the game.
         fprintf(stderr, "unknown audio command %x at %08x\n", command, at - 2);
+        gap_note("unlisted.audio.ax_command", command);
         return;
     }
   }

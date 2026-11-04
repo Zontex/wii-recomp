@@ -169,6 +169,9 @@ void vk_create_device(void) {
   wanted.dualSrcBlend = available.dualSrcBlend;
   vk.dual_source = available.dualSrcBlend == VK_TRUE;
   if (!vk.dual_source) fprintf(stderr, "vulkan: no dual-source blending, so constant alpha will blend slightly wrong\n");
+  wanted.samplerAnisotropy = available.samplerAnisotropy;
+  vk.max_anisotropy = available.samplerAnisotropy ? vk.limits.maxSamplerAnisotropy : 0;
+  if (!vk.max_anisotropy) fprintf(stderr, "vulkan: no anisotropic filtering, so textures seen at a slope will blur more\n");
   VkDeviceCreateInfo info = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .queueCreateInfoCount = own_show_queue && !same_family ? 2 : 1, .pQueueCreateInfos = queues,
                              .enabledExtensionCount = extension_count, .ppEnabledExtensionNames = extensions, .pEnabledFeatures = &wanted};
   // Vulkan on Metal leaves some things out, and using what's left must be declared.

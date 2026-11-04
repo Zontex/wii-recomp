@@ -54,7 +54,6 @@ void guest_fatal(void) {
   exit(8);
 }
 
-void system_call(uint32_t address) { (void)address; }
 
 static Boot boot;
 
@@ -107,7 +106,8 @@ static void use_folders_beside(const char *program) {
   if (!realpath(program, full)) return;
   const char *folder = dirname(full);  // Linux's changes `full`, so it's called once.
   const char *names[][2] = {{"WII_RECOMP_SAVES", "saves"}, {"WII_RECOMP_SHADER_CACHE", "shader-cache"},
-                            {"WII_RECOMP_DISCOVERED", "discovered.txt"}, {"WII_RECOMP_CACHE", "native-cache"}};
+                            {"WII_RECOMP_DISCOVERED", "discovered.txt"}, {"WII_RECOMP_CACHE", "native-cache"},
+                            {"WII_RECOMP_GAPS", "gaps.txt"}};
   for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
     snprintf(path, sizeof path, "%s/%s", folder, names[i][1]);
     setenv(names[i][0], path, 0);

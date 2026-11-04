@@ -116,7 +116,9 @@ typedef struct {
   uint8_t no_coordinates;  // The game enabled no texture coordinates, which changes what stages read.
   uint8_t bump_alpha;  // Some stage makes a bump alpha.
   uint8_t biased_maps;  // Maps with a level of detail bias, which most have none of.
+  uint8_t diagonal_maps;  // Maps whose level of detail comes from the diagonals: see add_stage in gx_tev.c.
   uint8_t depth_mode, depth_format, depth_from_copy;
+  uint8_t early_depth;  // Depth is tested and stored before the alpha test, which can fail. Only with alpha_test.
   uint8_t fog_type, fog_orthographic, fog_range, fog_none;  // None: proven to add nothing to this draw.
   uint8_t logic_help;  // What the shader does for a logic operation done by blending. See read_logic in gx_tev.c.  // Fog's function, 0 for none. See read_fog in gx_tev.c.
   TevIndirectSource indirect_source[TEV_INDIRECT_SOURCES];
@@ -155,6 +157,7 @@ typedef struct {
 // What decides which vertex shader a draw needs. Zeroed before filling, like TevKey.
 typedef struct {
   uint8_t coordinates_read, coordinates_made, coordinates_projected, channels_read, channels_used, has_normal, normals_present, embossed, uses_lights, post_matrices;
+  uint8_t channels_zero;  // Read by the stages but past the game's count of channels, so 0.
   uint8_t expanded;  // Lines or points, drawn as quads.
   ChannelKey color[2], alpha[2];
   CoordinateKey coordinate[MAX_TEXTURE_MAPS];
@@ -174,6 +177,7 @@ void gx_tev_write_shader(const TevKey *key, ShaderText *text);
 unsigned gx_tev_apply(TevKey *key);
 
 void gx_transform_read(TevKey *tev, VertexKey *key);
+unsigned gx_channels_counted(void);
 void gx_transform_write_shader(const VertexKey *key, ShaderText *text);
 void gx_transform_apply(const VertexKey *key);
 void gx_light_read(VertexKey *key, int channel);

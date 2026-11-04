@@ -14,7 +14,8 @@ void raise_irq(int b) {}
 void clear_irq(int b) {}
 uint64_t time_base(void) { return 0; }
 void gx_load_palette(void) {}
-void debug_unsupported(const char *w, uint32_t v) {}
+void debug_unsupported(const char *i, const char *w, uint32_t v) {}
+void gap_hit(const char *i, uint32_t d) {}
 void gx_present(void) {}
 void gx_copy_to_texture(uint32_t c, int d) {}
 void gx_clear(void) {}

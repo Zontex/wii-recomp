@@ -7,6 +7,7 @@
 
 #include "cpu.h"
 #include "debug.h"
+#include "gaps.h"
 #include "gx_backend.h"
 
 enum {
@@ -128,6 +129,7 @@ void gx_copy_rectangle(int *x, int *y, int *width, int *height) {
 // Works out the shape a copy has in memory. Says no if it has none.
 static int fit_copy(Copy *copy, uint32_t control, uint32_t width, uint32_t height, uint32_t stride) {
   uint32_t format = base_formats[copy_format(control)], bits = texel_bits[format];
+  if (copy_format(control) == COPY_RG8 || copy_format(control) == COPY_GB8) gap_hit("pixel.copy_formats_rg8_gb8", copy_format(control));
   uint32_t block_width = bits <= 8 ? 8 : 4, block_height = bits == 4 ? 8 : 4;
   uint32_t block_bytes = format == TEXTURE_RGBA8 ? BLOCK_BYTES * 2 : BLOCK_BYTES;
   copy->format = format;
@@ -154,7 +156,7 @@ void gx_copy_to_texture(uint32_t control, int from_depth) {
   copy->live = 0;
   if (!fit_copy(copy, control, copy_width, copy_height, stride)) return;
   if (stride < copy->row_bytes) {
-    debug_unsupported("picture copy with a stride below its row", stride);
+    debug_unsupported("gx.0x4d_copy_stride", "picture copy with a stride below its row", stride);
     return;
   }
   // Copies keep the buffer's full detail. Shrinking them would blend the edges of a
@@ -185,19 +187,19 @@ static Copy *usable_copy(int map) {
     uint32_t format = (image >> TEXTURE_FORMAT_SHIFT) & TEXTURE_FORMAT_MASK;
     uint32_t width = (image & TEXTURE_SIZE_MASK) + 1, height = ((image >> COORDINATE_BITS) & TEXTURE_SIZE_MASK) + 1;
     if (format == TEXTURE_CMPR || texel_bits[format] != texel_bits[copy->format]) {
-      debug_unsupported("picture copy read as a format of another size", (copy->format << 8) | format);
+      debug_unsupported("vtx.copies_as_textures", "picture copy read as a format of another size", (copy->format << 8) | format);
       return 0;
     }
     if (width != copy->width || height != copy->height) {
-      debug_unsupported("picture copy read at another size", (width << 16) | height);
+      debug_unsupported("vtx.copies_as_textures", "picture copy read at another size", (width << 16) | height);
       return 0;
     }
     if (copy->stride != copy->row_bytes) {
-      debug_unsupported("picture copy with gaps between its rows read whole", copy->stride);
+      debug_unsupported("vtx.copies_as_textures", "picture copy with gaps between its rows read whole", copy->stride);
       return 0;
     }
-    if (format == TEXTURE_C4 || format == TEXTURE_C8 || format == TEXTURE_C14X2) debug_unsupported("picture copy read through a palette", format);
-    else if (format != copy->format) debug_unsupported("picture copy read as another format", (copy->format << 8) | format);
+    if (format == TEXTURE_C4 || format == TEXTURE_C8 || format == TEXTURE_C14X2) debug_unsupported("vtx.copies_as_textures", "picture copy read through a palette", format);
+    else if (format != copy->format) debug_unsupported("vtx.copies_as_textures", "picture copy read as another format", (copy->format << 8) | format);
     return copy;
   }
   return 0;

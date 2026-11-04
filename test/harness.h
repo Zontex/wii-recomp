@@ -7,6 +7,10 @@
 Cpu cpu;
 uint8_t *mem1, *mem2;
 static int failures;
+// FPSCR modes reach the host through processor.c, which most tests leave out.
+#ifndef HARNESS_WITH_PROCESSOR
+void fpscr_mode_changed(uint32_t fpscr) { (void)fpscr; }
+#endif
 #define CHECK(test) do { if (!(test)) { printf("FAILED line %d: %s\n", __LINE__, #test); failures++; } } while (0)
 #define CHECK_EQ(got, want) do { unsigned long long g = (got), w = (want); \
   if (g != w) { printf("FAILED line %d: %s = %llx, wanted %llx\n", __LINE__, #got, g, w); failures++; } } while (0)

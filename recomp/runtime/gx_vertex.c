@@ -14,7 +14,7 @@ enum {
   COMPONENT_U8 = 0, COMPONENT_S8 = 1, COMPONENT_U16 = 2, COMPONENT_S16 = 3, COMPONENT_FLOAT = 4,
   COLOR_RGB565 = 0, COLOR_RGB8 = 1, COLOR_RGBX8 = 2, COLOR_RGBA4 = 3, COLOR_RGBA6 = 4, COLOR_RGBA8 = 5,
   NORMAL_SHIFT_U8 = 7, NORMAL_SHIFT_S8 = 6, NORMAL_SHIFT_U16 = 15, NORMAL_SHIFT_S16 = 14, MATRIX_INDEX_MASK = 63, TEXTURES = 8, ALL_NORMAL_VALUES = 9,
-  NULL_INDEX8 = 0xff, NULL_INDEX16 = 0xffff,
+  NULL_INDEX8 = 0xff, NULL_INDEX16 = 0xffff, DEQUANTIZE_BIT = 30,
 };
 
 float gx_cached_normals[CACHED_NORMALS][4];
@@ -62,6 +62,12 @@ static void read_format(int v, Format *f) {
     f->texture_components[i] = bits(word, layout[i].count, 1) ? 2 : 1;
     f->texture_type[i] = (int)bits(word, layout[i].type, 3);
     f->texture_shift[i] = layout[i].shift < 0 ? (int)bits(c, 0, 5) : (int)bits(word, layout[i].shift, 5);
+  }
+  // With the dequantize bit clear, whole-number positions and coordinates keep their value
+  // whatever their shift, as Dolphin's compiled vertex loaders read it. The SDK always sets it.
+  if (!bits(a, DEQUANTIZE_BIT, 1)) {
+    f->position_shift = 0;
+    for (int i = 0; i < TEXTURES; i++) f->texture_shift[i] = 0;
   }
 }
 
@@ -192,7 +198,7 @@ int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
   Format f;
   read_format(format, &f);
   if (f.normal_components == ALL_NORMAL_VALUES && f.normal != KIND_NONE && (f.texture[VERTEX_NORMALS_UV] || f.texture[VERTEX_NORMALS_UV + 1] || f.texture[VERTEX_NORMALS_UV + 2])) {
-    debug_unsupported("texture coordinates 5 to 7 beside binormal and tangent", (uint32_t)format);
+    debug_unsupported("vtx.normal_nbt_9_values", "texture coordinates 5 to 7 beside binormal and tangent", (uint32_t)format);
   }
   uint32_t matrices = gx.cp[CP_MATRIX_INDEX], matrices_high = gx.cp[CP_MATRIX_INDEX + 0x10];
   uint8_t matrix_defaults[VERTEX_MATRICES];
@@ -201,6 +207,9 @@ int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
     uint32_t index = i < 4 ? bits(matrices, 6 + i * 6, 6) : bits(matrices_high, (i - 4) * 6, 6);
     matrix_defaults[VERTEX_MATRIX_COORDINATE + i] = (uint8_t)index;
   }
+  // Color 1 without color 0 feeds the first channel, and the second reads as missing, as
+  // Dolphin's VertexShaderGen.cpp has it.
+  int color_slot[2] = {0, f.color[0] == KIND_NONE ? 0 : 1};
   const uint8_t *p = data;
   int kept = 0;
   for (int n = 0; n < count; n++) {
@@ -224,7 +233,7 @@ int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
       for (int c = 0; c < 4; c++) v->color[i][c] = 1;
       if (f.color[i] == KIND_NONE) continue;
       const uint8_t *source = locate(&p, f.color[i], ARRAY_COLOR + i, color_bytes(f.color_type[i]));
-      if (source) read_color(source, f.color_type[i], v->color[i]);
+      if (source) read_color(source, f.color_type[i], v->color[color_slot[i]]);
     }
     for (int i = 0; i < TEXTURES; i++) {
       if (f.texture[i] == KIND_NONE) continue;

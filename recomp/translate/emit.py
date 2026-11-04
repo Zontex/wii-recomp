@@ -108,8 +108,7 @@ INDEXED_LOADS = {"lwzx": "lwz", "lbzx": "lbz", "lhzx": "lhz", "lhax": "lha"}
 INDEXED_UPDATE_LOADS = {"lwzux": "lwz", "lbzux": "lbz", "lhzux": "lhz", "lhaux": "lha"}
 INDEXED_STORES = {"stwx": "stw", "stbx": "stb", "sthx": "sth"}
 INDEXED_UPDATE_STORES = {"stwux": "stw", "stbux": "stb", "sthux": "sth"}
-NO_OPERATIONS = {"sync", "isync", "eieio", "dcba", "dcbf", "dcbi", "dcbst", "dcbt", "dcbtst", "icbi", "tw", "twi",
-                 "tlbie", "tlbsync"}
+NO_OPERATIONS = {"sync", "isync", "eieio", "dcba", "dcbf", "dcbi", "dcbst", "dcbt", "dcbtst", "icbi", "tlbie", "tlbsync"}
 ROUND_SINGLE = "(double)(float)"
 
 
@@ -226,6 +225,21 @@ def overflowing(name, a, b):
     }.get(name)
 
 
+def trap(address, word, name):
+    """tw and twi. A trap that fires would enter the game's program exception handler,
+    which in a retail game only reports an assert and halts. That isn't delivered: the
+    runtime reports it and carries on, as before."""
+    to, a = rt(word), ra(word)
+    other = f"0x{s16(word) & 0xffffffff:x}u" if name == "twi" else f"cpu.r[{rb(word)}]"
+    tests = {16: f"(int32_t)cpu.r[{a}] < (int32_t){other}", 8: f"(int32_t)cpu.r[{a}] > (int32_t){other}",
+             4: f"cpu.r[{a}] == {other}", 2: f"cpu.r[{a}] < {other}", 1: f"cpu.r[{a}] > {other}"}
+    parts = [test for bit, test in tests.items() if to & bit]
+    if not parts:
+        return ";"
+    test = "1" if to == 31 else " || ".join(f"({part})" for part in parts)
+    return f"if ({test}) trap_taken({address_text(address)});"
+
+
 def emit(address, word, name):
     """Returns C for one instruction that isn't a branch, or None if not handled."""
     d, a, b = rt(word), ra(word), rb(word)
@@ -311,6 +325,8 @@ def emit(address, word, name):
         return f"wr32({indexed(word)}, cpu.r[{d}]); cpu.cr[0] = 2 | (uint8_t)cpu.so;"
     if name in NO_OPERATIONS:
         return ";"
+    if name in ("tw", "twi"):
+        return trap(address, word, name)
     arithmetic = {
         "add": f"cpu.r[{a}] + cpu.r[{b}]", "subf": f"cpu.r[{b}] - cpu.r[{a}]",
         "mullw": f"cpu.r[{a}] * cpu.r[{b}]", "neg": f"0u - cpu.r[{a}]",

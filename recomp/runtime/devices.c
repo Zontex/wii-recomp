@@ -23,8 +23,8 @@ static int bluetooth(uint32_t command, uint32_t request) {
   return title->virtual_bluetooth ? bluetooth_request(command, request) : IOS_NO_REPLY;
 }
 
-// Other USB devices, such as a keyboard, are never plugged in, so they never reply.
-static int usb(uint32_t command, uint32_t request) { return IOS_NO_REPLY; }
+// The internal USB bus's root, which only the Bluetooth chip sits on. It answers nothing.
+static int usb_oh1(uint32_t command, uint32_t request) { return IOS_NO_REPLY; }
 
 static const IosDevice devices[] = {
   {"/dev/es", 0, es_request},
@@ -33,7 +33,12 @@ static const IosDevice devices[] = {
   {"/dev/stm/immediate", 0, stm_immediate},
   {"/dev/stm/eventhook", 0, stm_event_hook},
   {"/dev/usb/oh1/57e/305", 0, bluetooth},
-  {"/dev/usb/", 1, usb},
+  {"/dev/usb/oh1", 0, usb_oh1},
+  // Nothing is plugged into the USB ports (usb.c). Any other /dev/usb/ name is a device
+  // by its IDs, or one this IOS doesn't have, and isn't found.
+  {"/dev/usb/oh0", 0, usb_oh0_request},
+  {"/dev/usb/hid", 0, usb_hid_request},
+  {"/dev/usb/kbd", 0, usb_kbd_request},
   {"/dev/net/kd/request", 0, net_kd_request},
   {"/dev/net/kd/time", 0, net_kd_time},
   {"/dev/net/ncd/manage", 0, net_ncd_manage},
@@ -41,8 +46,8 @@ static const IosDevice devices[] = {
   {"/dev/net/ip/top", 0, unmodelled},
   {"/dev/net/ssl", 0, unmodelled},
   {"/dev/sdio/", 1, sdio_request},
-  {"/dev/aes", 0, unmodelled},
-  {"/dev/sha", 0, unmodelled},
+  {"/dev/aes", 0, aes_request},
+  {"/dev/sha", 0, sha_request},
   {"/dev/wl0", 0, unmodelled},
 };
 

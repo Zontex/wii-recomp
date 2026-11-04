@@ -19,10 +19,15 @@ enum {
   GET_FILE_STATS = 11,
 };
 
+// What an open may do, the low two bits of its mode, and the answers IOS gives (Dolphin's
+// FileSystem.h lists both): a folder can't be opened, and a read on a handle opened only for
+// writing, or the other way round, is refused.
+enum { MODE_READ = 1, MODE_WRITE = 2, FS_INVALID = -101, FS_ACCESS_DENIED = -102, FS_NO_FREE_HANDLE = -109 };
+
 typedef struct {
   uint8_t *data;
   long size, capacity, position;
-  int changed;
+  int changed, mode;
   char path[128];
 } Handle;
 
@@ -77,11 +82,13 @@ static int settings_byte(const uint8_t *data, size_t bytes, const char *name) {
   return -1;
 }
 
-int files_open(const char *path) {
+int files_open(const char *path, uint32_t mode) {
   char full[MAX_PATH];
-  if (!files_find(path, full, sizeof full)) return -1;
+  struct stat info;
+  if (!files_find(path, full, sizeof full)) return FS_ENOENT;
+  if (!stat(full, &info) && S_ISDIR(info.st_mode)) return FS_INVALID;
   FILE *file = fopen(full, "rb");
-  if (!file) return -1;
+  if (!file) return FS_ACCESS_DENIED;
   for (int i = 0; i < MAX_HANDLES; i++) {
     if (handles[i].data) continue;
     fseek(file, 0, SEEK_END);
@@ -92,6 +99,7 @@ int files_open(const char *path) {
     handle->data = malloc((size_t)handle->capacity);
     handle->position = 0;
     handle->changed = 0;
+    handle->mode = (int)(mode & (MODE_READ | MODE_WRITE));
     snprintf(handle->path, sizeof handle->path, "%s", path);
     fread(handle->data, 1, (size_t)handle->size, file);
     if (title->virtual_bluetooth && !strcmp(path, SETTINGS_FILE)) {
@@ -102,13 +110,13 @@ int files_open(const char *path) {
     return i;
   }
   fclose(file);
-  return -1;
+  return FS_NO_FREE_HANDLE;
 }
 
 const char *files_name(int id) { return handles[id].path; }
 
-void files_close(int id) {
-  Handle *handle = &handles[id];
+// Writes a changed file out to the save folder, keeping it open.
+static void save(Handle *handle) {
   if (handle->changed) {
     char full[MAX_PATH];
     files_save_path(handle->path, full, sizeof full);
@@ -120,7 +128,20 @@ void files_close(int id) {
     } else {
       fprintf(stderr, "files: can't save %s: %s\n", full, strerror(errno));
     }
+    handle->changed = 0;
   }
+}
+
+// Everything written so far reaches the save folder, as before the power goes off.
+void files_save_all(void) {
+  for (int i = 0; i < MAX_HANDLES; i++) {
+    if (handles[i].data) save(&handles[i]);
+  }
+}
+
+void files_close(int id) {
+  Handle *handle = &handles[id];
+  save(handle);
   free(handle->data);
   handle->data = 0;
 }
@@ -141,6 +162,7 @@ static int write_bytes(Handle *handle, const uint8_t *from, long bytes) {
 int files_request(int id, uint32_t command, uint32_t request) {
   Handle *handle = &handles[id];
   if (command == IOS_READ) {
+    if (!(handle->mode & MODE_READ)) return FS_ACCESS_DENIED;
     long left = handle->size - handle->position, bytes = rd32(request + 16);
     if (bytes > left) bytes = left;
     memcpy(host(rd32(request + 12) | 0x80000000u), handle->data + handle->position, (size_t)bytes);
@@ -148,6 +170,7 @@ int files_request(int id, uint32_t command, uint32_t request) {
     return (int)bytes;
   }
   if (command == IOS_WRITE) {
+    if (!(handle->mode & MODE_WRITE)) return FS_ACCESS_DENIED;
     return write_bytes(handle, host(rd32(request + 12) | 0x80000000u), rd32(request + 16));
   }
   if (command == IOS_SEEK) {

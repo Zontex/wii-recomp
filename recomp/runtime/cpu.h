@@ -32,6 +32,9 @@ void input_board_weights(void);
 void guest_fatal(void);
 void audio_dsp_mail(uint32_t mail);
 void system_call(uint32_t address);
+void trap_taken(uint32_t address);  // A tw or twi whose condition held: processor.c.
+void fpscr_mode_changed(uint32_t fpscr);  // Applies the rounding and non-IEEE modes: processor.c.
+void floating_point_exceptions_check(void);  // Reports a game turning on floating-point exceptions: processor.c.
 uint32_t hw_read(uint32_t address, int bytes);
 void hw_write(uint32_t address, uint32_t value, int bytes);
 uint64_t time_base(void);        // The runtime's own clock, which deadlines use.
@@ -193,10 +196,13 @@ static inline uint32_t divide_unsigned_overflow(uint32_t a, uint32_t b) {
 #define FPSCR_EXCEPTION_BITS (0x1e000000u | FPSCR_INVALID_BITS)  // OX, UX, ZX, XX and the above.
 #define FPSCR_ENABLE_BITS 0x000000f8u
 #define FPSCR_ROUNDING 3u
+#define FPSCR_NON_IEEE 4u
 static inline void fpscr_write(uint32_t value) {
   value &= ~(uint32_t)FPSCR_RESERVED;
   value = (value & FPSCR_INVALID_BITS) ? value | FPSCR_VX : value & ~FPSCR_VX;
+  uint32_t modes_before = cpu.fpscr & (FPSCR_ROUNDING | FPSCR_NON_IEEE);
   cpu.fpscr = (value >> 22) & value & FPSCR_ENABLE_BITS ? value | FPSCR_FEX : value & ~FPSCR_FEX;
+  if (__builtin_expect((cpu.fpscr & (FPSCR_ROUNDING | FPSCR_NON_IEEE)) != modes_before, 0)) fpscr_mode_changed(cpu.fpscr);
 }
 // Setting an exception bit that was clear also sets FX.
 static inline void fpscr_set_bit(int bit) {

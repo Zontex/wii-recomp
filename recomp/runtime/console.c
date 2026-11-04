@@ -65,6 +65,7 @@ void console_start(const char *program, const char *folder, int boot_disc, Boot 
   set_default("WII_RECOMP_SHADER_CACHE", "cache/shaders");
   set_default("WII_RECOMP_CACHE", "cache/native");
   set_default("WII_RECOMP_DISCOVERED", "cache/discovered.txt");
+  set_default("WII_RECOMP_GAPS", "cache/gaps.txt");
   char path[PATH_MAX * 2];
   snprintf(path, sizeof path, "%s/cache", console_folder);
   mkdir(path, 0755);
