@@ -29,6 +29,13 @@ static void on_key(GLFWwindow *from, int key, int scancode, int action, int mods
     if (key == keys[i].key) input_hold(keys[i].button, action == GLFW_PRESS);
   }
   int down = action == GLFW_PRESS;
+  // The arrows also tilt the Classic Controller's stick, which games such as Mario Kart steer with.
+  static int left, right, up, low;
+  if (key == GLFW_KEY_LEFT) left = down;
+  if (key == GLFW_KEY_RIGHT) right = down;
+  if (key == GLFW_KEY_UP) up = down;
+  if (key == GLFW_KEY_DOWN) low = down;
+  if (key >= GLFW_KEY_RIGHT && key <= GLFW_KEY_UP) input_stick((float)(right - left), (float)(up - low));
   if (key == GLFW_KEY_SPACE && down) input_board_toggle();
   static float lean_x, lean_y;
   if (key == GLFW_KEY_A) lean_x = down ? -0.6f : 0;

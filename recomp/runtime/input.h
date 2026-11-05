@@ -12,6 +12,7 @@ enum {
 void input_hold(uint32_t buttons, int down);
 void input_press(uint32_t buttons);
 void input_pointer(float x, float y);
+void input_stick(float x, float y);  // The Classic Controller's left stick, -1 to 1 with y growing up.
 void input_pointer_now(float *x, float *y);  // Where the pointer is, -1 to 1 with y growing down.
 void input_board(int standing, float kilograms, float lean_x, float lean_y);
 void input_board_nudge(float lean_x, float lean_y);
