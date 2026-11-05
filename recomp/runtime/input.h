@@ -19,7 +19,7 @@ enum { PLAYERS = 4 };
 typedef enum { ATTACHMENT_NONE, ATTACHMENT_NUNCHUK, ATTACHMENT_CLASSIC, ATTACHMENT_KINDS } Attachment;
 
 // One player's controls at a moment. Motion is in g, along the remote's own axes as its
-// accelerometer reads them: x across its face towards its left, y along its length
+// accelerometer reads them: x across its face towards its right, y along its length
 // towards the screen, z out of its face. Held still and flat, face up, it reads (0, 0, 1);
 // turned clockwise by an angle, (-sin, 0, cos). Games use that with the camera's picture
 // to keep the pointer level, so a source that turns the remote moves both together.
