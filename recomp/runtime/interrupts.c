@@ -7,6 +7,7 @@
 #include <mach/mach_time.h>
 #endif
 
+#include "timeline.h"
 #include "audio.h"
 #include "bluetooth.h"
 #include "title.h"
@@ -108,6 +109,7 @@ void poll_interrupts(void) {
   if (!(cpu.msr & INTERRUPTS_ENABLED)) return;
   if (irq_pending()) {
     uint32_t handler = rd32(EXCEPTION_TABLE + EXCEPTION_EXTERNAL * 4);
+    TIMELINE_MOMENT("interrupt taken");
     if (handler) enter_exception(EXCEPTION_EXTERNAL, handler);
   } else if (decrementer_armed && now >= decrementer_deadline) {
     decrementer_armed = 0;
@@ -139,7 +141,9 @@ void idle_wait(void) {
   int timer_due = decrementer_armed && decrementer_deadline <= now;
   if (!irq_pending() && !timer_due) {
     struct timespec pause = {0, (long)(wait * NANOSECONDS / TIME_BASE_HZ)};
+    TIMELINE_BEGIN("game idle");
     nanosleep(&pause, 0);
+    TIMELINE_END("game idle");
     stage_add(STAGE_IDLE, time_base() - now);
   }
   poll_interrupts();

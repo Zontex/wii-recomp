@@ -1,6 +1,7 @@
 // Vulkan's start-up, memory, window images and frames.
 #define GLFW_INCLUDE_NONE
 #define GLFW_INCLUDE_VULKAN
+#include "timeline.h"
 #include "gx_vulkan.h"
 
 #include <GLFW/glfw3.h>
@@ -417,7 +418,9 @@ VkDescriptorSet vk_texture_set(Frame *frame) {
 // Waits for this frame's last turn on the card, then readies it for another.
 void vk_frame_begin(Frame *frame) {
   if (frame->submitted) {
+    TIMELINE_BEGIN("waiting for the chip");
     vk_check(vkWaitForFences(vk.device, 1, &frame->fence, VK_TRUE, UINT64_MAX), "waiting for the card");
+    TIMELINE_END("waiting for the chip");
     vk_check(vkResetFences(vk.device, 1, &frame->fence), "resetting a fence");
     frame->submitted = 0;
   }

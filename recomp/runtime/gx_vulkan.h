@@ -4,7 +4,10 @@
 //
 // Frames: FRAMES_IN_FLIGHT sets of commands and memory take turns, so the game runs
 // ahead of the graphics card without touching anything the card still reads. Waiting
-// happens only when a turn comes round and the card hasn't finished that set yet.
+// happens only when a turn comes round and the card hasn't finished that set yet. Three
+// give a card that sometimes takes longer than a frame room to catch up: the wait comes
+// in the copy to the screen, before the game hears the frame is done, so with two a
+// game that waits for that before the next retrace lost a whole retrace each time.
 #pragma once
 #define VK_ENABLE_BETA_EXTENSIONS  // VK_KHR_portability_subset, for running on Metal.
 #include <vulkan/vulkan.h>
@@ -12,7 +15,7 @@
 #include "gx_backend.h"
 
 enum {
-  FRAMES_IN_FLIGHT = 2,
+  FRAMES_IN_FLIGHT = 3,
   MAX_TEXTURE_POOLS = 16,
   TEXTURE_SETS_PER_POOL = 1024,
   COLOR_FORMAT = VK_FORMAT_R8G8B8A8_UNORM,

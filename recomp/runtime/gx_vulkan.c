@@ -10,8 +10,10 @@
 
 #include "gx_vulkan.h"
 
+#define EFB_PIXEL_WIDTH (EFB_WIDTH * EFB_SCALE)
+#define EFB_PIXEL_HEIGHT (EFB_HEIGHT * EFB_SCALE)
 enum {
-  EFB_PIXEL_WIDTH = EFB_WIDTH * EFB_SCALE, EFB_PIXEL_HEIGHT = EFB_HEIGHT * EFB_SCALE, BYTES_PER_PIXEL = 4,
+  BYTES_PER_PIXEL = 4,
   // Dropping a picture beats holding up the game, which OpenGL never did either.
   ACQUIRE_TIMEOUT_NS = 0,
   VERTICES_PER_QUAD = 4, INDICES_PER_QUAD = 6, INDICES_PER_TRIANGLE = 3, QUADS = MAX_VERTICES / VERTICES_PER_QUAD,
@@ -81,6 +83,8 @@ static struct {
   int number, last_in_frame, read_depth, saw_depth_clear, frame_began;
   uint32_t shape, last_shape;
   char no_load[32], no_store[32];
+  // Passes that tested, wrote or cleared depth, or had it copied after them, this frame and the last.
+  char touched[32], last_touched[32];
   float clear_depth;
 } depth_use;
 
@@ -140,6 +144,15 @@ static void efb_color_to_target(VkCommandBuffer commands) {
 enum { CLEARS_COLOR = 1, CLEARS_DEPTH = 2, DROPS_DEPTH = 4, VISIBLE_HEIGHT = 456, MAX_PASSES = 32 };
 static VkRenderPass render_passes[8];
 static VkFramebuffer visible_framebuffer;  // Same memory, ending where the visible picture does.
+// The same two with a scratch depth picture in place of the real one, for passes that
+// never touch depth. Render passes only care about formats, so every pipeline works with
+// either. The scratch depth is cleared on the chip and thrown away, and the real depth
+// stays in memory untouched, so a pass of effects or a HUD after the scene moves no
+// depth at all, where it would otherwise load and store all of it.
+static VkImage scratch_depth;
+static VkImageView scratch_depth_view;
+static VkFramebuffer depthless_framebuffer, visible_depthless_framebuffer;
+static int pass_depthless;  // The open pass uses the scratch depth.
 
 // A clear waits for the next pass and becomes how that pass starts, which spares
 // the chip loading and storing a picture only to overwrite it.
@@ -182,6 +195,15 @@ static void create_efb(void) {
   vk_check(vkCreateFramebuffer(vk.device, &info, 0, &vk.efb_framebuffer), "creating the framebuffer");
   info.height = VISIBLE_HEIGHT * EFB_SCALE;
   vk_check(vkCreateFramebuffer(vk.device, &info, 0, &visible_framebuffer), "creating the framebuffer");
+  VkDeviceMemory scratch_memory;
+  vk_create_image(DEPTH_FORMAT, VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT, EFB_PIXEL_WIDTH, EFB_PIXEL_HEIGHT, 1,
+                  &scratch_depth, &scratch_memory);
+  scratch_depth_view = vk_create_view(scratch_depth, DEPTH_FORMAT, VK_IMAGE_ASPECT_DEPTH_BIT, 1, plain);
+  views[1] = scratch_depth_view;
+  info.height = EFB_PIXEL_HEIGHT;
+  vk_check(vkCreateFramebuffer(vk.device, &info, 0, &depthless_framebuffer), "creating the framebuffer");
+  info.height = VISIBLE_HEIGHT * EFB_SCALE;
+  vk_check(vkCreateFramebuffer(vk.device, &info, 0, &visible_depthless_framebuffer), "creating the framebuffer");
 }
 
 // Fresh memory holds anything, so the picture starts as blank as OpenGL's did in practice.
@@ -195,6 +217,8 @@ static void blank_efb(VkCommandBuffer commands) {
           VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
   vkCmdClearColorImage(commands, vk.efb_color, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &color, 1, &color_range);
   vkCmdClearDepthStencilImage(commands, vk.efb_depth, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &depth, 1, &depth_range);
+  barrier(commands, scratch_depth, VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
+          VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, DEPTH_ATTACHMENT_STAGE, DEPTH_ATTACHMENT_ACCESS);
   barrier(commands, vk.efb_color, VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL,
           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, COLOR_ATTACHMENT_STAGE, COLOR_ATTACHMENT_ACCESS);
   barrier(commands, vk.efb_depth, VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL,
@@ -228,6 +252,8 @@ static void begin_frame(Frame *frame) {
     memset(depth_use.no_load, 0, sizeof depth_use.no_load);
     memset(depth_use.no_store, 0, sizeof depth_use.no_store);
   }
+  memcpy(depth_use.last_touched, depth_use.touched, sizeof depth_use.touched);
+  memset(depth_use.touched, 0, sizeof depth_use.touched);
   depth_use.last_shape = depth_use.shape;
   depth_use.shape = 0;
   flat_depth.known = 0;
@@ -247,12 +273,13 @@ static void begin_frame(Frame *frame) {
 // when it is set to a number n of 2 or more.
 enum { MARKS = 96 };
 static VkQueryPool mark_pool; static int marks, mark_on = -1, mark_frame, mark_period = 300; static int capturing; static char mark_names[MARKS][48];
-static unsigned mark_draws;
+// Draws recorded, counted where they land: a draw that reopens a pass belongs to the new one.
+static unsigned mark_draws, recorded_draws;
 static void mark(const char *name, int w, int h) {
   if (!capturing || marks >= MARKS || in_strip) return;
   vkCmdWriteTimestamp(vk.frame->draw, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mark_pool, (uint32_t)marks);
-  snprintf(mark_names[marks], 48, "%s %dx%d draws %u", name, w, h, gx_stats.draws - mark_draws);
-  mark_draws = gx_stats.draws;
+  snprintf(mark_names[marks], 48, "%s %dx%d draws %u", name, w, h, recorded_draws - mark_draws);
+  mark_draws = recorded_draws;
   marks++;
 }
 static void mark_frame_start(void) {
@@ -332,6 +359,10 @@ static void forget_depth_use(void) {
   memset(depth_use.no_store, 0, sizeof depth_use.no_store);
 }
 
+static void depth_touched(int n) {
+  if (!in_strip && n >= 0 && n < MAX_PASSES) depth_use.touched[n] = 1;
+}
+
 static int pass_kind_learned(void) {
   static int off = -1;
   if (off < 0) off = getenv("WII_RECOMP_KEEP_DEPTH") != 0;
@@ -344,9 +375,21 @@ static int pass_kind_learned(void) {
 // first needn't be copied out and drawn back. Depth is shared. See the layers below.
 static struct { VkImage image; VkDeviceMemory memory; VkImageView view; VkFramebuffer framebuffer; int on; } side;
 
-static VkFramebuffer framebuffer_for(int visible) {
+static VkFramebuffer framebuffer_for(int visible, int depthless) {
   if (side.on && !in_strip) return side.framebuffer;
+  if (depthless) return visible ? visible_depthless_framebuffer : depthless_framebuffer;
   return visible ? visible_framebuffer : vk.efb_framebuffer;
+}
+
+// Whether the pass about to open can do without depth: the work opening it doesn't use
+// it, and the pass at this place in the last frame didn't either, so it likely won't. If
+// a draw needing depth comes after all, the pass ends and another opens with the real depth.
+static int next_work_uses_depth, next_work_covers;
+static int depthless_pass_wanted(void) {
+  static int off = -1;
+  if (off < 0) off = getenv("WII_RECOMP_DEPTH_EVERY_PASS") != 0;
+  int n = depth_use.number;
+  return !off && !in_strip && !(side.on) && !next_work_uses_depth && n < MAX_PASSES && !depth_use.last_touched[n];
 }
 
 static int pass_began_as;  // For the GPU times: how the open pass began, as render pass kind, plus 16 if by a clear.
@@ -355,14 +398,20 @@ static void start_pass_with_clear(void) {
   int learned = pass_kind_learned();
   if (learned & CLEARS_DEPTH) waiting_clear.values[1].depthStencil.depth = depth_use.clear_depth;
   waiting_clear.kind |= learned;
+  int depthless = !(waiting_clear.kind & CLEARS_DEPTH) && depthless_pass_wanted();
+  if (depthless) {
+    waiting_clear.kind |= CLEARS_DEPTH | DROPS_DEPTH;
+    waiting_clear.values[1].depthStencil.depth = 1.0f;
+  }
   depth_use.read_depth = depth_use.saw_depth_clear = 0;
   VkRect2D area = waiting_clear.area;
   int visible = area.offset.y + (int64_t)area.extent.height == VISIBLE_HEIGHT * EFB_SCALE;
   VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = render_passes[waiting_clear.kind],
-                                .framebuffer = framebuffer_for(visible), .renderArea = area,
+                                .framebuffer = framebuffer_for(visible, depthless), .renderArea = area,
                                 .clearValueCount = 2, .pClearValues = waiting_clear.values};
   vkCmdBeginRenderPass(vk.frame->draw, &info, VK_SUBPASS_CONTENTS_INLINE);
-  pass_began_as = 16 | waiting_clear.kind;
+  pass_began_as = 16 | waiting_clear.kind | (depthless ? 64 : 0);
+  pass_depthless = depthless;
   waiting_clear.kind = 0;
   pass_area = area;
   pass_open = 1;
@@ -419,10 +468,16 @@ static void begin_pass(const VkRect2D *area) {
     if (!apart) wanted = rectangle_union(&pass_area, area);
     end_pass();
   }
-  VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = vk.render_pass, .framebuffer = framebuffer_for(0),
-                                .renderArea = wanted};
+  // A pass begun by a draw takes what was learned about depth as well as one begun by a clear.
+  int depthless = depthless_pass_wanted(), learned = depthless ? CLEARS_DEPTH | DROPS_DEPTH : pass_kind_learned();
+  // Whatever the picture held here is about to be drawn over, so it needn't be loaded.
+  if (next_work_covers && !side.on) learned |= CLEARS_COLOR;
+  VkClearValue values[2] = {{.color = {{0, 0, 0, 0}}}, {.depthStencil = {depthless ? 1.0f : depth_use.clear_depth, 0}}};
+  VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = render_passes[learned], .framebuffer = framebuffer_for(0, depthless),
+                                .renderArea = wanted, .clearValueCount = 2, .pClearValues = values};
   vkCmdBeginRenderPass(vk.frame->draw, &info, VK_SUBPASS_CONTENTS_INLINE);
-  pass_began_as = 0;
+  pass_began_as = learned | (depthless ? 64 : 0);
+  pass_depthless = depthless;
   pass_open = 1;
   pass_area = wanted;
   gx_stats.passes++;
@@ -519,7 +574,7 @@ static VkRect2D drawn_area(void) {
   if (right > scissor_right) right = scissor_right;
   if (bottom > scissor_bottom) bottom = scissor_bottom;
   if (gx_bounds_known) {
-    enum { MARGIN = 2 * EFB_SCALE };
+    const int MARGIN = 2 * EFB_SCALE;
     float x = viewport_wanted.x, y = viewport_wanted.y, w = viewport_wanted.width / 2, h = viewport_wanted.height / 2;
     float x0 = x + (gx_bounds[0] + 1) * w, x1 = x + (gx_bounds[2] + 1) * w;
     float y0 = y + (gx_bounds[1] + 1) * h, y1 = y + (gx_bounds[3] + 1) * h;
@@ -653,6 +708,45 @@ static void vertices_send(const void *vertices, int count) {
 }
 
 static void early_depth_changed(void);
+
+// Whether a draw opening a pass replaces every pixel of the pass's area: a rectangle as
+// large, writing color and any alpha that is kept, with nothing blended, culled or thrown
+// away by a test. Effect passes are made of these, each drawing a picture made before over
+// the whole of a smaller one, with the scissor drawing the pass's edges. Facing is as the
+// pipeline sees it: counterclockwise with y up is the front.
+static int draw_covers_pass(int primitive, int count, const VkRect2D *area) {
+  extern TevKey gx_last_tev;
+  if ((primitive != PRIM_QUADS && primitive != PRIM_QUADS2) || count != 4 || state_in_use.blend_on || state_in_use.cull == GX_CULL_ALL) return 0;
+  if (!state_in_use.color_write || (!state_in_use.alpha_write && gx_target_has_alpha())) return 0;
+  if (state_in_use.depth_test_on && state_in_use.depth_test != GX_TEST_ALWAYS) return 0;
+  if (gx_last_tev.alpha_test || gx_expanding) return 0;
+  float x[4], y[4], px[4], py[4], left = 1e9f, right = -1e9f, top = 1e9f, bottom = -1e9f;
+  for (int i = 0; i < 4; i++) {
+    if (!gx_transform_screen(&gx_reserved[i], &x[i], &y[i])) return 0;
+    px[i] = viewport_wanted.x + (x[i] + 1) / 2 * viewport_wanted.width;
+    py[i] = viewport_wanted.y + (y[i] + 1) / 2 * viewport_wanted.height;
+    left = fminf(left, px[i]), right = fmaxf(right, px[i]), top = fminf(top, py[i]), bottom = fmaxf(bottom, py[i]);
+  }
+  // A rectangle: each corner on its bounds, all four of them.
+  int corners = 0;
+  const float near = 0.01f;
+  for (int i = 0; i < 4; i++) {
+    int at_left = fabsf(px[i] - left) < near, at_right = fabsf(px[i] - right) < near;
+    int at_top = fabsf(py[i] - top) < near, at_bottom = fabsf(py[i] - bottom) < near;
+    if (at_left == at_right || at_top == at_bottom) return 0;
+    corners |= 1 << (at_right + 2 * at_bottom);
+  }
+  if (corners != 15) return 0;
+  if (left > area->offset.x + near || top > area->offset.y + near) return 0;
+  if (right < area->offset.x + (float)area->extent.width - near || bottom < area->offset.y + (float)area->extent.height - near) return 0;
+  // A quad's two triangles are 0 1 2 and 0 2 3; on the corners both face the same way, or neither covers.
+  float first = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
+  float second = (x[2] - x[0]) * (y[3] - y[0]) - (x[3] - x[0]) * (y[2] - y[0]);
+  if ((first > 0) != (second > 0) || first == 0 || second == 0) return 0;
+  int front = first > 0;
+  return !((state_in_use.cull == GX_CULL_FRONT && front) || (state_in_use.cull == GX_CULL_BACK && !front));
+}
+
 // A page that covers the whole picture makes all drawing before it wasted, however much
 // there was. The commands recorded so far haven't run, so they can simply be thrown away.
 // If the page never comes, nothing was lost. It's known from the frame before, because
@@ -683,7 +777,7 @@ static void drop_recorded_commands(void) {
   memset(waiting_clear.values, 0, sizeof waiting_clear.values);
   waiting_clear.values[1].depthStencil.depth = 0;  // What fell behind the page stays behind it.
   flat_depth.known = 0;
-  if (capturing) { vkCmdResetQueryPool(vk.frame->draw, mark_pool, 0, MARKS); marks = 0; mark_draws = gx_stats.draws; mark("start", 0, 0); }
+  if (capturing) { vkCmdResetQueryPool(vk.frame->draw, mark_pool, 0, MARKS); marks = 0; mark_draws = recorded_draws; mark("start", 0, 0); }
 }
 
 // Games copy the picture out, clear, and draw the copy straight back, ready for effects.
@@ -830,19 +924,31 @@ static void draw(int primitive, int count) {
   }
   VkCommandBuffer commands = frame->draw;
   if (state_in_use.depth_write) early_depth_changed();
-  if (!depth_use.frame_began && !in_strip && state_in_use.depth_test_on) { depth_use.frame_began = 1; memset(depth_use.no_store, 0, sizeof depth_use.no_store); }
+  if (!depth_use.frame_began && !in_strip && state_in_use.depth_test_on) {
+    depth_use.frame_began = 1;
+    memset(depth_use.no_store, 0, sizeof depth_use.no_store);
+  }
   if (state_in_use.depth_test_on && !in_strip && !depth_use.saw_depth_clear) {
     depth_use.read_depth = 1;
     if (depth_use.number < MAX_PASSES && depth_use.no_load[depth_use.number]) forget_depth_use();
   }
   VkRect2D area = drawn_area();
+  next_work_uses_depth = state_in_use.depth_test_on || state_in_use.depth_write;
+  next_work_covers = !pass_open && draw_covers_pass(primitive, count, &area);
+  if (next_work_uses_depth && pass_open && pass_depthless) {
+    depth_touched(depth_use.number);  // So next frame's pass here opens with depth, not in two.
+    end_pass();
+  }
   begin_pass(&area);
+  next_work_uses_depth = next_work_covers = 0;
+  if (state_in_use.depth_test_on || state_in_use.depth_write) depth_touched(depth_use.number);
   set_pipeline(commands, vk_pipeline_find(shader_in_use, &state_in_use));
   set_viewport_and_scissor(commands, &viewport_wanted, &area);
   bind_maps(commands);
   VkDeviceSize start_of_buffer = 0;
   vkCmdBindVertexBuffers(commands, 0, 1, &frame->vertices.buffer, &start_of_buffer);
   int32_t first = (int32_t)(reserved_at / vertex_bytes);
+  recorded_draws++;
   if (primitive == PRIM_TRIANGLES) {
     vkCmdDraw(commands, (uint32_t)count, 1, (uint32_t)first, 0);
     return;
@@ -865,6 +971,7 @@ static void clear_now(const GxClear *c) {
   route_work(clip_to_efb(&c->area).offset.y >= VISIBLE_HEIGHT * EFB_SCALE);
   if (c->depth_write) early_depth_changed();
   if (c->depth_write && !in_strip) {
+    depth_touched(depth_use.number);
     VkRect2D wanted = clip_to_efb(&c->area);
     VkRect2D visible = {{0, 0}, {EFB_PIXEL_WIDTH, VISIBLE_HEIGHT * EFB_SCALE}};
     int all = rectangle_holds(&wanted, &visible), n = depth_use.number;
@@ -905,13 +1012,20 @@ static void clear_now(const GxClear *c) {
   values.depth = (float)c->depth;
   VkCommandBuffer commands = vk.frame->draw;
   VkRect2D area = clip_to_efb(&c->area);
+  next_work_uses_depth = c->depth_write;
+  if (next_work_uses_depth && pass_open && pass_depthless) {
+    depth_touched(depth_use.number);  // So next frame's pass here opens with depth, not in two.
+    end_pass();
+  }
   begin_pass(&area);
+  next_work_uses_depth = 0;
   if (!pass_began_as) pass_began_as = 32 | c->color_write | c->alpha_write << 1 | c->depth_write << 2;  // Drawn as a clear.
   set_pipeline(commands, vk_pipeline_find(clear_shader, &state));
   VkViewport whole = {0, 0, EFB_PIXEL_WIDTH, EFB_PIXEL_HEIGHT, 0, 1};
   set_viewport_and_scissor(commands, &whole, &area);
   vkCmdPushConstants(commands, vk.pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof values, &values);
   vkCmdDraw(commands, 3, 1, 0, 0);
+  recorded_draws++;
 }
 
 // Clips a copy's source to the picture, moving the target's edges to keep the scale.
@@ -1127,6 +1241,7 @@ static void copy_depth_now(GxTexture *to, const GxRectangle *from, int width, in
     return;
   }
   end_pass();
+  depth_touched(depth_use.number - 1);  // The copy reads what the pass before it stored.
   prepare_copy(to, width, height, DEPTH_FORMAT, VK_IMAGE_ASPECT_DEPTH_BIT, channels);
   barrier(commands, vk.efb_depth, VK_IMAGE_ASPECT_DEPTH_BIT, 0, 1, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
           DEPTH_ATTACHMENT_STAGE, VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);

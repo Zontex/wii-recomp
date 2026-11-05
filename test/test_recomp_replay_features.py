@@ -905,6 +905,86 @@ class DepthRange(Scene):
         self.scene(self.HALF, 2.0 * 0xffffff)
         self.assertIn("viewport depth past the depth buffer", self.log)
 
+    def depth_through(self, *betweens):
+        """Four frames: a near red quad, then one of `betweens` in turn, then a far green quad tested against it.
+        A pass whose draws leave depth alone runs with a scratch depth picture, so the real one
+        must come through it untouched, frame after frame, as each frame learns from the last."""
+        state = base_state()
+        state[0][0x40] = 1 | (1 << 1) | (1 << 4)  # So the player's opening clear clears depth too.
+        tested = bp_command(0x40, 1 | (1 << 1) | (1 << 4))
+        near = tested + quad(self.RED)  # In front, at a quarter.
+        far = tested + self.depth_range(self.HALF, 0xffffff) + quad(self.GREEN, 150, 150, 350, 350) + self.depth_range(self.HALF, self.HALF)
+        recording, out = self.folder / "scene.dff", self.folder / "frames"
+        write_dff(recording, state, [(near + betweens[i % len(betweens)] + far + show_frame(), []) for i in range(4)])
+        result = replay(recording, out)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.log = result.stderr
+        for i in range(1, 4):  # The first frame starts from the player's own opening clear.
+            picture = Image.open(out / f"frame-{i:04d}.png").convert("RGB")
+            self.assert_pixel(picture, 200, 200, self.RED)  # The far quad stays behind.
+            self.assert_pixel(picture, 320, 320, self.GREEN)
+
+    # A copy ends the pass, as copies do, then a draw across the whole picture with depth off
+    # and nothing written opens one of its own.
+    COPY = copy_picture(0x00300000, 0, width=8, height=8, stride=64)
+    UNSEEN = COPY + bp_command(0x40, 0) + bp_command(0x41, 0) + quad(WHITE, 0, 0, 640, 456) + bp_command(0x41, 0x18)
+
+    def test_depth_outlives_a_pass_that_never_uses_it(self):
+        self.depth_through(self.UNSEEN + self.COPY)
+
+    def test_a_pass_without_depth_ends_when_a_draw_needs_it(self):
+        # Frames alternate, so the pass after the copy left depth alone in the last one, and
+        # each frame with the far quad straight after it finds it needs depth after all.
+        self.depth_through(self.UNSEEN + self.COPY, self.UNSEEN)
+
+
+class KeptDrawState(Scene):
+    """A draw keeps what the last one worked out from the registers until one is written."""
+    RED, GREEN = (200, 30, 60), (20, 180, 40)
+
+    def test_a_new_matrix_moves_the_next_draw(self):
+        # Only matrix memory changes between the two draws.
+        moved = xf_command(0, float_bits(1.0), 0, 0, float_bits(300.0))
+        picture = self.picture(base_state(), quad(self.RED) + moved + quad(self.GREEN))
+        self.assert_pixel(picture, 200, 200, self.RED)
+        self.assert_pixel(picture, 500, 200, self.GREEN)
+
+    def test_a_new_stage_color_reaches_the_next_draw(self):
+        state = base_state()
+        state[0][0xc0] = color_stage(d=COLOR_R1)  # The stage gives register 1, not the vertex color.
+        picture = self.picture(state, register(1, *self.RED, 255) + quad(WHITE) + register(1, *self.GREEN, 255) + quad(WHITE, 400, 100, 600, 300))
+        self.assert_pixel(picture, 200, 200, self.RED)
+        self.assert_pixel(picture, 500, 200, self.GREEN)
+
+
+class CoveredPasses(Scene):
+    """A pass whose first draw covers all of its area starts without loading what was there."""
+    RED, GREEN = (200, 30, 60), (20, 180, 40)
+    ORIGIN = 342
+
+    def scissor(self, left, top, right, bottom):
+        o = self.ORIGIN
+        return bp_command(0x20, (o + top) | ((o + left) << 12)) + bp_command(0x21, (o + bottom - 1) | ((o + right - 1) << 12))
+
+    def scene(self, green_right):
+        # Red everywhere, a copy to end the pass, then green over a scissored square.
+        state = base_state()
+        state[0][0x41] = 0x18  # Color and alpha written, nothing blended.
+        whole = self.scissor(0, 0, 640, 456)
+        commands = (quad(self.RED, 0, 0, 640, 456) + copy_picture(0x00300000, 0, width=8, height=8, stride=64)
+                    + self.scissor(100, 100, 300, 300) + quad(self.GREEN, 100, 100, green_right, 300) + whole)
+        return self.picture(state, commands)
+
+    def test_a_covering_draw_replaces_the_area(self):
+        picture = self.scene(300)
+        self.assert_pixel(picture, 200, 200, self.GREEN)
+        self.assert_pixel(picture, 50, 50, self.RED)
+
+    def test_a_draw_over_part_of_it_leaves_the_rest(self):
+        picture = self.scene(200)
+        self.assert_pixel(picture, 150, 200, self.GREEN)
+        self.assert_pixel(picture, 250, 200, self.RED)  # In the pass, but not drawn over.
+
 
 class DestinationAlpha(Scene):
     """Draws into the corner, copies it with its alpha, and shows that alpha as gray."""

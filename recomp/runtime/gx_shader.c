@@ -178,7 +178,16 @@ void gx_shader_use(const TevKey *tev, const VertexKey *vertex) {
   if (anything_used && !memcmp(&in_use.tev, tev, sizeof *tev) && !memcmp(&in_use.vertex, vertex, sizeof *vertex)) return;
   key.tev = *tev;
   key.vertex = *vertex;
+  unsigned built_before = built_count;
   unsigned program = program_for(&key);
+  // A backend with pipelines notes its recipes as it builds them. One without, such as
+  // OpenGL, needs only the program, so it's noted here, the first time it's built, for
+  // the next run to build before the first picture.
+  if (built_count != built_before && !gx_backend->pipeline_prepare) {
+    GxRenderState no_state;
+    memset(&no_state, 0, sizeof no_state);
+    gx_recipe_note(program, &no_state);
+  }
   gx_backend->shader_use(program);
   in_use = key;
   anything_used = 1;
