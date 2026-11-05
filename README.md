@@ -4,7 +4,7 @@
 
 **The Wii console, rebuilt as native software.**
 
-[![License: GPL-2.0-or-later](https://img.shields.io/badge/license-GPL--2.0--or--later-blue)](LICENSE)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue)](LICENSE)
 [![Platforms: macOS, Raspberry Pi 5](https://img.shields.io/badge/platforms-macOS%20%7C%20Raspberry%20Pi%205-lightgrey)](#build-and-run)
 [![Graphics: Vulkan](https://img.shields.io/badge/graphics-Vulkan-lightgrey)](recomp/README.md)
 
@@ -188,13 +188,13 @@ The tests need no Nintendo files. Set `VULKAN_SDK` to a folder with the Vulkan l
 Wii Recomp stands on years of other people's work on the Wii.
 
 - [Dolphin](https://dolphin-emu.org/) is the reference for how the hardware behaves. The graphics, IOS, Bluetooth and real Wii Remote code follow its behaviour, and every part taken from it is listed, file by file, in [`CREDITS.md`](CREDITS.md).
-- [WiiCompiled](https://github.com/patchzyy/Wiicompiled) showed two designs we built our own versions of: real Wii Remotes passed straight to a game's own code, and guest memory at a fixed address. None of its code is used.
+- [WiiCompiled](https://github.com/patchzyy/Wiicompiled) showed two designs we built our own versions of: real Wii Remotes passed straight to a game's own code, and guest memory at a fixed address. Anything taken from it is listed in [`CREDITS.md`](CREDITS.md).
 - [nod](https://github.com/encounter/nod) reads disc images for `extract_disc.py`.
 - [WiiBrew](https://wiibrew.org), YAGCD, and Hector Martin and others documented the console, the Wii Remote and its attachments.
 
 ## Legal
 
-Wii Recomp is licensed under the GNU General Public License, version 2 or later. See [`LICENSE`](LICENSE).
+Wii Recomp is licensed under the GNU General Public License, version 3 or later. See [`LICENSE`](LICENSE).
 
 The repository holds no Nintendo code, data or assets: no disc images, system software, keys, saves, or code translated from a game. Everything a game needs comes from a disc you own and a NAND backup and keys from your own Wii, and it's translated and compiled on your own machine. `.gitignore` keeps `wii/`, disc images and extracted files out of the repository. The translated output stays there. Don't share it, and don't ask for games here.
 
