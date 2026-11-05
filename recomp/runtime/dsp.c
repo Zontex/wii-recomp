@@ -233,8 +233,7 @@ static const DspProgram card_program = {"memory card", card_start, card_mail, ca
   static void variable##_start(void) { gap_hit(row, current.crc); }       \
   static const DspProgram variable = {title, variable##_start, ignore_mail, nothing};
 static const char *missing_row(const DspProgram *program);
-MISSING(ax_gamecube_missing, "GameCube AX", "audio.ax_gamecube_metroid_prime_trilogy")
-MISSING(ax_wii_old_missing, "AXWii, older commands", "audio.axwii_older_command_format_old")
+MISSING(ax_wii_layout_missing, "AXWii, unknown block layout", "audio.axwii_unknown_block_layout")
 MISSING(gba_missing, "Game Boy Advance link", "audio.card_gba")
 MISSING(homebrew_missing, "homebrew mixer", "audio.asnd_aesnd_homebrew")
 MISSING(unknown_missing, "unknown", "audio.unknown_program")
@@ -243,15 +242,16 @@ MISSING(unknown_missing, "unknown", "audio.unknown_program")
 static const struct { uint32_t crc; const DspProgram *program; } known[] = {
   {0x65d6cc6fu, &card_program},
   {0xdd7e72d5u, &gba_missing},
-  {0x3ad3b7acu, &ax_gamecube_missing}, {0x3daf59b9u, &ax_gamecube_missing}, {0x4e8a8b21u, &ax_gamecube_missing},
-  {0x07f88145u, &ax_gamecube_missing}, {0xe2136399u, &ax_gamecube_missing}, {0x3389a79eu, &ax_gamecube_missing},
+  {0x3ad3b7acu, &ax_program}, {0x3daf59b9u, &ax_program}, {0x4e8a8b21u, &ax_program},
+  {0x07f88145u, &ax_program}, {0xe2136399u, &ax_program}, {0x3389a79eu, &ax_program},
   {0x86840740u, &zelda_program}, {0x6ca33a6du, &zelda_program}, {0xd643001fu, &zelda_program}, {0x6ba3b3eau, &zelda_program},
   {0x24b22038u, &zelda_program}, {0x2fcdf1ecu, &zelda_program}, {0xdf059f68u, &zelda_program}, {0x4be6a5cbu, &zelda_program},
   {0x267fd05au, &zelda_program}, {0x42f64ac4u, &zelda_program}, {0x56d36052u, &zelda_program}, {0x6c3f6f94u, &zelda_program},
   {0xb7eb9a9cu, &zelda_program}, {0xeaeb38ccu, &zelda_program},
-  {0x2ea36ce6u, &ax_wii_program}, {0x5ef56da3u, &ax_wii_program}, {0x347112bau, &ax_wii_program},
-  {0xadbc06bdu, &ax_wii_program}, {0x4cc52064u, &ax_wii_program}, {0xd9c4bf34u, &ax_wii_program},
-  {0xfa450138u, &ax_wii_old_missing}, {0x7699af32u, &ax_wii_old_missing},
+  // Two Wii versions whose block layout neither Dolphin nor we know: the interpreter runs them.
+  {0x2ea36ce6u, &ax_wii_layout_missing}, {0x5ef56da3u, &ax_wii_layout_missing}, {0x347112bau, &ax_program},
+  {0xadbc06bdu, &ax_program}, {0x4cc52064u, &ax_program}, {0xd9c4bf34u, &ax_program},
+  {0xfa450138u, &ax_program}, {0x7699af32u, &ax_program},
   {0x8d69a19bu, &homebrew_missing}, {0xcc2fd441u, &homebrew_missing}, {0xa81582e2u, &homebrew_missing},
   {0xdbbeeb61u, &homebrew_missing}, {0xbad876efu, &homebrew_missing}, {0xfa9c576fu, &homebrew_missing},
   {0x614dd145u, &homebrew_missing}, {0x5dbf8bf1u, &homebrew_missing}, {0x373a950eu, &homebrew_missing},
@@ -271,8 +271,7 @@ static const DspProgram *program_for(uint32_t crc) {
 }
 
 static const char *missing_row(const DspProgram *program) {
-  if (program == &ax_gamecube_missing) return "audio.ax_gamecube_metroid_prime_trilogy";
-  if (program == &ax_wii_old_missing) return "audio.axwii_older_command_format_old";
+  if (program == &ax_wii_layout_missing) return "audio.axwii_unknown_block_layout";
   if (program == &gba_missing) return "audio.card_gba";
   if (program == &homebrew_missing) return "audio.asnd_aesnd_homebrew";
   if (program == &unknown_missing) return "audio.unknown_program";

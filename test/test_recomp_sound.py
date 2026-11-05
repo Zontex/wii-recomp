@@ -1,8 +1,10 @@
 """Sound recordings (recomp/runtime/dsp_record.c) and their player and bench
 (recomp/tools/sound_replay.c, sound_bench.py), on made-up programs and data."""
+import re
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -52,6 +54,62 @@ class Recording:
         Path(path).write_bytes(header + self.events)
 
 
+def words(values):
+    return b"".join(struct.pack(">H", value & 0xffff) for value in values)
+
+
+# The newest Wii voice block in memory, by 16-bit word (Dolphin's AXPBWii without its updates).
+PB_WORDS, RUNNING, SRC_TYPE, MIXER_LO, MAIN_LEFT, MAIN_RIGHT, DPOP_LEFT, DPOP_RIGHT = 150, 8, 4, 7, 10, 12, 41, 45
+VOLUME, FORMAT, LOOP, END, CURRENT, GAIN, YN1, YN2, LAST_SAMPLES = 53, 56, 57, 59, 61, 79, 81, 82, 86
+LIST, PB, ZEROS, SAMPLES, SURROUND, OUTPUT = 0x1000, 0x2000, 0x3000, 0x40000, 0x5000, 0x6000
+
+
+def ax_recording(frames, altered=None):
+    """One voice of 16-bit samples, at full volume, no rate change, to both sides: each frame
+    plays the next 96 samples as they are. The real program's writes are worked out from
+    Dolphin's AXVoice.h; altered=(frame, sample, by) changes one left sample in them."""
+    recording = Recording(AX_WII)
+    ticks = 1000
+    recording.time(ticks)
+    samples = [(i * 37) % 2000 - 1000 for i in range(96 * frames)]
+    pb = [0] * PB_WORDS
+    pb[RUNNING], pb[SRC_TYPE], pb[MIXER_LO] = 1, 2, 3  # Nearest, main left and right.
+    pb[MAIN_LEFT] = pb[MAIN_RIGHT] = pb[VOLUME] = 0x8000
+    pb[FORMAT], pb[GAIN] = 0x0a, 0x800  # 16-bit PCM, at a gain of one.
+    first = SAMPLES // 2  # In 16-bit words.
+    pb[LOOP], pb[LOOP + 1] = first >> 16, first & 0xffff
+    pb[END], pb[END + 1] = 0, first + 0x10000
+    pb[CURRENT], pb[CURRENT + 1] = first >> 16, first & 0xffff
+    command_list = words([0x0000, 0, ZEROS, 0x0004, 0, PB, 0x000b, 0x8000, 0, SURROUND, 0, OUTPUT, 0x000e])
+    for frame in range(frames):
+        recording.send(0xbabe0000 | len(command_list) // 2)
+        ticks += 100
+        recording.time(ticks)
+        recording.send(LIST)
+        if frame == 0:
+            recording.memory(MEMORY_READ, LIST, command_list)
+            recording.memory(MEMORY_READ, PB, words(pb))
+            recording.memory(MEMORY_READ, SAMPLES, words(samples))
+        played = samples[frame * 96:(frame + 1) * 96]
+        position = first + (frame + 1) * 96
+        pb[CURRENT], pb[CURRENT + 1] = position >> 16, position & 0xffff
+        pb[YN1], pb[YN2] = played[-1], played[-2]
+        pb[LAST_SAMPLES:LAST_SAMPLES + 4] = played[-4:]
+        pb[DPOP_LEFT] = pb[DPOP_RIGHT] = played[-1]
+        recording.memory(MEMORY_WRITE, PB, words(pb))
+        recording.memory(MEMORY_WRITE, SURROUND, bytes(96 * 4))
+        left = list(played)
+        if altered and altered[0] == frame:
+            left[altered[1]] += altered[2]
+        recording.memory(MEMORY_WRITE, OUTPUT, words(value for pair in zip(played, left) for value in pair))
+        recording.answer(0xdcd10004)  # Sync, then yield.
+        recording.answer(0xdcd10002)
+        ticks += 1000
+        recording.time(ticks)
+        recording.send(0xcdd10003)  # Carry on.
+    return recording, ticks
+
+
 def summary(output):
     line = [line for line in output.splitlines() if line.startswith("summary ")][-1]
     return dict(pair.split("=", 1) for pair in line.split()[1:])
@@ -88,6 +146,51 @@ class SoundRecordings(unittest.TestCase):
         self.assertTrue(run.stdout.endswith("ok\n"), run.stdout)
         result = self.play(recording)
         self.assertEqual((result["replays"], result["mails"], result["frames"], result["program"]), ("yes", "3", "3", "none"))
+
+    def test_c_version_matches_made_up_real_program(self):
+        recording, end = ax_recording(3)
+        path = Path(self.folder.name) / "ax.wsr"
+        recording.save(path, 1000, end)
+        result = self.play(path)
+        self.assertEqual(result["program"], "AX")
+        self.assertEqual(result["replays"], "skipped")
+        self.assertEqual(result["frames"], "3")
+        self.assertEqual(result["in_step_from"], "2")  # Started mid-game: from the first list's answers.
+        self.assertEqual(result["first_mails"], "same")
+        self.assertEqual((result["differ"], result["peak"]), ("0", "0"))
+        self.assertGreater(int(result["words"]), 3 * 96 * 2)
+        self.assertEqual(result["interrupts"], "6/6")
+
+    def test_one_different_sample_is_found(self):
+        recording, end = ax_recording(3, altered=(1, 10, 5))
+        path = Path(self.folder.name) / "ax-altered.wsr"
+        recording.save(path, 1000, end)
+        result = self.play(path)
+        self.assertEqual((result["differ"], result["steps_differ"], result["peak"]), ("1", "1", "5"))
+        self.assertEqual(result["first_step"], "5")  # The second frame's list address.
+        self.assertEqual(int(result["first_address"], 16), OUTPUT + 10 * 4 + 2)  # Left follows right.
+        sample = [(i * 37) % 2000 - 1000 for i in range(96 * 3)][96 + 10]
+        self.assertEqual(result["first_values"], f"{sample + 5}/{sample}")
+        self.assertAlmostEqual(float(result["rms"]), (25 / int(result["words"])) ** 0.5, places=3)
+
+    def test_bench_table_reference_and_strict(self):
+        recordings = Path(self.folder.name) / "bench"
+        recordings.mkdir(exist_ok=True)
+        recording, end = ax_recording(2)
+        recording.save(recordings / "clean.wsr", 1000, end)
+        reference = Path(self.folder.name) / "reference"
+        bench = [sys.executable, str(TOOLS / "sound_bench.py"), str(recordings)]
+        saved = subprocess.run([*bench, "--save-reference", str(reference)], capture_output=True, text=True, timeout=120)
+        self.assertEqual(saved.returncode, 0, saved.stdout + saved.stderr)
+        self.assertRegex(saved.stdout, r"clean\s+AX\s+2\s")
+        again = subprocess.run([*bench, "--reference", str(reference), "--strict"], capture_output=True, text=True, timeout=120)
+        self.assertEqual(again.returncode, 0, again.stdout + again.stderr)
+        self.assertIn("match the reference", again.stdout)
+        recording, end = ax_recording(2, altered=(0, 3, -7))
+        recording.save(recordings / "clean.wsr", 1000, end)
+        strict = subprocess.run([*bench, "--strict"], capture_output=True, text=True, timeout=120)
+        self.assertEqual(strict.returncode, 1, strict.stdout)
+        self.assertTrue(re.search(r"real -?\d+, C -?\d+", strict.stdout), strict.stdout)
 
 
 if __name__ == "__main__":

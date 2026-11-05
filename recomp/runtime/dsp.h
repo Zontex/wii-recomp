@@ -72,4 +72,4 @@ int dsp_interpreting(void);
 void dsp_interrupt(void);
 
 // Programs with a C version.
-extern const DspProgram ax_wii_program;
+extern const DspProgram ax_program;  // GameCube and Wii.

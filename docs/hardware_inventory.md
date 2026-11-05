@@ -653,23 +653,29 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
-| `audio.axwii_newer_command_format` | AXWii, newer command format | partial | `runtime/ax.c` | Everything below. |
-| `audio.axwii_setup_add_subtract_add_subtract` | AXWii setup, add, subtract, add-subtract | done | `runtime/ax.c:220`, `:230` |  |
-| `audio.axwii_voices` | AXWii voices | done | `runtime/ax.c:212` |  |
-| `audio.axwii_adpcm_pcm16_pcm8` | AXWii ADPCM, PCM16, PCM8 | done | `runtime/ax.c:81`, `:103-108` |  |
-| `audio.axwii_looping_streams` | AXWii looping, streams | done | `runtime/ax.c:68` |  |
-| `audio.axwii_sample_rate_conversion` | AXWii sample rate conversion | partial | `runtime/ax.c:115` | Cubic stand-in for the ROM's filter tables. |
-| `audio.axwii_envelope_mixer_ramps` | AXWii envelope, mixer ramps | done | `runtime/ax.c:147`, `:168` |  |
-| `audio.axwii_low_pass_filter` | AXWii low-pass filter | done | `runtime/ax.c:157` |  |
-| `audio.axwii_biquad_high_pass` | AXWii biquad, high-pass | missing | `runtime/ax.c:158` | Filter value 2 means biquad, but any nonzero value runs our low-pass. Dolphin marks Raving Rabbids and Bleach as using the newer layout, whose block offsets we don't handle. |
-| `audio.axwii_aux_a_b_c` | AXWii aux A, B, C | done | `runtime/ax.c:244` |  |
-| `audio.axwii_aux_surround_uploads_commands_8_9` | AXWii aux surround uploads (commands 8, 9) | missing | `runtime/ax.c:313` | Skipped. |
-| `audio.axwii_compressor` | AXWii compressor | done | `runtime/ax.c:258` |  |
-| `audio.axwii_output_stereo` | AXWii output stereo | done | `runtime/ax.c:282` |  |
-| `audio.axwii_dolby_surround_output` | AXWii Dolby surround output | partial | `runtime/ax.c:315` | Treated as stereo. |
-| `audio.axwii_wii_remote_speaker_output` | AXWii Wii Remote speaker output | missing | `runtime/ax.c:319` | Skipped. |
-| `audio.axwii_older_command_format_old` | AXWii older command format (`_OLD`) | missing | `runtime/dsp.c` | Command numbers differ. Dolphin uses it for Wii Sports (PAL) and the Wii Startup Menu, chosen by checksum. An unknown command loses the frame. |
-| `audio.ax_gamecube_metroid_prime_trilogy` | AX (GameCube, Metroid Prime Trilogy) | missing | `runtime/dsp.c` | Recognised by checksum and reported. |
+| `audio.axwii_newer_command_format` | AXWii, newer command format | done | `runtime/ax.c` (`wii_run_list`) | Dolphin's AXWii.cpp ported whole. Equal to the interpreter running the real program, word for word and mail for mail, over 50 seconds of Mario Kart Wii (347112ba) from power-on, recorded with `record-sound` and played by `recomp/tools/sound_bench.py`. |
+| `audio.axwii_setup_add_subtract_add_subtract` | AXWii setup, add, subtract, add-subtract | done | `runtime/ax.c` (`init_mixing_buffers`, `wii_run_list`) | Setup and add checked against the interpreter; subtract and add-subtract against Dolphin's code. |
+| `audio.axwii_voices` | AXWii voices | done | `runtime/ax.c`, `runtime/ax_voice.h` | Checked against the interpreter. |
+| `audio.axwii_adpcm_pcm16_pcm8` | AXWii ADPCM, PCM16, PCM8 | done | `runtime/ax_voice.h` (`get_input_samples`), `runtime/dsp_accelerator.c` | Through the same accelerator the interpreter uses. ADPCM and PCM16 checked against the interpreter, PCM8 against Dolphin's code. |
+| `audio.axwii_looping_streams` | AXWii looping, streams | done | `runtime/ax_voice.h` (`sample_end`) | Checked against the interpreter. |
+| `audio.axwii_sample_rate_conversion` | AXWii sample rate conversion | done | `runtime/ax.c` (`ax_resample`) | The four-tap filters from the ROM's table (Dolphin's free `dsp_coef.bin`), as the real program uses them: checked against the interpreter. Straight lines and none against Dolphin's code and tests. |
+| `audio.axwii_envelope_mixer_ramps` | AXWii envelope, mixer ramps | done | `runtime/ax_voice.h`, `runtime/ax.c` (`ax_mix_add`) | Checked against the interpreter. A channel the voice isn't mixed into has its depop value cleared, as the real program does and Dolphin doesn't. |
+| `audio.axwii_low_pass_filter` | AXWii low-pass filter | done | `runtime/ax.c` (`ax_low_pass`) | Against Dolphin's code and a test: Mario Kart Wii never turns it on. |
+| `audio.axwii_biquad_high_pass` | AXWii biquad | done | `runtime/ax.c` (`ax_biquad`) | The newest layout's biquad, for 347112ba and 4cc52064, as Dolphin. Against Dolphin's code and a test only. |
+| `audio.axwii_high_pass_filter` | AXWii high-pass filter (System Menu 1.0, Elebits) | missing | `runtime/ax.c` (`wii_process_pb_list`) | The middle layout has one where the newest has its biquad. Dolphin doesn't run it either. Reported when a playing voice turns it on. |
+| `audio.axwii_unknown_block_layout` | AXWii versions with an unknown block layout | done | `runtime/dsp.c` | 2ea36ce6 and 5ef56da3 (demos): Dolphin reads their blocks with no layout at all, so the interpreter runs them. |
+| `audio.axwii_aux_a_b_c` | AXWii aux A, B, C | done | `runtime/ax.c` (`wii_mix_aux`) | Aux A checked against the interpreter, B and C against Dolphin's code. Volumes ramp as Dolphin ramps them. |
+| `audio.axwii_aux_surround_uploads_commands_8_9` | AXWii aux surround uploads (commands 8, 9) | done | `runtime/ax.c` (`wii_upload_aux_mix_lrsc`) | As Dolphin's UploadAUXMixLRSC. Against Dolphin's code and a test only. |
+| `audio.axwii_compressor` | AXWii compressor | done | `runtime/ax.c` (`run_compressor`) | Run every frame of the recording, matching the interpreter. |
+| `audio.axwii_output_stereo` | AXWii output stereo | done | `runtime/ax.c` (`wii_output`) | With the sync mail the real program sends. Checked against the interpreter. |
+| `audio.axwii_dolby_surround_output` | AXWii Dolby surround output | done | `runtime/ax.c` (`wii_output`) | Also uploads aux C's left, as Dolphin does. Against Dolphin's code and a test only. |
+| `audio.axwii_wii_remote_speaker_output` | AXWii Wii Remote speaker output | done | `runtime/ax.c` (`wii_output_remotes`), `runtime/ax_voice.h` | Each voice's remote mix, filtered and at a sixth of the rate, written to memory for the game to send, as the program does. Playing it on a remote is `ctl.speaker`. Mario Kart Wii's output checked against the interpreter, with no voice sent to a remote; the mixing against Dolphin's code. |
+| `audio.axwii_older_command_format_old` | AXWii older command format (`_OLD`) | done | `runtime/ax.c` (`wii_run_list`) | Wii Sports (PAL) and the Wii Startup Menu: commands numbered one higher from 4, a separate voice list command, no output volume, and per-millisecond updates. Against Dolphin's code and a test only. |
+| `audio.ax_gamecube_metroid_prime_trilogy` | AX (GameCube, Metroid Prime Trilogy) | done | `runtime/ax.c` (`gc_run_list`) | Dolphin's AX.cpp ported whole: 5 ms frames, its commands, updates, the oldest version's layout and mixer. Against Dolphin's code and a test only. |
+| `audio.ax_gamecube_dolby_aux_b` | AX (GameCube): the Dolby bit that picks aux B's input | missing | `runtime/ax.c` (`gc_mixer_control`) | Dolphin doesn't know it either. Reported. |
+| `audio.ax_gamecube_command_08` | AX (GameCube): command 8 | missing | `runtime/ax.c` (`gc_run_list`) | Unknown to Dolphin too: its arguments are skipped and it's reported. |
+| `audio.ax_command_not_in_version` | AX (GameCube): the compressor sent to the version without one | on demand | `runtime/ax.c` (`gc_run_list`) | Dolphin notes the real program jumps into a mixer function. We run the compressor and report. |
+| `audio.ax_initial_time_delay` | AX: initial time delay (placing a sound by delaying one side) | missing | `runtime/ax_voice.h` | Dolphin doesn't do it either. Reported when a voice turns it on. |
 | `audio.zelda_galaxy_twilight_princess_pikmin` | Zelda (Galaxy, Twilight Princess, Pikmin) | partial | `runtime/zelda.c` | Dolphin's HLE version, line for line: every checksum and its flags, both mail protocols, all commands, voices from every known source, filters, reverb and output. The rows below are what Dolphin doesn't know either. A checksum with no flags is reported. |
 | `audio.zelda_dolby_back_channels` | Zelda: back channels folded into the front | missing | `runtime/zelda.c` | Dolphin's "TODO: Dolby mixing". Reported when anything is left in them. |
 | `audio.zelda_frame_filter` | Zelda: Twilight Princess's extra filtering each frame | missing | `runtime/zelda.c` | Reported at start for that program. |
