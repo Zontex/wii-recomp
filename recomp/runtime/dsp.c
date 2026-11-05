@@ -7,6 +7,7 @@
 #include "cpu.h"
 #include "dsp.h"
 #include "gaps.h"
+#include "zelda.h"
 
 #define MAILBOX_TO_DSP 0xcc005000u
 #define MAILBOX_FROM_DSP 0xcc005004u
@@ -210,7 +211,6 @@ static const DspProgram card_program = {"memory card", card_start, card_mail, ca
 #define MISSING(variable, title, row)                                     \
   static void variable##_start(void) { gap_hit(row, current.crc); }       \
   static const DspProgram variable = {title, variable##_start, ignore_mail, nothing};
-MISSING(zelda_missing, "Zelda family", "audio.zelda_galaxy_twilight_princess_pikmin")
 MISSING(ax_gamecube_missing, "GameCube AX", "audio.ax_gamecube_metroid_prime_trilogy")
 MISSING(ax_wii_old_missing, "AXWii, older commands", "audio.axwii_older_command_format_old")
 MISSING(gba_missing, "Game Boy Advance link", "audio.card_gba")
@@ -223,10 +223,10 @@ static const struct { uint32_t crc; const DspProgram *program; } known[] = {
   {0xdd7e72d5u, &gba_missing},
   {0x3ad3b7acu, &ax_gamecube_missing}, {0x3daf59b9u, &ax_gamecube_missing}, {0x4e8a8b21u, &ax_gamecube_missing},
   {0x07f88145u, &ax_gamecube_missing}, {0xe2136399u, &ax_gamecube_missing}, {0x3389a79eu, &ax_gamecube_missing},
-  {0x86840740u, &zelda_missing}, {0x6ca33a6du, &zelda_missing}, {0xd643001fu, &zelda_missing}, {0x6ba3b3eau, &zelda_missing},
-  {0x24b22038u, &zelda_missing}, {0x2fcdf1ecu, &zelda_missing}, {0xdf059f68u, &zelda_missing}, {0x4be6a5cbu, &zelda_missing},
-  {0x267fd05au, &zelda_missing}, {0x42f64ac4u, &zelda_missing}, {0x56d36052u, &zelda_missing}, {0x6c3f6f94u, &zelda_missing},
-  {0xb7eb9a9cu, &zelda_missing}, {0xeaeb38ccu, &zelda_missing},
+  {0x86840740u, &zelda_program}, {0x6ca33a6du, &zelda_program}, {0xd643001fu, &zelda_program}, {0x6ba3b3eau, &zelda_program},
+  {0x24b22038u, &zelda_program}, {0x2fcdf1ecu, &zelda_program}, {0xdf059f68u, &zelda_program}, {0x4be6a5cbu, &zelda_program},
+  {0x267fd05au, &zelda_program}, {0x42f64ac4u, &zelda_program}, {0x56d36052u, &zelda_program}, {0x6c3f6f94u, &zelda_program},
+  {0xb7eb9a9cu, &zelda_program}, {0xeaeb38ccu, &zelda_program},
   {0x2ea36ce6u, &ax_wii_program}, {0x5ef56da3u, &ax_wii_program}, {0x347112bau, &ax_wii_program},
   {0xadbc06bdu, &ax_wii_program}, {0x4cc52064u, &ax_wii_program}, {0xd9c4bf34u, &ax_wii_program},
   {0xfa450138u, &ax_wii_old_missing}, {0x7699af32u, &ax_wii_old_missing},

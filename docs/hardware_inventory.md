@@ -26,10 +26,10 @@ Statuses:
 | 3. TEV and pixel features | 48 | 13 | 10 | 0 | 4 | 1 | 76 |
 | 4. Vertex and texture | 49 | 11 | 0 | 3 | 1 | 2 | 66 |
 | 5. Hardware blocks | 29 | 10 | 6 | 0 | 5 | 15 | 65 |
-| 6. Audio microcodes | 11 | 4 | 8 | 0 | 0 | 1 | 24 |
+| 6. Audio microcodes | 11 | 5 | 14 | 0 | 4 | 1 | 35 |
 | 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
 | 8. Controllers | 34 | 16 | 7 | 0 | 6 | 2 | 65 |
-| **All** | **341** | **109** | **48** | **4** | **36** | **53** | **591** |
+| **All** | **341** | **110** | **54** | **4** | **40** | **53** | **602** |
 
 ## Biggest gaps
 
@@ -670,7 +670,18 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | `audio.axwii_wii_remote_speaker_output` | AXWii Wii Remote speaker output | missing | `runtime/ax.c:319` | Skipped. |
 | `audio.axwii_older_command_format_old` | AXWii older command format (`_OLD`) | missing | `runtime/dsp.c` | Command numbers differ. Dolphin uses it for Wii Sports (PAL) and the Wii Startup Menu, chosen by checksum. An unknown command loses the frame. |
 | `audio.ax_gamecube_metroid_prime_trilogy` | AX (GameCube, Metroid Prime Trilogy) | missing | `runtime/dsp.c` | Recognised by checksum and reported. |
-| `audio.zelda_galaxy_twilight_princess_pikmin` | Zelda (Galaxy, Twilight Princess, Pikmin) | missing | `runtime/dsp.c` | Recognised by checksum and reported. The game carries on without the program's answers. |
+| `audio.zelda_galaxy_twilight_princess_pikmin` | Zelda (Galaxy, Twilight Princess, Pikmin) | partial | `runtime/zelda.c` | Dolphin's HLE version, line for line: every checksum and its flags, both mail protocols, all commands, voices from every known source, filters, reverb and output. The rows below are what Dolphin doesn't know either. A checksum with no flags is reported. |
+| `audio.zelda_dolby_back_channels` | Zelda: back channels folded into the front | missing | `runtime/zelda.c` | Dolphin's "TODO: Dolby mixing". Reported when anything is left in them. |
+| `audio.zelda_frame_filter` | Zelda: Twilight Princess's extra filtering each frame | missing | `runtime/zelda.c` | Reported at start for that program. |
+| `audio.zelda_command_0d` | Zelda: command 0D, and the two words render carries with it | missing | `runtime/zelda.c` | Nobody knows what it does. Every Wii Zelda-family game sends the words. |
+| `audio.zelda_command_0c` | Zelda: command 0C on the programs that use it oddly | missing | `runtime/zelda.c` |  |
+| `audio.zelda_variable_fir` | Zelda: a voice's variable filter | missing | `runtime/zelda.c` |  |
+| `audio.zelda_channel_skip_word` | Zelda: the word that may skip a channel | missing | `runtime/zelda.c` | Reported when it isn't zero. |
+| `audio.zelda_sample_source` | Zelda: sample sources 2, 6 and any other unknown one | missing | `runtime/zelda.c` | The voice is silent. |
+| `audio.zelda_unknown_buffer` | Zelda: a mix sent to a buffer number we don't know | on demand | `runtime/zelda.c` | Super Mario Galaxy 2 sends four. |
+| `audio.zelda_unknown_command` | Zelda: a command Dolphin doesn't know, or one that halts | on demand | `runtime/zelda.c` |  |
+| `audio.zelda_unexpected_mail` | Zelda: mail the program wouldn't expect, by kind | on demand | `runtime/zelda.c` |  |
+| `audio.zelda_memory_range` | Zelda: main memory out of range | on demand | `runtime/zelda.c` | Nothing is read or written. |
 | `audio.asnd_aesnd_homebrew` | ASnd, AESnd (homebrew) | not needed |  | Commercial games don't use them. |
 | `audio.card_gba` | CARD, GBA | partial | `runtime/dsp.c` (`card_program`) | GameCube link helpers. CARD unlocks a card and hands back to the ROM, as Dolphin's CARD.cpp. GBA is reported. |
 | `audio.init_rom` | INIT, ROM | done | `runtime/dsp.c` (`init_program`, `rom_program`) | As Dolphin's INIT.cpp and ROM.cpp. |

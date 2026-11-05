@@ -23,6 +23,9 @@ static void fake_mail(uint32_t mail) {
 }
 static void fake_update(void) {}
 const DspProgram ax_wii_program = {"fake AX", fake_start, fake_mail, fake_update};
+static int zelda_starts;
+static void fake_zelda_start(void) { zelda_starts++; }
+const DspProgram zelda_program = {"fake Zelda", fake_zelda_start, fake_mail, fake_update};
 
 enum { MAILBOX = 0xcc005000u, FROM = 0xcc005004u };
 #define AX_CRC 0x2ea36ce6u
@@ -186,13 +189,14 @@ static void test_new_program(void) {
   CHECK_EQ(gaps, 0);
 }
 
-// A program with no C version names its inventory row.
+// A program with no C version names its inventory row; a known one starts.
 static void test_unknown(void) {
   dsp_set_program(0x12345678u);
   CHECK_EQ(gaps, 1);
   CHECK(!strcmp(last_gap, "audio.unknown_program"));
-  dsp_set_program(0xd643001fu);
-  CHECK(!strcmp(last_gap, "audio.zelda_galaxy_twilight_princess_pikmin"));
+  dsp_set_program(0xd643001fu);  // Super Mario Galaxy's.
+  CHECK_EQ(zelda_starts, 1);
+  CHECK_EQ(gaps, 1);
 }
 
 int main(void) {
