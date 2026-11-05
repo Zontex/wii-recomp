@@ -264,3 +264,15 @@ class SoundRecordings(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class BenchSummary(unittest.TestCase):
+    """The bench reads the player's last line; a failure's reason is a whole sentence."""
+
+    def test_a_failure_keeps_its_reason(self):
+        sys.path.insert(0, str(TOOLS))
+        import sound_bench
+        self.assertEqual(sound_bench.summary("summary failed=the recording wasn't finished\n"),
+                         {"failed": "the recording wasn't finished"})
+        self.assertEqual(sound_bench.summary("x\nsummary frames=3 differ=0\n"), {"frames": "3", "differ": "0"})
+        self.assertEqual(sound_bench.summary("nothing\n"), {})

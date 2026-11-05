@@ -60,7 +60,11 @@ def player(folder):
 def summary(output):
     """The player's last line: key=value pairs."""
     lines = [line for line in output.splitlines() if line.startswith("summary ")]
-    return dict(pair.split("=", 1) for pair in lines[-1].split()[1:]) if lines else {}
+    if not lines:
+        return {}
+    if lines[-1].startswith("summary failed="):  # Its reason is a sentence, spaces and all.
+        return {"failed": lines[-1][len("summary failed="):]}
+    return dict(pair.split("=", 1) for pair in lines[-1].split()[1:])
 
 
 def first_difference(result):
