@@ -47,6 +47,8 @@ uint32_t dsp_lle_iram_crc(void);  // Dolphin's HashEctor over the program's byte
 // takes them. DMA reports each transfer at once; the accelerator each byte as it goes.
 typedef void (*DspMemoryObserver)(uint32_t address, const uint8_t *bytes, uint32_t count);
 void dsp_lle_observe_memory(DspMemoryObserver on_read, DspMemoryObserver on_write);
+// Also optional: each mail the program puts in its own mailbox, and each interrupt it raises.
+void dsp_lle_observe_mail(void (*on_mail)(uint32_t mail), void (*on_interrupt)(void));
 
 // hardware.c: raises the CPU's DSP interrupt. The program asks for it by writing DIRQ.
 void dsp_interrupt(void);
@@ -147,6 +149,8 @@ typedef struct {
   int write_back_log_idx[5];
 } DspLle;
 extern DspLle dsp_lle;
+// Puts back a copy of dsp_lle taken in a run of this same build, as sound recordings do.
+void dsp_lle_restore(const DspLle *state);
 
 // --- Shared by dsp_lle.c and dsp_lle_ops.c. ---
 void dsp_lle_step(void);  // One instruction, with exceptions and loops, as Interpreter::Step.

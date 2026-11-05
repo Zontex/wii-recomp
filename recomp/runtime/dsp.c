@@ -12,6 +12,7 @@
 #include "cpu.h"
 #include "dsp.h"
 #include "dsp_lle.h"
+#include "dsp_record.h"
 #include "gaps.h"
 #include "zelda.h"
 
@@ -278,6 +279,10 @@ static const char *missing_row(const DspProgram *program) {
   return 0;
 }
 
+const char *dsp_c_version(void) {
+  return current.program && !missing_row(current.program) ? current.program->name : 0;
+}
+
 static int interpreter_ready(void) {
   static int tried, ready;
   if (!tried) {
@@ -311,6 +316,7 @@ void dsp_start(void) {
       fprintf(stderr, "audio: the interpreter runs every program, from the boot ROM\n");
       interpreting = 1;
       interpreted_until = time_base();
+      dsp_record_start();
       return;
     }
   } else if (engine) {
@@ -319,6 +325,7 @@ void dsp_start(void) {
   dsp_set_program(PROGRAM_ROM);
   control = DSP_CONTROL_HALT | DSP_CONTROL_INIT;
   halted = 1;
+  dsp_record_start();  // Waits for the interpreter, for a program that has no C version.
 }
 
 // The interpreter keeps time with the game: its share of the cycles since it last ran.
@@ -331,8 +338,12 @@ static void interpret(uint64_t now, uint32_t most) {
   uint32_t cycles = cycles_owed < most ? cycles_owed : most;
   if (!cycles) return;
   cycles_owed -= cycles;
-  if (!dsp_lle_halted()) dsp_lle_run((int)cycles);
+  if (dsp_lle_halted()) return;
+  dsp_lle_run((int)cycles);
+  if (dsp_recording) dsp_record_run(cycles);
 }
+
+int dsp_interpreting(void) { return interpreting; }
 
 uint32_t dsp_control_read(void) {
   if (interpreting) return dsp_lle_control_read();
@@ -343,7 +354,11 @@ uint32_t dsp_control_read(void) {
 // Reset starts the boot ROM again. Clearing the init bit runs the start-up program, and
 // the init code bit stays set a moment after.
 uint32_t dsp_control_write(uint32_t value) {
-  if (interpreting) return dsp_lle_control_write((uint16_t)value);
+  if (interpreting) {
+    uint32_t now = dsp_lle_control_write((uint16_t)value);
+    if (dsp_recording) dsp_record_control((uint16_t)value);  // After what it caused, such as a DMA.
+    return now;
+  }
   uint32_t next = value & DSP_CONTROL_OWN;
   halted = (next & DSP_CONTROL_HALT) != 0;
   if (next & DSP_CONTROL_RESET) {
@@ -364,6 +379,7 @@ int dsp_read(uint32_t address, int bytes, uint32_t *value) {
   if (interpreting) {
     int cpu = address < MAILBOX_FROM_DSP, high = (address & 2) == 0;
     if (high) interpret(time_base(), MAIL_SLICE);
+    if (dsp_recording && (bytes == 4 || !high)) dsp_record_read_low(cpu, dsp_lle_mailbox_peek(cpu));
     if (bytes == 4) *value = (uint32_t)dsp_lle_mailbox_read_high(cpu) << 16 | dsp_lle_mailbox_read_low(cpu);
     else *value = high ? dsp_lle_mailbox_read_high(cpu) : dsp_lle_mailbox_read_low(cpu);
     return 1;
@@ -388,6 +404,10 @@ int dsp_write(uint32_t address, uint32_t value, int bytes) {
     return 1;
   }
   if (interpreting) {
+    if (dsp_recording) {
+      if (bytes == 4 || address == MAILBOX_TO_DSP) dsp_record_cpu_write(1, (uint16_t)(bytes == 4 ? value >> 16 : value));
+      if (bytes == 4 || address != MAILBOX_TO_DSP) dsp_record_cpu_write(0, (uint16_t)value);
+    }
     if (bytes == 4) {
       dsp_lle_mailbox_write_high(1, (uint16_t)(value >> 16));
       dsp_lle_mailbox_write_low(1, (uint16_t)value);
@@ -412,6 +432,7 @@ int dsp_write(uint32_t address, uint32_t value, int bytes) {
 }
 
 void dsp_update(uint64_t now) {
+  dsp_record_update(now);
   for (uint32_t i = 0; i < TIMERS; i++) {
     if (timers[i] && now >= timers[i]) {
       timers[i] = 0;
