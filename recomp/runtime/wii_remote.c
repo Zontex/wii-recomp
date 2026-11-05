@@ -17,6 +17,7 @@
 
 enum {
   OUTPUT_RUMBLE = 0x10, OUTPUT_LEDS = 0x11, OUTPUT_DATA_MODE = 0x12, OUTPUT_CAMERA_CLOCK = 0x13, OUTPUT_SPEAKER = 0x14, OUTPUT_STATUS = 0x15, OUTPUT_WRITE = 0x16, OUTPUT_READ = 0x17,
+  OUTPUT_SPEAKER_SAMPLES = 0x18, OUTPUT_SPEAKER_MUTE = 0x19, OUTPUT_CAMERA = 0x1a,
   REPORT_STATUS = 0x20, REPORT_MEMORY = 0x21, REPORT_ACK = 0x22, REPORT_BYTES = 22, MEMORY_PIECE = 16, MEMORY_HEADER = 6,
   ADDRESS_SPACE_SHIFT = 24, ATTACHMENT_SPACE = 0x04a4, MOTIONPLUS_SPACE = 0x04a6, CAMERA_SPACE = 0x04b0, WRITE_NO_DEVICE = 7, READ_NO_DEVICE = 7, ACK_WANTED = 2, CONTINUOUS = 4,
   STATUS_BATTERY_LOW = 1, STATUS_ATTACHMENT = 2, STATUS_SPEAKER = 4, STATUS_CAMERA = 8, SWITCH_ON = 4, RUMBLE_ON = 1,
@@ -279,14 +280,17 @@ void wii_remote_simulated_output(int device, const uint8_t *data, uint32_t bytes
       tell_outputs(device);
     }
     if (data[1] & ACK_WANTED) acknowledge(device, report);
-  } else if (report == OUTPUT_CAMERA_CLOCK || report == OUTPUT_SPEAKER) {
+  } else if (report == OUTPUT_CAMERA_CLOCK || report == OUTPUT_SPEAKER || report == OUTPUT_SPEAKER_MUTE || report == OUTPUT_CAMERA) {
     if (report == OUTPUT_CAMERA_CLOCK) remotes[device].camera_on = (data[1] & SWITCH_ON) != 0;
-    else remotes[device].speaker_on = (data[1] & SWITCH_ON) != 0;
+    else if (report == OUTPUT_SPEAKER) remotes[device].speaker_on = (data[1] & SWITCH_ON) != 0;
     if (report == OUTPUT_SPEAKER && remotes[device].speaker_on) gap_hit("ctl.0x14_speaker_enable", data[1]);  // Its sound isn't played.
     if (data[1] & ACK_WANTED) acknowledge(device, report);
+  } else if (report == OUTPUT_SPEAKER_SAMPLES) {
+    // A real remote doesn't answer speaker data, as Dolphin's EmuSubroutines.cpp notes, and
+    // the game's library takes any answer as the one to its last command.
+    gap_hit("ctl.0x18_speaker_data", 0);
   } else {
-    if (report == 0x18) gap_hit("ctl.0x18_speaker_data", 0);
-    acknowledge(device, report);
+    gap_hit("ctl.unknown_output_report", report);  // Dolphin stops at these.
   }
 }
 
