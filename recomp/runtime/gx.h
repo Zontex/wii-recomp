@@ -93,9 +93,13 @@ typedef struct {
   uint32_t hashed_address, hashed_bytes;
 } TextureMemo;
 
-// Counts writes to the vertex registers, so what is worked out from them can be kept
-// until the next. The idea of a count for this is WiiCompiled's (CREDITS.md).
-extern unsigned gx_cp_written;
+// Counts of register writes, so what is worked out from them can be kept until the next.
+// The idea of a count for this is WiiCompiled's (CREDITS.md). gx_settings_written counts
+// every BP, CP and XF setting (0x1000 on) written; the XF parts count their own memory.
+extern unsigned gx_cp_written, gx_settings_written;
+enum { XF_PART_MATRICES, XF_PART_NORMALS, XF_PART_POST, XF_PART_LIGHTS, XF_PARTS };
+extern unsigned gx_xf_written[XF_PARTS];
+void gx_xf_note(uint32_t address, uint32_t count);
 
 // Decodes the texture a map points at, or returns 0 if it has none, or if it is what the
 // memo says it was.
@@ -220,11 +224,11 @@ void gx_constants_send(int binding, const void *data, size_t bytes);
 // images in the part of it that never reaches the screen.
 #define EFB_WIDTH 640
 #define EFB_HEIGHT 528
-// The picture's size against the Wii's. It can be a fraction such as 5/2, so always
+// The picture's size against the Wii's: 2 unless WII_RECOMP_SCALE asks for another, such
+// as 5/2 or 3/2, read as the program starts (gx_draw.c). It can be a fraction, so always
 // multiply by it, as in width * EFB_SCALE, which leaves the division for last.
-#ifndef EFB_SCALE
-#define EFB_SCALE 2  // Sharper than the Wii. build_file.py sets it for each platform.
-#endif
+extern int gx_scale_numerator, gx_scale_denominator;
+#define EFB_SCALE gx_scale_numerator / gx_scale_denominator
 #define MAX_VERTICES 65536
 struct GxTexture;
 void gx_copy_rectangle(int *x, int *y, int *width, int *height);

@@ -31,6 +31,20 @@ enum {
 
 static unsigned frames;
 
+int gx_scale_numerator = 2, gx_scale_denominator = 1;
+
+// Read before anything is drawn, as every picture and copy is made at this size. From 1,
+// the Wii's own, to 4; 2 keeps a heavy scene within reach of a small graphics chip.
+__attribute__((constructor)) static void choose_scale(void) {
+  const char *asked = getenv("WII_RECOMP_SCALE");
+  int numerator = 0, denominator = 1;
+  if (!asked) return;
+  if (sscanf(asked, "%d/%d", &numerator, &denominator) < 1 || denominator < 1 || numerator < denominator || numerator > 4 * denominator) {
+    fprintf(stderr, "WII_RECOMP_SCALE=%s isn't a scale from 1 to 4, such as 2 or 5/2, so it stays at %d\n", asked, gx_scale_numerator);
+    return;
+  }
+  gx_scale_numerator = numerator, gx_scale_denominator = denominator;
+}
 unsigned gx_frame_number(void) { return frames; }
 
 typedef struct {
@@ -322,23 +336,45 @@ int gx_output_is_opaque(void) {
 // Draws the vertices just decoded into the reserved room.
 void gx_draw(int primitive, int count) {
   if (!gx_draw_wanted(primitive, count)) return;  // Too many were left out.
+  // What a draw works out from the registers is the same as the last draw's until one is
+  // written, and in a model's display lists most draws follow one another with only
+  // matrices and vertices between them. So the color stages, the transform's shape, the
+  // shader, blending, viewport and scissor are kept, and the backend still holds what they
+  // set. Fog that a draw's depths prove adds nothing is still decided for each draw.
+  static struct { int valid, format, expanding; unsigned written, maps; TevKey tev; VertexKey vertex; uint8_t fog_none; } last;
+  static int reuse_off = -1;
+  if (reuse_off < 0) reuse_off = getenv("WII_RECOMP_NO_DRAW_REUSE") != 0;
+  int same = last.valid && !reuse_off && last.written == gx_settings_written && last.format == gx_vertex_format && last.expanding == gx_expanding;
   TevKey tev;
   VertexKey vertex;
-  unsigned maps = gx_tev_apply(&tev);
+  unsigned maps;
+  if (same) {
+    tev = last.tev, vertex = last.vertex, maps = last.maps;
+  } else {
+    maps = gx_tev_apply(&tev);
+    gx_transform_read(&tev, &vertex);  // Which reads nothing fog decides.
+  }
   static int keep_fog = -1;
   if (keep_fog < 0) keep_fog = getenv("WII_RECOMP_KEEP_FOG") != 0;
+  tev.fog_none = 0;
   if (tev.fog_type && !tev.depth_mode && !tev.fog_range && !keep_fog) tev.fog_none = (uint8_t)fog_adds_nothing(count);
-  gx_transform_read(&tev, &vertex);
   gx_transform_apply(&vertex);
-  gx_shader_use(&tev, &vertex);
+  if (!same || tev.fog_none != last.fog_none) gx_shader_use(&tev, &vertex);
   gx_last_tev = tev;
   gx_used_maps = maps;
   for (int map = 0; map < MAX_TEXTURE_MAPS; map++) {
     if (maps & (1u << map)) bind_texture(map);
   }
-  apply_blending();
-  apply_viewport();
-  apply_scissor();
+  if (!same) {
+    apply_blending();
+    apply_viewport();
+    apply_scissor();
+  }
+  if (!same) {
+    last.tev = tev, last.vertex = vertex, last.maps = maps;
+    last.written = gx_settings_written, last.format = gx_vertex_format, last.expanding = gx_expanding, last.valid = 1;
+  }
+  last.fog_none = tev.fog_none;
   if (gx_inspect_draw(&tev, maps, gx_vertex_format, primitive, count, gx_reserved)) {
     gx_backend->vertices_send(gx_reserved, count);
     gx_backend->draw(primitive, count);

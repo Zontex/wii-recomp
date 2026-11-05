@@ -1,5 +1,6 @@
 // The time base counts from 2000 in local time, and offsetting it keeps intervals.
 #include "../../recomp/runtime/interrupts.c"
+#include "../../recomp/runtime/timeline.c"
 #include <unistd.h>
 #include "../harness.h"
 void debug_poll(uint64_t s) {}

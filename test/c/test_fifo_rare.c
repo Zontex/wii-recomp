@@ -1,6 +1,7 @@
 // Rare commands and registers of the command stream, through the real gx_fifo.c: the
 // metrics command, a draw larger than the old 4 MB stream, and the FIFO's read-write distance.
 #include "../../recomp/runtime/gx_fifo.c"
+#include "../../recomp/runtime/timeline.c"
 #include "../harness.h"
 void stage_add(int s, uint64_t t) {}
 const Title *title = &(Title){0};

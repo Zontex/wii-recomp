@@ -1,5 +1,6 @@
 // GXAbortFrame's FIFO reset, through the real gx_fifo.c.
 #include "../../recomp/runtime/gx_fifo.c"
+#include "../../recomp/runtime/timeline.c"
 #include "../harness.h"
 void stage_add(int s, uint64_t t) {}
 const Title *title = &(Title){0};

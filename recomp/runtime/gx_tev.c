@@ -620,11 +620,11 @@ static void add_fog(ShaderText *text, const TevKey *key) {
   if (key->fog_range) {
     // Farther toward the sides, by a factor from a table running from the edge to the center.
     gx_text_add(text,
-      "  float fog_offset = (gl_FragCoord.x / %d.0 - fog_range_center.x) / fog_range_center.y;\n"
+      "  float fog_offset = (gl_FragCoord.x / %.4f - fog_range_center.x) / fog_range_center.y;\n"
       "  float fog_index = clamp(9.0 - abs(fog_offset) * 9.0, 0.0, 9.0);\n"
       "  int fog_lower = int(fog_index), fog_upper = min(fog_lower + 1, 9);\n"
       "  float fog_k = mix(fog_range_k[fog_lower >> 2][fog_lower & 3], fog_range_k[fog_upper >> 2][fog_upper & 3], fract(fog_index));\n"
-      "  fog_distance *= sqrt(fog_offset * fog_offset + fog_k * fog_k) / fog_k;\n", EFB_SCALE);
+      "  fog_distance *= sqrt(fog_offset * fog_offset + fog_k * fog_k) / fog_k;\n", (double)gx_scale_numerator / gx_scale_denominator);
   }
   gx_text_add(text, "  float fog = clamp(fog_distance - fog_settings.y, 0.0, 1.0);\n");
   if (key->fog_type == FOG_EXP) gx_text_add(text, "  fog = 1.0 - exp2(-8.0 * fog);\n");

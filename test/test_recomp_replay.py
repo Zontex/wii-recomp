@@ -235,10 +235,10 @@ class Replay(unittest.TestCase):
         self.folder = Path(self.temporary.name)
         self.addCleanup(self.temporary.cleanup)
 
-    def play(self, state, frames):
+    def play(self, state, frames, **settings):
         recording, out = self.folder / "scene.dff", self.folder / "frames"
         write_dff(recording, state, frames)
-        result = replay(recording, out)
+        result = replay(recording, out, **settings)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return out, result
 
@@ -290,7 +290,7 @@ class Replay(unittest.TestCase):
         self.assert_background(second, 550, 100)
 
     def test_a_called_list_sees_its_arrays_change(self):
-        # A display list keeps the vertices it decoded between calls, which must not
+        # Asked for, a display list keeps the vertices it decoded between calls, which must not
         # outlive a write to the arrays it reads, nor to the list itself.
         list_address, position_array, color_array = 0x00200000, 0x00100000, 0x10001000
         setup = (cp_command(0x50, (2 << 9) | (2 << 13)) + cp_command(0xa0, position_array) + cp_command(0xa2, color_array)
@@ -305,7 +305,7 @@ class Replay(unittest.TestCase):
             (setup + call + show_frame(), [(0, position_array, right), (0, color_array, bytes(YELLOW) + b"\xff")]),
             (setup + call + show_frame(), [(0, list_address, bytes(len(listed)))]),
         ]
-        out, result = self.play(base_state(), frames)
+        out, result = self.play(base_state(), frames, WII_RECOMP_LIST_CACHE="1")
         self.assertIn("saved 4 of 4 frames", result.stdout)
         self.assertIn("frame 2: 0 writes caught watching memory, list draws 1 reused", result.stderr)  # The second call decoded nothing.
         pictures = [Image.open(out / f"frame-{i:04d}.png") for i in range(4)]
