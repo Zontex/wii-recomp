@@ -57,6 +57,9 @@ class RareHardware(unittest.TestCase):
     def test_audio_processor_mailboxes_boot_and_programs(self):
         self.build_and_run([HERE / "c/test_dsp.c"])
 
+    def test_audio_dma_plays_memory_and_interrupts(self):
+        self.build_and_run([HERE / "c/test_audio_dma.c"])
+
     def test_hollywood_registers_reset_event_and_eject(self):
         self.build_and_run([HERE / "c/test_hollywood.c"])
 

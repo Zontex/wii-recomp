@@ -41,11 +41,6 @@
 #define AR_DMA_TO_MAIN 0x80000000u
 #define AR_DMA_ADDRESS_BITS 0x03ffffe0u  // 32-byte aligned, mirrored every 64 MB.
 #define MEM2_START 0x90000000u
-#define AUDIO_DMA_CONTROL 0xcc005036u
-#define AUDIO_DMA_ENABLE 0x8000u
-#define AUDIO_DMA_BLOCKS_LEFT 0xcc00503au
-#define AUDIO_DMA_BLOCKS 0x7fffu
-#define AUDIO_BLOCKS_PER_SECOND 4000u  // 32 bytes each: 8 stereo samples at 32 kHz.
 #define TIME_BASE_TICKS_PER_SECOND 60750000ull
 #define PI_HARDWARE_REVISION 0xcc00302cu
 #define HARDWARE_REVISION 0x246500b1u  // Flipper revision C, as Dolphin answers.
@@ -59,6 +54,7 @@
 #define AI_INTERRUPT_ENABLE 0x04u
 #define AI_INTERRUPT_FLAG 0x08u
 #define AI_COUNTER_RESET 0x20u
+#define AI_DMA_32KHZ 0x40u
 // The reset button, as Dolphin's ProcessorInterface.cpp models it: pressing it raises the
 // reset switch interrupt, and the cause register holds its state (set while it's up).
 // A press lasts half a second.
@@ -135,6 +131,7 @@ void hw_poke(uint32_t address, uint32_t value, int bytes) { put(address, value, 
 void hardware_start(void) {
   registers = calloc(REGISTER_SPACE, 1);
   seen = calloc(REGISTER_SPACE, 1);
+  put(AI_CONTROL, AI_DMA_32KHZ, 4);  // Audio DMA at 32 kHz, as Dolphin starts it.
 }
 
 void raise_irq(int bit) { cause |= 1u << bit; }
@@ -169,8 +166,6 @@ static void update_dsp_interrupt(void) {
   else clear_irq(IRQ_DSP);
 }
 
-int audio_dma_running(void) { return (get(AUDIO_DMA_CONTROL, 2) & AUDIO_DMA_ENABLE) != 0; }
-int audio_dma_interrupt_waiting(void) { return (get(DSP_CONTROL, 2) & DSP_AUDIO_FLAG) != 0; }
 
 void audio_dma_interrupt(void) {
   put(DSP_CONTROL, get(DSP_CONTROL, 2) | DSP_AUDIO_FLAG, 2);
@@ -188,7 +183,7 @@ static void dsp_control_set(uint32_t value) {
   uint32_t own = dsp_control_write(value) & DSP_CONTROL_OWN;
   uint32_t flags = get(DSP_CONTROL, 2) & DSP_FLAGS & ~value;
   if (value & DSP_CONTROL_UNUSED) gap_hit("hw.control_register", value);
-  if (value & DSP_CONTROL_RESET) put(AUDIO_DMA_CONTROL, 0, 2);
+  if (value & DSP_CONTROL_RESET) audio_dma_reset();
   put(DSP_CONTROL, own | (value & DSP_ENABLES) | flags, 2);
   update_dsp_interrupt();
 }
@@ -211,18 +206,6 @@ void locked_cache_transfer(void) {
     else wr8(memory + i, locked_cache[at]);
   }
   cpu.spr[SPR_CACHE_DMA_LOW] = low & ~(uint32_t)CACHE_DMA_TRIGGER;
-}
-
-// One audio DMA sends one frame, a block every quarter millisecond, and the next starts
-// when audio.c raises the interrupt. The count is zero-based, as Dolphin reads it
-// (HW/DSP.cpp), so it reaches zero before the next frame.
-static uint32_t audio_dma_blocks_left(void) {
-  uint32_t blocks = get(AUDIO_DMA_CONTROL, 2) & AUDIO_DMA_BLOCKS;
-  uint64_t due = audio_next_due(), now = time_base();
-  if (!audio_dma_running() || !due || due <= now) return 0;
-  uint64_t left = ((due - now) * AUDIO_BLOCKS_PER_SECOND + TIME_BASE_TICKS_PER_SECOND - 1) / TIME_BASE_TICKS_PER_SECOND;
-  if (left > blocks) left = blocks;
-  return left ? (uint32_t)left - 1 : 0;
 }
 
 // Copies between main memory and MEM2 at once, then flags the accelerator interrupt.
@@ -310,10 +293,9 @@ uint32_t hw_read(uint32_t address, int bytes) {
   if (address == PI_CAUSE) value = interrupt_cause();
   else if (is_register(address, AI_SAMPLE_COUNT)) value = audio_samples();
   else if (is_register(address, VI_DTV_STATUS)) value = dtv_status();
-  else if (address == AUDIO_DMA_BLOCKS_LEFT) value = audio_dma_blocks_left();
   else if (address == PI_HARDWARE_REVISION) value = HARDWARE_REVISION;
   else if (address == DSP_CONTROL) value = (value & ~DSP_CONTROL_OWN) | (dsp_control_read() & DSP_CONTROL_OWN);
-  else if (dsp_read(address, bytes, &value)) {}
+  else if (dsp_read(address, bytes, &value) || audio_dma_read(address, bytes, &value)) {}
   else if (!si_read(address, &value) && !exi_read(address, &value) && !ipc_read(address, &value)) graphics_read(address, &value);
   note_unmodelled(address, READS, first_touch("read ", address, value));
   return value;
@@ -339,7 +321,7 @@ void hw_write(uint32_t address, uint32_t value, int bytes) {
     dsp_control_set(value);
     return;
   }
-  if (dsp_write(address, value, bytes)) return;
+  if (dsp_write(address, value, bytes) || audio_dma_write(address, value, bytes)) return;
   put(address, value, bytes);
   if (address == AR_DMA_COUNT_LOW || (address == AR_DMA_COUNT && bytes == 4)) accelerator_dma();
   if (address >= VI_DISPLAY_INTERRUPT && address < VI_DISPLAY_INTERRUPT + VI_INTERRUPT_COUNT * 4) {

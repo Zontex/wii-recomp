@@ -281,23 +281,20 @@ static void run_compressor(uint32_t threshold, uint32_t frames, uint32_t table) 
 }
 
 // The surround channel goes back to the game's memory, for next frame's mix to fold
-// into left and right. The guest's output buffer has right first.
-static void write_output(uint32_t volume, uint32_t surround, uint32_t stereo, int16_t *output) {
+// into left and right. The stereo buffer, right first, is what the audio DMA plays.
+static void write_output(uint32_t volume, uint32_t surround, uint32_t stereo) {
   for (int i = 0; i < AUDIO_FRAME_SAMPLES; i++) {
     wr32(surround + i * 4, (uint32_t)buses[BUS_MAIN][SURROUND][i]);
     int64_t gain = ramped(last_output_volume, volume, i);
     int left = clamp16((int)(buses[BUS_MAIN][LEFT][i] * gain >> VOLUME_SHIFT));
     int right = clamp16((int)(buses[BUS_MAIN][RIGHT][i] * gain >> VOLUME_SHIFT));
-    output[i * AUDIO_CHANNELS] = (int16_t)left;
-    output[i * AUDIO_CHANNELS + 1] = (int16_t)right;
     wr16(stereo + i * 4, (uint16_t)right);
     wr16(stereo + i * 4 + 2, (uint16_t)left);
   }
   last_output_volume = volume;
 }
 
-void ax_run_list(uint32_t list, int16_t *output) {
-  memset(output, 0, AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS * sizeof(int16_t));
+void ax_run_list(uint32_t list) {
   for (uint32_t at = list;;) {
     uint32_t command = rd16(at);
     at += 2;
@@ -319,7 +316,7 @@ void ax_run_list(uint32_t list, int16_t *output) {
         break;
       case COMMAND_COMPRESSOR: run_compressor(rd16(at), rd16(at + 2), pair(at, 4)); at += 8; break;
       case COMMAND_OUTPUT: case COMMAND_OUTPUT_SURROUND:
-        write_output(rd16(at), pair(at, 2), pair(at, 6), output);
+        write_output(rd16(at), pair(at, 2), pair(at, 6));
         at += 10;
         break;
       case COMMAND_REMOTES: gap_hit("audio.axwii_wii_remote_speaker_output", command); at += 16; break;
@@ -347,7 +344,6 @@ static void ax_start(void) {
 }
 
 static void ax_mail(uint32_t mail) {
-  static int16_t frame[AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS];
   switch (mail_state) {
   case WAIT_LIST_SIZE:
     if ((mail & TASK_MAIL_MASK) == MAIL_LIST) mail_state = WAIT_LIST_ADDRESS;
@@ -355,9 +351,8 @@ static void ax_mail(uint32_t mail) {
     break;
   case WAIT_LIST_ADDRESS: {
     uint64_t started = time_base();
-    ax_run_list(mail, frame);
+    ax_run_list(mail);
     stage_add(STAGE_AUDIO, time_base() - started);
-    audio_frame_ready(frame);
     dsp_push_mail(DSP_MAIL_YIELD, 1, LIST_CYCLES);
     mail_state = WAIT_NEXT_TASK;
     break;

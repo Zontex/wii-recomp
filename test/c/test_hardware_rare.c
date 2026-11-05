@@ -13,6 +13,10 @@ int dsp_write(uint32_t a, uint32_t v, int n) { return 0; }
 uint32_t dsp_control_read(void) { return 0; }
 static uint32_t dsp_control_written;
 uint32_t dsp_control_write(uint32_t v) { dsp_control_written = v; return 0; }
+static int dma_resets;
+int audio_dma_read(uint32_t a, int n, uint32_t *v) { return 0; }
+int audio_dma_write(uint32_t a, uint32_t v, int n) { return 0; }
+void audio_dma_reset(void) { dma_resets++; }
 int si_read(uint32_t a, uint32_t *v) { return 0; }
 int si_write(uint32_t a, uint32_t v) { return 0; }
 int exi_read(uint32_t a, uint32_t *v) { return 0; }
@@ -112,10 +116,9 @@ static void test_accelerator_dma(void) {
 // stops audio DMA, as Dolphin's DSP.cpp does.
 static void test_dsp_control(void) {
   hw_write(MASK, 1u << IRQ_DSP, 4);
-  hw_write(0xcc005036u, 0x8010u, 2);  // Audio DMA running.
   hw_write(DSP, 0x0100 | 0x0004, 2);  // Mail interrupt enabled, processor halted.
   CHECK_EQ(dsp_control_written, 0x0104);
-  CHECK_EQ(hw_read(0xcc005036u, 2), 0x8010u);
+  CHECK_EQ(dma_resets, 0);
   dsp_interrupt();
   CHECK_EQ(hw_read(DSP, 2) & 0x80, 0x80);
   CHECK(irq_pending());
@@ -123,7 +126,7 @@ static void test_dsp_control(void) {
   CHECK(!irq_pending());
   CHECK_EQ(hw_read(DSP, 2) & 0x80, 0);
   hw_write(DSP, 0x0001, 2);  // Reset.
-  CHECK_EQ(hw_read(0xcc005036u, 2), 0);
+  CHECK_EQ(dma_resets, 1);
   dsp_interrupt();  // Disabled now.
   CHECK(!irq_pending());
   hw_write(DSP, 0x0080, 2);

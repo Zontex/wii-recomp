@@ -8,13 +8,15 @@
 
 void audio_start(void);
 void audio_update(uint64_t now);
-uint64_t audio_next_due(void);  // When the next frame is due, or 0 if none is.
+uint64_t audio_next_due(void);  // When the next audio interrupt is due, or 0 if none is.
 
-// A program's finished frame, interleaved left and right.
-void audio_frame_ready(const int16_t *frame);
+// The audio DMA's registers, which hardware.c passes on, and a reset of the processor.
+int audio_dma_read(uint32_t address, int bytes, uint32_t *value);
+int audio_dma_write(uint32_t address, uint32_t value, int bytes);
+void audio_dma_reset(void);
 
-// ax.c: runs one frame's command list, leaving interleaved left and right samples.
-void ax_run_list(uint32_t list, int16_t *output);
+// ax.c: runs one frame's command list. Its output goes to memory, for the DMA to play.
+void ax_run_list(uint32_t list);
 
 // audio_output_*.c: one per platform. Called once, from audio_start. The output
 // thread asks for samples through audio_pull, which never waits.
