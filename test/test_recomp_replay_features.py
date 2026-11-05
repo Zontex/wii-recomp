@@ -957,6 +957,35 @@ class KeptDrawState(Scene):
         self.assert_pixel(picture, 500, 200, self.GREEN)
 
 
+class CoveredPasses(Scene):
+    """A pass whose first draw covers all of its area starts without loading what was there."""
+    RED, GREEN = (200, 30, 60), (20, 180, 40)
+    ORIGIN = 342
+
+    def scissor(self, left, top, right, bottom):
+        o = self.ORIGIN
+        return bp_command(0x20, (o + top) | ((o + left) << 12)) + bp_command(0x21, (o + bottom - 1) | ((o + right - 1) << 12))
+
+    def scene(self, green_right):
+        # Red everywhere, a copy to end the pass, then green over a scissored square.
+        state = base_state()
+        state[0][0x41] = 0x18  # Color and alpha written, nothing blended.
+        whole = self.scissor(0, 0, 640, 456)
+        commands = (quad(self.RED, 0, 0, 640, 456) + copy_picture(0x00300000, 0, width=8, height=8, stride=64)
+                    + self.scissor(100, 100, 300, 300) + quad(self.GREEN, 100, 100, green_right, 300) + whole)
+        return self.picture(state, commands)
+
+    def test_a_covering_draw_replaces_the_area(self):
+        picture = self.scene(300)
+        self.assert_pixel(picture, 200, 200, self.GREEN)
+        self.assert_pixel(picture, 50, 50, self.RED)
+
+    def test_a_draw_over_part_of_it_leaves_the_rest(self):
+        picture = self.scene(200)
+        self.assert_pixel(picture, 150, 200, self.GREEN)
+        self.assert_pixel(picture, 250, 200, self.RED)  # In the pass, but not drawn over.
+
+
 class DestinationAlpha(Scene):
     """Draws into the corner, copies it with its alpha, and shows that alpha as gray."""
     TARGET = 0x00300000

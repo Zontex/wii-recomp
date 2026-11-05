@@ -384,7 +384,7 @@ static VkFramebuffer framebuffer_for(int visible, int depthless) {
 // Whether the pass about to open can do without depth: the work opening it doesn't use
 // it, and the pass at this place in the last frame didn't either, so it likely won't. If
 // a draw needing depth comes after all, the pass ends and another opens with the real depth.
-static int next_work_uses_depth;
+static int next_work_uses_depth, next_work_covers;
 static int depthless_pass_wanted(void) {
   static int off = -1;
   if (off < 0) off = getenv("WII_RECOMP_DEPTH_EVERY_PASS") != 0;
@@ -470,6 +470,8 @@ static void begin_pass(const VkRect2D *area) {
   }
   // A pass begun by a draw takes what was learned about depth as well as one begun by a clear.
   int depthless = depthless_pass_wanted(), learned = depthless ? CLEARS_DEPTH | DROPS_DEPTH : pass_kind_learned();
+  // Whatever the picture held here is about to be drawn over, so it needn't be loaded.
+  if (next_work_covers && !side.on) learned |= CLEARS_COLOR;
   VkClearValue values[2] = {{.color = {{0, 0, 0, 0}}}, {.depthStencil = {depthless ? 1.0f : depth_use.clear_depth, 0}}};
   VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = render_passes[learned], .framebuffer = framebuffer_for(0, depthless),
                                 .renderArea = wanted, .clearValueCount = 2, .pClearValues = values};
@@ -706,6 +708,45 @@ static void vertices_send(const void *vertices, int count) {
 }
 
 static void early_depth_changed(void);
+
+// Whether a draw opening a pass replaces every pixel of the pass's area: a rectangle as
+// large, writing color and any alpha that is kept, with nothing blended, culled or thrown
+// away by a test. Effect passes are made of these, each drawing a picture made before over
+// the whole of a smaller one, with the scissor drawing the pass's edges. Facing is as the
+// pipeline sees it: counterclockwise with y up is the front.
+static int draw_covers_pass(int primitive, int count, const VkRect2D *area) {
+  extern TevKey gx_last_tev;
+  if ((primitive != PRIM_QUADS && primitive != PRIM_QUADS2) || count != 4 || state_in_use.blend_on || state_in_use.cull == GX_CULL_ALL) return 0;
+  if (!state_in_use.color_write || (!state_in_use.alpha_write && gx_target_has_alpha())) return 0;
+  if (state_in_use.depth_test_on && state_in_use.depth_test != GX_TEST_ALWAYS) return 0;
+  if (gx_last_tev.alpha_test || gx_expanding) return 0;
+  float x[4], y[4], px[4], py[4], left = 1e9f, right = -1e9f, top = 1e9f, bottom = -1e9f;
+  for (int i = 0; i < 4; i++) {
+    if (!gx_transform_screen(&gx_reserved[i], &x[i], &y[i])) return 0;
+    px[i] = viewport_wanted.x + (x[i] + 1) / 2 * viewport_wanted.width;
+    py[i] = viewport_wanted.y + (y[i] + 1) / 2 * viewport_wanted.height;
+    left = fminf(left, px[i]), right = fmaxf(right, px[i]), top = fminf(top, py[i]), bottom = fmaxf(bottom, py[i]);
+  }
+  // A rectangle: each corner on its bounds, all four of them.
+  int corners = 0;
+  const float near = 0.01f;
+  for (int i = 0; i < 4; i++) {
+    int at_left = fabsf(px[i] - left) < near, at_right = fabsf(px[i] - right) < near;
+    int at_top = fabsf(py[i] - top) < near, at_bottom = fabsf(py[i] - bottom) < near;
+    if (at_left == at_right || at_top == at_bottom) return 0;
+    corners |= 1 << (at_right + 2 * at_bottom);
+  }
+  if (corners != 15) return 0;
+  if (left > area->offset.x + near || top > area->offset.y + near) return 0;
+  if (right < area->offset.x + (float)area->extent.width - near || bottom < area->offset.y + (float)area->extent.height - near) return 0;
+  // A quad's two triangles are 0 1 2 and 0 2 3; on the corners both face the same way, or neither covers.
+  float first = (x[1] - x[0]) * (y[2] - y[0]) - (x[2] - x[0]) * (y[1] - y[0]);
+  float second = (x[2] - x[0]) * (y[3] - y[0]) - (x[3] - x[0]) * (y[2] - y[0]);
+  if ((first > 0) != (second > 0) || first == 0 || second == 0) return 0;
+  int front = first > 0;
+  return !((state_in_use.cull == GX_CULL_FRONT && front) || (state_in_use.cull == GX_CULL_BACK && !front));
+}
+
 // A page that covers the whole picture makes all drawing before it wasted, however much
 // there was. The commands recorded so far haven't run, so they can simply be thrown away.
 // If the page never comes, nothing was lost. It's known from the frame before, because
@@ -893,12 +934,13 @@ static void draw(int primitive, int count) {
   }
   VkRect2D area = drawn_area();
   next_work_uses_depth = state_in_use.depth_test_on || state_in_use.depth_write;
+  next_work_covers = !pass_open && draw_covers_pass(primitive, count, &area);
   if (next_work_uses_depth && pass_open && pass_depthless) {
     depth_touched(depth_use.number);  // So next frame's pass here opens with depth, not in two.
     end_pass();
   }
   begin_pass(&area);
-  next_work_uses_depth = 0;
+  next_work_uses_depth = next_work_covers = 0;
   if (state_in_use.depth_test_on || state_in_use.depth_write) depth_touched(depth_use.number);
   set_pipeline(commands, vk_pipeline_find(shader_in_use, &state_in_use));
   set_viewport_and_scissor(commands, &viewport_wanted, &area);
