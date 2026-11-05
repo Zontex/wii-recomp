@@ -289,6 +289,58 @@ class Replay(unittest.TestCase):
         self.assertEqual(self.pixel(second, 550, 300), YELLOW)
         self.assert_background(second, 550, 100)
 
+    def test_a_called_list_sees_its_arrays_change(self):
+        # A display list keeps the vertices it decoded between calls, which must not
+        # outlive a write to the arrays it reads, nor to the list itself.
+        list_address, position_array, color_array = 0x00200000, 0x00100000, 0x10001000
+        setup = (cp_command(0x50, (2 << 9) | (2 << 13)) + cp_command(0xa0, position_array) + cp_command(0xa2, color_array)
+                 + cp_command(0xb0, 12) + cp_command(0xb2, 4))
+        listed = draw(TRIANGLES, [b"\0\0", b"\1\0", b"\2\0"])
+        listed += bytes(-len(listed) % 32)
+        call = bytes([0x40]) + struct.pack(">II", list_address, len(listed))
+        left, right = positions((20, 20), (200, 20), (20, 200)), positions((400, 250), (600, 250), (600, 440))
+        frames = [
+            (setup + call + show_frame(), [(0, list_address, listed), (0, position_array, left), (0, color_array, bytes(GREEN) + b"\xff")]),
+            (setup + call + show_frame(), []),
+            (setup + call + show_frame(), [(0, position_array, right), (0, color_array, bytes(YELLOW) + b"\xff")]),
+            (setup + call + show_frame(), [(0, list_address, bytes(len(listed)))]),
+        ]
+        out, result = self.play(base_state(), frames)
+        self.assertIn("saved 4 of 4 frames", result.stdout)
+        self.assertIn("frame 2: 0 writes caught watching memory, list draws 1 reused", result.stderr)  # The second call decoded nothing.
+        pictures = [Image.open(out / f"frame-{i:04d}.png") for i in range(4)]
+        for picture in pictures[:2]:
+            self.assertEqual(self.pixel(picture, 60, 60), GREEN)
+        self.assertEqual(self.pixel(pictures[2], 550, 300), YELLOW)
+        self.assert_background(pictures[2], 60, 60)
+        self.assert_background(pictures[3], 550, 300)  # The list now holds nothing to draw.
+
+    def test_a_recording_made_while_playing_plays_the_same(self):
+        # The console records frames as its chip reads them (gx_record.c). The player runs
+        # the same chip, so a recording of its own playback must show the same pictures,
+        # memory and stage constants included.
+        state = base_state()
+        bp = state[0]
+        bp[0xe0], bp[0xe1] = 0x800000 | 0x0ff, 0x800000 | (0x7f << 12)  # A constant, so the bank written last isn't the colors.
+        # Memory is taken once a frame, so these change it only before a frame's commands.
+        position_array, color_array = 0x00100000, 0x10001000
+        indexed = (cp_command(0x50, (2 << 9) | (2 << 13)) + cp_command(0xa0, position_array) + cp_command(0xa2, color_array)
+                   + cp_command(0xb0, 12) + cp_command(0xb2, 4) + draw(TRIANGLES, [b"\0\0", b"\1\0", b"\2\0"]) + show_frame())
+        left, right = positions((20, 20), (200, 20), (20, 200)), positions((400, 250), (600, 250), (600, 440))
+        frames = [triangle_frame(), triangle_frame(GREEN),
+                  (indexed, [(0, position_array, left), (0, color_array, bytes(GREEN) + b"\xff")]),
+                  (indexed, [(0, position_array, right), (0, color_array, bytes(YELLOW) + b"\xff")])]
+        first, _ = self.play(state, frames)
+        recorded = self.folder / "again.dff"
+        result = replay(self.folder / "scene.dff", self.folder / "unused", WII_RECOMP_RECORD=f"1:3:{recorded}")
+        self.assertIn("record: wrote", result.stderr, result.stderr)
+        again = self.folder / "again"
+        result = replay(recorded, again)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn("saved 3 of 3 frames", result.stdout)
+        for i in range(3):
+            self.assertEqual(Image.open(first / f"frame-{i + 1:04d}.png").tobytes(), Image.open(again / f"frame-{i:04d}.png").tobytes(), f"frame {i}")
+
     def test_frame_with_no_copy_repeats_the_last_picture(self):
         nothing = (bytes(8), [])
         out, result = self.play(base_state(), [triangle_frame(), nothing])

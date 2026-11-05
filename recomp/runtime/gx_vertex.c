@@ -2,9 +2,12 @@
 // shader, which applies the matrices (gx_transform.c) and lights (gx_light.c).
 #include <string.h>
 
+#include <stdlib.h>
+
 #include "cpu.h"
 #include "debug.h"
 #include "gx.h"
+#include "memory_watch.h"
 
 enum {
   CP_MATRIX_INDEX = 0x30, CP_DESCRIPTOR_LOW = 0x50, CP_DESCRIPTOR_HIGH = 0x60, CP_FORMAT_A = 0x70,
@@ -25,9 +28,14 @@ typedef struct {
   int normal_components, normal_type, normal_indexes;
   int color_type[2], color_alpha[2];
   int texture_components[TEXTURES], texture_type[TEXTURES], texture_shift[TEXTURES];
+  float position_scale, normal_scale, texture_scale[TEXTURES];  // From the shifts, worked out once a draw.
 } Format;
 
 static uint32_t bits(uint32_t value, int low, int count) { return (value >> low) & ((1u << count) - 1); }
+
+static int normal_shift(int type) {
+  return type == COMPONENT_U8 ? NORMAL_SHIFT_U8 : type == COMPONENT_S8 ? NORMAL_SHIFT_S8 : type == COMPONENT_U16 ? NORMAL_SHIFT_U16 : NORMAL_SHIFT_S16;
+}
 
 static void read_format(int v, Format *f) {
   uint32_t low = gx.cp[CP_DESCRIPTOR_LOW], high = gx.cp[CP_DESCRIPTOR_HIGH];
@@ -69,6 +77,26 @@ static void read_format(int v, Format *f) {
     f->position_shift = 0;
     for (int i = 0; i < TEXTURES; i++) f->texture_shift[i] = 0;
   }
+  f->position_scale = 1.0f / (float)(1u << f->position_shift);
+  for (int i = 0; i < TEXTURES; i++) f->texture_scale[i] = 1.0f / (float)(1u << f->texture_shift[i]);
+  f->normal_scale = 1.0f / (float)(1u << normal_shift(f->normal_type));
+}
+
+static uint32_t vertex_bytes(const Format *f);
+
+// Each format as last worked out, until the game writes a vertex register again. Every
+// draw asks three times: for its size, its normals and its vertices.
+static Format formats[8];
+static uint32_t format_bytes[8];
+static unsigned format_written[8];
+
+static const Format *format_for(int v) {
+  if (format_written[v] != gx_cp_written) {
+    read_format(v, &formats[v]);
+    format_bytes[v] = vertex_bytes(&formats[v]);
+    format_written[v] = gx_cp_written;
+  }
+  return &formats[v];
 }
 
 static uint32_t component_bytes(int type) {
@@ -98,19 +126,16 @@ static uint32_t vertex_bytes(const Format *f) {
 }
 
 int gx_vertex_normals(int format) {
-  Format f;
-  read_format(format, &f);
-  return f.normal == KIND_NONE ? 0 : f.normal_components == ALL_NORMAL_VALUES ? 3 : 1;
+  const Format *f = format_for(format & 7);
+  return f->normal == KIND_NONE ? 0 : f->normal_components == ALL_NORMAL_VALUES ? 3 : 1;
 }
 
 uint32_t gx_vertices_size(int format, int count) {
-  Format f;
-  read_format(format, &f);
-  return vertex_bytes(&f) * (uint32_t)count;
+  format_for(format & 7);
+  return format_bytes[format & 7] * (uint32_t)count;
 }
 
-static float read_component(const uint8_t *p, int type, int shift) {
-  float scale = 1.0f / (float)(1u << shift);
+static inline float read_component(const uint8_t *p, int type, float scale) {
   switch (type) {
     case COMPONENT_U8: return (float)p[0] * scale;
     case COMPONENT_S8: return (float)(int8_t)p[0] * scale;
@@ -143,6 +168,11 @@ static void read_color(const uint8_t *p, int type, float out[4]) {
   }
 }
 
+enum { ARRAYS = 12 };
+// While a display list's draw is decoded to be kept, the lowest and highest index read
+// from each array, so the memory it came from can be watched.
+static struct { int on; uint32_t low[ARRAYS], high[ARRAYS], used; } spans;
+
 // Returns where an attribute's data is, in the stream or in an array.
 static const uint8_t *locate(const uint8_t **p, int kind, int array, uint32_t direct) {
   const uint8_t *at = *p;
@@ -152,16 +182,17 @@ static const uint8_t *locate(const uint8_t **p, int kind, int array, uint32_t di
   }
   uint32_t index = kind == KIND_INDEX8 ? at[0] : ((uint32_t)at[0] << 8) | at[1];
   *p += kind == KIND_INDEX8 ? 1 : 2;
+  if (spans.on) {
+    if (!(spans.used & (1u << array)) || index < spans.low[array]) spans.low[array] = index;
+    if (!(spans.used & (1u << array)) || index > spans.high[array]) spans.high[array] = index;
+    spans.used |= 1u << array;
+  }
   return host((gx.cp[CP_ARRAY_BASE + array] + index * (gx.cp[CP_ARRAY_STRIDE + array] & 0xff)) | 0x80000000u);
-}
-
-static int normal_shift(int type) {
-  return type == COMPONENT_U8 ? NORMAL_SHIFT_U8 : type == COMPONENT_S8 ? NORMAL_SHIFT_S8 : type == COMPONENT_U16 ? NORMAL_SHIFT_U16 : NORMAL_SHIFT_S16;
 }
 
 static void read_normal(const uint8_t *source, const Format *f, float out[3]) {
   uint32_t size = component_bytes(f->normal_type);
-  for (uint32_t i = 0; i < 3; i++) out[i] = read_component(source + i * size, f->normal_type, normal_shift(f->normal_type));
+  for (uint32_t i = 0; i < 3; i++) out[i] = read_component(source + i * size, f->normal_type, f->normal_scale);
 }
 
 static void read_normals(const uint8_t **p, const Format *f, Vertex *v) {
@@ -195,8 +226,7 @@ static void keep_last_normals(const Format *f, const Vertex *last) {
 }
 
 int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
-  Format f;
-  read_format(format, &f);
+  const Format f = *format_for(format & 7);
   if (f.normal_components == ALL_NORMAL_VALUES && f.normal != KIND_NONE && (f.texture[VERTEX_NORMALS_UV] || f.texture[VERTEX_NORMALS_UV + 1] || f.texture[VERTEX_NORMALS_UV + 2])) {
     debug_unsupported("vtx.normal_nbt_9_values", "texture coordinates 5 to 7 beside binormal and tangent", (uint32_t)format);
   }
@@ -225,7 +255,7 @@ int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
     if (f.position != KIND_NONE) {
       const uint8_t *source = locate(&p, f.position, ARRAY_POSITION, (uint32_t)f.position_components * size);
       for (int i = 0; source && i < f.position_components; i++) {
-        v->position[i] = read_component(source + (uint32_t)i * size, f.position_type, f.position_shift);
+        v->position[i] = read_component(source + (uint32_t)i * size, f.position_type, f.position_scale);
       }
     }
     if (f.normal != KIND_NONE) read_normals(&p, &f, v);
@@ -240,11 +270,125 @@ int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
       uint32_t bytes = component_bytes(f.texture_type[i]);
       const uint8_t *source = locate(&p, f.texture[i], ARRAY_TEXTURE + i, (uint32_t)f.texture_components[i] * bytes);
       if (!source) continue;
-      v->uv[i][0] = read_component(source, f.texture_type[i], f.texture_shift[i]);
-      if (f.texture_components[i] > 1) v->uv[i][1] = read_component(source + bytes, f.texture_type[i], f.texture_shift[i]);
+      v->uv[i][0] = read_component(source, f.texture_type[i], f.texture_scale[i]);
+      if (f.texture_components[i] > 1) v->uv[i][1] = read_component(source + bytes, f.texture_type[i], f.texture_scale[i]);
     }
     if (n == count - 1) keep_last_normals(&f, v);
     if (!skipped) kept++;
   }
+  return kept;
+}
+
+// Display lists: models are drawn by calling the same lists frame after frame, and their
+// vertices decode the same way each time. So each draw inside a called list keeps what
+// it decoded, and the next call reuses it while three things hold: the list's bytes are
+// unwritten, so the draw is the same command; the vertex registers it was decoded with are
+// the same; and the arrays it indexed are unwritten (memory_watch.h). WiiCompiled keeps
+// a scan of each list in the same way (CREDITS.md).
+GxCalledList gx_called_list;
+unsigned gx_list_draws_reused, gx_list_draws_decoded;
+
+enum { KEPT_SLOTS = 8192, KEPT_PROBES = 8, KEPT_BYTES_MOST = 64 << 20, VERTEX_REGISTERS = 7 };
+typedef struct {
+  uint32_t list, list_bytes, offset;
+  uint64_t list_watched;
+  uint32_t registers[VERTEX_REGISTERS], used, base[ARRAYS], stride[ARRAYS], first[ARRAYS], bytes[ARRAYS];
+  uint64_t watched[ARRAYS];
+  int format, count, kept, sets_normals;
+  float normals[CACHED_NORMALS][4];
+  Vertex *vertices;
+} KeptDraw;
+static KeptDraw kept_draws[KEPT_SLOTS];
+static size_t kept_bytes;
+static int keeping = -1;
+
+static void vertex_registers(int format, uint32_t out[VERTEX_REGISTERS]) {
+  out[0] = gx.cp[CP_DESCRIPTOR_LOW], out[1] = gx.cp[CP_DESCRIPTOR_HIGH];
+  out[2] = gx.cp[CP_FORMAT_A + format], out[3] = gx.cp[CP_FORMAT_B + format], out[4] = gx.cp[CP_FORMAT_C + format];
+  out[5] = gx.cp[CP_MATRIX_INDEX], out[6] = gx.cp[CP_MATRIX_INDEX + 0x10];
+}
+
+static int still_holds(const KeptDraw *d, int format, int count) {
+  if (d->list != gx_called_list.address || d->list_bytes != gx_called_list.bytes || d->list_watched != gx_called_list.watched) return 0;
+  if (d->format != format || d->count != count) return 0;
+  uint32_t registers[VERTEX_REGISTERS];
+  vertex_registers(format, registers);
+  if (memcmp(registers, d->registers, sizeof registers)) return 0;
+  for (int a = 0; a < ARRAYS; a++) {
+    if (!(d->used & (1u << a))) continue;
+    if (gx.cp[CP_ARRAY_BASE + a] != d->base[a] || (gx.cp[CP_ARRAY_STRIDE + a] & 0xff) != d->stride[a]) return 0;
+    if (watch_count(d->first[a], d->bytes[a]) != d->watched[a]) return 0;
+  }
+  return 1;
+}
+
+static KeptDraw *kept_slot(uint32_t offset) {
+  uint32_t mixed = (gx_called_list.address ^ (offset * 0x9e3779b1u)) * 2654435761u, first = mixed % KEPT_SLOTS;
+  for (int step = 0; step < KEPT_PROBES; step++) {
+    KeptDraw *d = &kept_draws[(first + (uint32_t)step) % KEPT_SLOTS];
+    if (!d->vertices || (d->list == gx_called_list.address && d->offset == offset)) return d;
+  }
+  return &kept_draws[first];
+}
+
+// Keeps a draw just decoded, if everything it read can be watched.
+static void keep(KeptDraw *d, uint32_t offset, int format, int count, int kept, const Vertex *out) {
+  if (gx_called_list.watched == WATCH_NONE) return;
+  uint32_t used = spans.used, first[ARRAYS], bytes[ARRAYS];
+  uint64_t watched[ARRAYS];
+  for (int a = 0; a < ARRAYS; a++) {
+    if (!(used & (1u << a))) continue;
+    uint32_t stride = gx.cp[CP_ARRAY_STRIDE + a] & 0xff;
+    // An element is at most a stride long, or 36 bytes of floats where the stride is less.
+    uint32_t element = stride > 36 ? stride : 36;
+    first[a] = (gx.cp[CP_ARRAY_BASE + a] + spans.low[a] * stride) | 0x80000000u;
+    bytes[a] = (spans.high[a] - spans.low[a]) * stride + element;
+    watched[a] = watch_range(first[a], bytes[a]);
+    if (watched[a] == WATCH_NONE) return;
+  }
+  size_t room = (size_t)count * sizeof(Vertex);
+  if (d->vertices && d->count != count) {
+    free(d->vertices);
+    kept_bytes -= (size_t)d->count * sizeof(Vertex);
+    d->vertices = 0;
+  }
+  if (!d->vertices) {
+    if (kept_bytes + room > KEPT_BYTES_MOST) return;
+    d->vertices = malloc(room);
+    if (!d->vertices) return;
+    kept_bytes += room;
+  }
+  memcpy(d->vertices, out, (size_t)kept * sizeof(Vertex));
+  d->list = gx_called_list.address, d->list_bytes = gx_called_list.bytes, d->offset = offset;
+  d->list_watched = gx_called_list.watched;
+  vertex_registers(format, d->registers);
+  d->used = used;
+  for (int a = 0; a < ARRAYS; a++) {
+    if (!(used & (1u << a))) continue;
+    d->base[a] = gx.cp[CP_ARRAY_BASE + a], d->stride[a] = gx.cp[CP_ARRAY_STRIDE + a] & 0xff;
+    d->first[a] = first[a], d->bytes[a] = bytes[a], d->watched[a] = watched[a];
+  }
+  d->format = format, d->count = count, d->kept = kept;
+  d->sets_normals = formats[format].normal != KIND_NONE;
+  memcpy(d->normals, gx_cached_normals, sizeof d->normals);
+}
+
+int gx_read_list_vertices(const uint8_t *data, int format, int count, Vertex *out) {
+  format &= 7;
+  if (keeping < 0) keeping = watch_enabled() && !getenv("WII_RECOMP_NO_LIST_CACHE");
+  if (!keeping) return gx_read_vertices(data, format, count, out);
+  uint32_t offset = (uint32_t)(data - gx_called_list.start);
+  KeptDraw *d = kept_slot(offset);
+  if (d->vertices && d->offset == offset && still_holds(d, format, count)) {
+    memcpy(out, d->vertices, (size_t)d->kept * sizeof(Vertex));
+    if (d->sets_normals) memcpy(gx_cached_normals, d->normals, sizeof d->normals);
+    gx_list_draws_reused++;
+    return d->kept;
+  }
+  gx_list_draws_decoded++;
+  spans.on = 1, spans.used = 0;
+  int kept = gx_read_vertices(data, format, count, out);
+  spans.on = 0;
+  keep(d, offset, format, count, kept, out);
   return kept;
 }

@@ -4,6 +4,7 @@
 #include <string.h>
 
 #include "cpu.h"
+#include "memory_watch.h"
 
 Cpu cpu;
 static int failures;
@@ -70,6 +71,39 @@ int main(void) {
   CHECK_EQ(gap_count, 1);
   guest_memory_report();
   CHECK_EQ(gap_count, 1);
+
+  // A watched range keeps its count until something writes there: translated code, the
+  // runtime's own copies, or the kernel once told. Neighbouring pages don't count.
+  uint64_t watched = watch_range(0x80100000u, 0x2000u);
+  CHECK_EQ(watched != WATCH_NONE, 1);
+  CHECK_EQ(watch_count(0x80100000u, 0x2000u), watched);
+  CHECK_EQ(rd32(0x80100010u), 0);  // Reading is free.
+  CHECK_EQ(watch_count(0x80100000u, 0x2000u), watched);
+  wr32(0x80300000u, 1);
+  CHECK_EQ(watch_count(0x80100000u, 0x2000u), watched);
+  wr32(0xc0101ffcu, 0x55667788u);  // Through the uncached mirror, as the chip would see it.
+  CHECK_EQ(rd32(0x80101ffcu), 0x55667788u);
+  CHECK_EQ(watch_count(0x80100000u, 0x2000u), WATCH_NONE);
+  uint64_t again = watch_range(0x80100000u, 0x2000u);
+  CHECK_EQ(again != watched && again != WATCH_NONE, 1);
+  memset(host(0x80100100u), 9, 4);
+  CHECK_EQ(mem1[0x100100], 9);
+  CHECK_EQ(watch_count(0x80100000u, 0x2000u) != again, 1);
+  again = watch_range(0x80100000u, 0x2000u);
+  watch_before_write(host(0x80100000u), 16);
+  CHECK_EQ(watch_count(0x80100000u, 0x2000u) != again, 1);
+  // A page written frame after frame stops being watched, and its readers look again.
+  for (int frame = 0; frame < 6; frame++) {
+    watch_range(0x90200000u, 4);
+    wr32(0x90200000u, (uint32_t)frame);
+    watch_next_frame();
+  }
+  CHECK_EQ(watch_range(0x90200000u, 4), WATCH_NONE);
+  CHECK_EQ(rd32(0x90200000u), 5);
+  // Only memory is watched, and a range can't run from one memory into another.
+  CHECK_EQ(watch_range(0xcc000000u, 4), WATCH_NONE);
+  CHECK_EQ(watch_range(0x817ffff0u, 0x20u), WATCH_NONE);
+  CHECK_EQ(gap_count, 1);  // Not a guard page.
 
   // Starting over clears memory.
   guest_memory_reserve();

@@ -11,6 +11,7 @@
 #include "debug.h"
 #include "gx_backend.h"
 #include "gx_inspect.h"
+#include "memory_watch.h"
 
 enum {
   BP_GEN_MODE = 0x00, BP_SCISSOR_FIRST = 0x20, BP_SCISSOR_LAST = 0x21, BP_Z_MODE = 0x40, BP_BLEND = 0x41, BP_CONSTANT_ALPHA = 0x42,
@@ -30,10 +31,12 @@ enum {
 
 static unsigned frames;
 
+unsigned gx_frame_number(void) { return frames; }
+
 typedef struct {
   int used;
   uint32_t address, image, palette;
-  uint64_t key;
+  TextureMemo memo;
   unsigned checked_frame;
   GxTexture *texture;
 } CacheEntry;
@@ -121,7 +124,7 @@ static void bind_texture(int map) {
   // Checking for changed pictures once a frame is plenty.
   if (entry->checked_frame != frames + 1) {
     entry->checked_frame = frames + 1;
-    DecodedTexture texture = gx_decode_texture(map, &entry->key);
+    DecodedTexture texture = gx_decode_texture(map, &entry->memo);
     if (texture.rgba) gx_backend->texture_upload(entry->texture, texture.width, texture.height, texture.levels, texture.rgba);
   }
 }
@@ -291,9 +294,15 @@ int gx_bounds_known;
 float gx_bounds[4];
 enum { BOUNDED_VERTICES = 128 };
 
+// Vertices are decoded here, in ordinary memory, and only sent to the graphics card's
+// once the draw is sure. Its memory is uncached for the processor, so the checks that
+// read vertices back (fog, bounds) are slow there, and scattered writes are too.
+static Vertex staged[MAX_VERTICES];
+
 Vertex *gx_draw_reserve(int count) {
+  (void)count;
   if (!started) start();
-  return gx_reserved = gx_backend->vertices_reserve(count);
+  return gx_reserved = staged;
 }
 
 // Whether the color stages must give full alpha, whatever the texture holds. Only one
@@ -312,11 +321,7 @@ int gx_output_is_opaque(void) {
 
 // Draws the vertices just decoded into the reserved room.
 void gx_draw(int primitive, int count) {
-  if (!gx_draw_wanted(primitive, count)) {
-    // Too many were left out. A backend can still have reserved room to let go of.
-    gx_backend->draw(PRIM_TRIANGLES, 0);
-    return;
-  }
+  if (!gx_draw_wanted(primitive, count)) return;  // Too many were left out.
   TevKey tev;
   VertexKey vertex;
   unsigned maps = gx_tev_apply(&tev);
@@ -334,7 +339,10 @@ void gx_draw(int primitive, int count) {
   apply_blending();
   apply_viewport();
   apply_scissor();
-  if (gx_inspect_draw(&tev, maps, gx_vertex_format, primitive, count, gx_reserved)) gx_backend->draw(primitive, count);
+  if (gx_inspect_draw(&tev, maps, gx_vertex_format, primitive, count, gx_reserved)) {
+    gx_backend->vertices_send(gx_reserved, count);
+    gx_backend->draw(primitive, count);
+  }
 }
 
 int gx_target_has_alpha(void) {
@@ -437,6 +445,10 @@ void gx_clear(void) {
   clear.depth = (double)(gx.bp[BP_CLEAR_DEPTH] & 0xffffff) / 0xffffff;
   clear.color_write = (blend >> 3) & 1;
   clear.alpha_write = ((blend >> 4) & 1) && gx_target_has_alpha();  // As in Dolphin's ClearScreen.
+  // A picture with no alpha never shows what its alpha holds: blending reads it as full
+  // and copies make it full. So a clear of color may clear alpha too, which lets a
+  // backend begin its next pass with the clear instead of drawing it.
+  if (!gx_target_has_alpha() && clear.color_write) clear.alpha_write = 1;
   clear.depth_write = (gx.bp[BP_Z_MODE] >> 4) & 1;
   gx_backend->clear(&clear);
 }
@@ -465,6 +477,9 @@ void gx_present(void) {
   GxRectangle from;
   gx_copy_rectangle(&from.x, &from.y, &from.width, &from.height);
   gx_backend->present(&from);
-  if (++frames <= 3 || frames % 300 == 0) fprintf(stderr, "frame %u\n", frames);
+  watch_next_frame();
+  if (++frames <= 3 || frames % 300 == 0) {
+    fprintf(stderr, "frame %u: %u writes caught watching memory, list draws %u reused and %u decoded\n", frames, watch_faults(), gx_list_draws_reused, gx_list_draws_decoded);
+  }
   log_frame_rate();
 }

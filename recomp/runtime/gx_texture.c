@@ -4,6 +4,7 @@
 
 #include "cpu.h"
 #include "gx.h"
+#include "memory_watch.h"
 
 enum {
   FORMAT_I4 = 0, FORMAT_I8 = 1, FORMAT_IA4 = 2, FORMAT_IA8 = 3, FORMAT_RGB565 = 4, FORMAT_RGB5A3 = 5,
@@ -29,6 +30,7 @@ void gx_load_palette(void) {
 // Fills palette memory from a copy of the chip's texture memory, as a recording holds.
 // Dolphin keeps palettes in the first half of it, at the same places as here.
 void gx_restore_palettes(const uint8_t *texture_memory) { memcpy(palette_memory, texture_memory, PALETTE_BYTES); }
+void gx_save_palettes(uint8_t *texture_memory) { memcpy(texture_memory, palette_memory, PALETTE_BYTES); }
 
 static void put(uint8_t *to, int r, int g, int b, int a) {
   to[0] = (uint8_t)r; to[1] = (uint8_t)g; to[2] = (uint8_t)b; to[3] = (uint8_t)a;
@@ -80,25 +82,23 @@ static void cmpr_tile(const uint8_t *s, uint8_t *out, uint32_t x, uint32_t y, ui
   }
 }
 
-static void decode(const uint8_t *s, int format, uint32_t width, uint32_t height, uint32_t palette, int palette_format, uint8_t *out) {
+// One format's tiles. Always inlined with `format` a constant, so each format gets a loop
+// of its own instead of choosing per pixel; games decode whole movie frames this way.
+static inline __attribute__((always_inline)) void decode_tiles(const uint8_t *s, const int format, uint32_t width,
+                                                               uint32_t height, uint32_t palette, int palette_format,
+                                                               uint8_t *out) {
   static const uint8_t tile_w[16] = {8, 8, 8, 4, 4, 4, 4, 0, 8, 8, 4, 0, 0, 0, 8, 0};
   static const uint8_t tile_h[16] = {8, 4, 4, 4, 4, 4, 4, 0, 8, 4, 4, 0, 0, 0, 8, 0};
-  uint32_t tw = tile_w[format], th = tile_h[format];
-  if (format == FORMAT_CMPR) {
-    for (uint32_t y = 0; y < height; y += 8) {
-      for (uint32_t x = 0; x < width; x += 8) {
-        for (uint32_t b = 0; b < 4; b++, s += 8) cmpr_tile(s, out, x + (b & 1) * 4, y + (b >> 1) * 4, width, height);
-      }
-    }
-    return;
-  }
+  static const uint8_t tile_bytes[16] = {32, 32, 32, 32, 32, 32, 64, 0, 32, 32, 32, 0, 0, 0, 32, 0};
+  const uint32_t tw = tile_w[format], th = tile_h[format];
   for (uint32_t y = 0; y < height; y += th) {
-    for (uint32_t x = 0; x < width; x += tw) {
-      uint8_t green_blue[32];
-      if (format == FORMAT_RGBA8) memcpy(green_blue, s + 32, 32);
-      for (uint32_t row = 0; row < th; row++) {
-        for (uint32_t column = 0; column < tw; column++) {
-          uint8_t pixel[4] = {0, 0, 0, 0};
+    uint32_t rows = height - y < th ? height - y : th;
+    for (uint32_t x = 0; x < width; x += tw, s += tile_bytes[format]) {
+      uint32_t columns = width - x < tw ? width - x : tw;
+      const uint8_t *green_blue = s + 32;  // RGBA8: a tile's alpha and red, then its green and blue.
+      for (uint32_t row = 0; row < rows; row++) {
+        uint8_t *pixel = out + ((y + row) * width + x) * 4;
+        for (uint32_t column = 0; column < columns; column++, pixel += 4) {
           uint32_t index = row * tw + column;
           switch (format) {
             case FORMAT_I4: {
@@ -111,24 +111,40 @@ static void decode(const uint8_t *s, int format, uint32_t width, uint32_t height
             case FORMAT_IA8: put(pixel, s[index * 2 + 1], s[index * 2 + 1], s[index * 2 + 1], s[index * 2]); break;
             case FORMAT_RGB565: rgb565(((uint32_t)s[index * 2] << 8) | s[index * 2 + 1], pixel); break;
             case FORMAT_RGB5A3: rgb5a3(((uint32_t)s[index * 2] << 8) | s[index * 2 + 1], pixel); break;
-            case FORMAT_RGBA8:
-              put(pixel, s[index * 2 + 1], green_blue[index * 2], green_blue[index * 2 + 1], s[index * 2]);
-              break;
-            case FORMAT_C4:
-              palette_color((s[index / 2] >> (index & 1 ? 0 : 4)) & 15u, palette, palette_format, pixel);
-              break;
+            case FORMAT_RGBA8: put(pixel, s[index * 2 + 1], green_blue[index * 2], green_blue[index * 2 + 1], s[index * 2]); break;
+            case FORMAT_C4: palette_color((s[index / 2] >> (index & 1 ? 0 : 4)) & 15u, palette, palette_format, pixel); break;
             case FORMAT_C8: palette_color(s[index], palette, palette_format, pixel); break;
             case FORMAT_C14X2:
               palette_color((((uint32_t)s[index * 2] << 8) | s[index * 2 + 1]) & PALETTE_INDEX_14, palette, palette_format, pixel);
               break;
-            default: break;
+            default: put(pixel, 0, 0, 0, 0); break;
           }
-          if (x + column < width && y + row < height) memcpy(out + ((y + row) * width + x + column) * 4, pixel, 4);
         }
       }
-      static const uint8_t tile_bytes[16] = {32, 32, 32, 32, 32, 32, 64, 0, 32, 32, 32, 0, 0, 0, 32, 0};
-      s += tile_bytes[format];
     }
+  }
+}
+
+static void decode(const uint8_t *s, int format, uint32_t width, uint32_t height, uint32_t palette, int palette_format, uint8_t *out) {
+  switch (format) {
+    case FORMAT_CMPR:
+      for (uint32_t y = 0; y < height; y += 8) {
+        for (uint32_t x = 0; x < width; x += 8) {
+          for (uint32_t b = 0; b < 4; b++, s += 8) cmpr_tile(s, out, x + (b & 1) * 4, y + (b >> 1) * 4, width, height);
+        }
+      }
+      break;
+    case FORMAT_I4: decode_tiles(s, FORMAT_I4, width, height, palette, palette_format, out); break;
+    case FORMAT_I8: decode_tiles(s, FORMAT_I8, width, height, palette, palette_format, out); break;
+    case FORMAT_IA4: decode_tiles(s, FORMAT_IA4, width, height, palette, palette_format, out); break;
+    case FORMAT_IA8: decode_tiles(s, FORMAT_IA8, width, height, palette, palette_format, out); break;
+    case FORMAT_RGB565: decode_tiles(s, FORMAT_RGB565, width, height, palette, palette_format, out); break;
+    case FORMAT_RGB5A3: decode_tiles(s, FORMAT_RGB5A3, width, height, palette, palette_format, out); break;
+    case FORMAT_RGBA8: decode_tiles(s, FORMAT_RGBA8, width, height, palette, palette_format, out); break;
+    case FORMAT_C4: decode_tiles(s, FORMAT_C4, width, height, palette, palette_format, out); break;
+    case FORMAT_C8: decode_tiles(s, FORMAT_C8, width, height, palette, palette_format, out); break;
+    case FORMAT_C14X2: decode_tiles(s, FORMAT_C14X2, width, height, palette, palette_format, out); break;
+    default: break;  // Left as the zeros it was cleared to.
   }
 }
 
@@ -159,7 +175,19 @@ static uint64_t hash_bytes(const uint8_t *data, uint32_t bytes) {
   return value;
 }
 
-DecodedTexture gx_decode_texture(int map, uint64_t *key) {
+// Unwritten memory hashes as it did before, so only a written range is read again.
+static uint64_t hash_texture_bytes(uint32_t address, const uint8_t *source, uint32_t bytes, TextureMemo *memo) {
+  if (!memo) return hash_bytes(source, bytes);
+  if (memo->hashed_address == address && memo->hashed_bytes == bytes && memo->watched != WATCH_NONE && watch_count(address, bytes) == memo->watched) {
+    return memo->bytes_hash;
+  }
+  memo->watched = watch_range(address, bytes);
+  memo->hashed_address = address;
+  memo->hashed_bytes = bytes;
+  return memo->bytes_hash = hash_bytes(source, bytes);
+}
+
+DecodedTexture gx_decode_texture(int map, TextureMemo *memo) {
   DecodedTexture texture = {0, 0, 0};
   uint32_t image = gx.bp[(map < 4 ? BP_IMAGE_LOW + map : BP_IMAGE_HIGH + map - 4)];
   uint32_t address = gx.bp[(map < 4 ? BP_ADDRESS_LOW + map : BP_ADDRESS_HIGH + map - 4)] & 0xffffff;
@@ -179,15 +207,15 @@ DecodedTexture gx_decode_texture(int map, uint64_t *key) {
   }
   if (!source || !bytes) return texture;
   uint32_t palette_offset = (palette & 0x3ff) << PALETTE_SLOT_SHIFT;
-  uint64_t identity = hash_bytes(source, bytes) ^ ((uint64_t)image << 20) ^ ((uint64_t)address << 40) ^ palette_offset ^ ((uint64_t)levels << 60);
+  uint64_t identity = hash_texture_bytes((address << 5) | 0x80000000u, source, bytes, memo) ^ ((uint64_t)image << 20) ^ ((uint64_t)address << 40) ^ palette_offset ^ ((uint64_t)levels << 60);
   // The same image can be drawn with new colors, so the palette is part of what it is.
   if (format == FORMAT_C4 || format == FORMAT_C8 || format == FORMAT_C14X2) {
     uint32_t colors = format == FORMAT_C4 ? 16 : format == FORMAT_C8 ? 256 : PALETTE_INDEX_14 + 1;
     uint32_t palette_bytes = colors * 2 > PALETTE_BYTES - palette_offset ? PALETTE_BYTES - palette_offset : colors * 2;
     identity ^= hash_bytes(palette_memory + palette_offset, palette_bytes) * 3 + (uint64_t)((palette >> 10) & 3);
   }
-  if (key && *key == identity) return texture;
-  if (key) *key = identity;
+  if (memo && memo->key == identity) return texture;
+  if (memo) memo->key = identity;
   if (pixel_count * RGBA_BYTES > pixels_size) {
     pixels_size = pixel_count * RGBA_BYTES;
     pixels = realloc(pixels, pixels_size);

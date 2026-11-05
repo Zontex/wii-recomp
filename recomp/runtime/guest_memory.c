@@ -21,6 +21,7 @@
 
 #include "gaps.h"
 #include "guest_memory.h"
+#include "memory_watch.h"
 
 uint8_t *mem1;
 uint8_t *mem2;
@@ -84,6 +85,7 @@ static void on_fault(int signal, siginfo_t *info, void *context) {
     pass_on(signal, info, context);
     return;
   }
+  if (watch_fault((uint64_t)(at - base))) return;
   uintptr_t page = at & ~(page_size - 1);
   if (mprotect((void *)page, page_size, PROT_READ | PROT_WRITE)) {
     pass_on(signal, info, context);
@@ -103,6 +105,7 @@ void guest_memory_init(void) {
   guest_memory_reserve();
   page_size = (uintptr_t)sysconf(_SC_PAGESIZE);
   log_faults = getenv("WII_RECOMP_GUARD_LOG") != 0;
+  watch_start((unsigned long)page_size);
   struct sigaction action;
   memset(&action, 0, sizeof action);
   action.sa_sigaction = on_fault;

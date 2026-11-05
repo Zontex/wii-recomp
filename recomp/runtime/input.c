@@ -252,7 +252,8 @@ static uint32_t button_named(const char *name) {
 }
 
 // One command per line: press a, hold a, release a, pointer x y, board on kg x y, board off,
-// reset to press the console's reset button, shot <file> to save the next picture.
+// reset to press the console's reset button, shot <file> to save the next picture,
+// record <frames> <file> to record frames for recomp/tools/replay.
 static void run_command(const char *line) {
   char word[16], name[16], path[1024];
   float x = 0, y = 0, kilograms = state.kilograms;
@@ -266,6 +267,7 @@ static void run_command(const char *line) {
   else if (sscanf(line, "board %15s %f %f %f", word, &kilograms, &x, &y) >= 1) {
     input_board(!strcmp(word, "on"), kilograms, x, y);
   } else if (!strncmp(line, "dump", 4)) gx_inspect_dump();
+  else if (sscanf(line, "record %d %1023s", &first, path) == 2) gx_record_request(first, path);
   else if (sscanf(line, "skip %d %d", &first, &last) == 2) gx_inspect_skip(first, last);
   else if (sscanf(line, "shot %1023s", path) == 1) {
 #ifdef GX_WITH_VULKAN

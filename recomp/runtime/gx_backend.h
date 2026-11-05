@@ -101,8 +101,8 @@ typedef struct {
   // Stays until changed, and follows the texture if its picture is replaced.
   void (*texture_bind)(int map, GxTexture *texture, const GxSampling *sampling);
 
-  // Room for vertices, to fill before the draw that follows. Nothing else may reserve in between.
-  void *(*vertices_reserve)(int count);
+  // The vertices of the draw that follows, already decoded. Nothing else may send in between.
+  void (*vertices_send)(const void *vertices, int count);
   void (*draw)(int primitive, int count);  // A PRIM_ value other than lines and points.
   void (*clear)(const GxClear *clear);
 

@@ -7,6 +7,7 @@
 #include <string.h>
 #include <sys/stat.h>
 
+#include "memory_watch.h"
 #include "drive.h"
 #include "title.h"
 
@@ -121,6 +122,7 @@ static uint8_t *load(const char *path, size_t *length) {
 static void read_whole_into(const char *path, uint8_t *out, size_t limit) {
   FILE *file = fopen(path, "rb");
   if (!file) return;
+  watch_before_write(out, limit);
   if (fread(out, 1, limit, file)) {}
   fclose(file);
 }
@@ -275,6 +277,7 @@ static FILE *source_file(int source) {
 
 static int read_source(int source, uint64_t at, uint64_t bytes, uint8_t *out) {
   FILE *file = source_file(source);
+  watch_before_write(out, (size_t)bytes);
   return file && !fseeko(file, (off_t)at, SEEK_SET) && fread(out, 1, (size_t)bytes, file) == bytes;
 }
 
@@ -317,6 +320,7 @@ static size_t read_part(Part part, const char *folder_path, uint8_t *out, size_t
   }
   FILE *file = fopen(folder_path, "rb");
   if (!file) return 0;
+  watch_before_write(out, limit);
   size_t got = fread(out, 1, limit, file);
   fclose(file);
   return got;

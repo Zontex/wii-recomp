@@ -212,7 +212,7 @@ def quantized(word, name, address):
         w, gqr = (word >> 15) & 1, (word >> 12) & 7
     else:
         w, gqr = (word >> 10) & 1, (word >> 7) & 7
-    call = "ps_load" if "_l" in name else "ps_store"
+    call = "ps_load_inline" if "_l" in name else "ps_store_inline"
     return f"{call}({address}, {w}, {gqr}, {rt(word)});"
 
 

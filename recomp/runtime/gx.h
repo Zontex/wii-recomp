@@ -69,6 +69,12 @@ void gx_stream_report(void);
 uint32_t gx_vertices_size(int format, int count);
 // Decodes them into `out`, and returns how many there are after leaving out any the game skipped.
 int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out);
+// The same for a draw inside a display list the chip was told to call, which may keep
+// what it decoded for the next call (gx_vertex.c).
+typedef struct { uint32_t address, bytes; uint64_t watched; const uint8_t *start; } GxCalledList;
+extern GxCalledList gx_called_list;
+int gx_read_list_vertices(const uint8_t *data, int format, int count, Vertex *out);
+extern unsigned gx_list_draws_reused, gx_list_draws_decoded;
 // How many normals the current vertices carry: 0, 1, or 3 with binormal and tangent.
 int gx_vertex_normals(int format);
 // The last value seen of each normal the chip keeps for vertices with none. See gx_vertex.c.
@@ -80,10 +86,30 @@ typedef struct {
   uint8_t *rgba;
 } DecodedTexture;
 
-// Decodes the texture a map points at, or returns 0 if it has none.
-DecodedTexture gx_decode_texture(int map, uint64_t *key);
+// What a texture was when last decoded: its identity, and the memory watch's count for
+// the bytes that identity was worked out from (memory_watch.h).
+typedef struct {
+  uint64_t key, watched, bytes_hash;
+  uint32_t hashed_address, hashed_bytes;
+} TextureMemo;
+
+// Counts writes to the vertex registers, so what is worked out from them can be kept
+// until the next. The idea of a count for this is WiiCompiled's (CREDITS.md).
+extern unsigned gx_cp_written;
+
+// Decodes the texture a map points at, or returns 0 if it has none, or if it is what the
+// memo says it was.
+DecodedTexture gx_decode_texture(int map, TextureMemo *memo);
 void gx_load_palette(void);
 void gx_restore_palettes(const uint8_t *texture_memory);
+void gx_save_palettes(uint8_t *texture_memory);
+
+// Recording frames for recomp/tools/replay (gx_record.c).
+void gx_record_request(int frames, const char *path);
+void gx_record_command(const uint8_t *bytes, uint32_t count);
+void gx_record_frame_shown(void);
+void gx_record_list_enter(void);
+void gx_record_list_leave(void);
 
 enum { MAX_STAGES = 16, TEV_INDIRECT_SOURCES = 4, TEV_INDIRECT_MATRICES = 3 };
 
@@ -210,6 +236,8 @@ int gx_constant_alpha_used(void);
 int gx_blend_needs_second_output(const TevKey *key);
 struct GxTexture *gx_copy_find(int map);
 int gx_copy_is_depth(int map);
+// Frames shown so far, for work done once a frame.
+unsigned gx_frame_number(void);
 
 // Vertices go straight into the buffer the shader reads: reserve room, decode, draw.
 extern int gx_vertex_format;

@@ -93,7 +93,7 @@ class Disc(unittest.TestCase):
     @unittest.skipUnless(shutil.which("clang"), "needs clang")
     def test_drive_reads_image_like_folder(self):
         program = self.folder / "test_drive"
-        sources = [HERE / "c/test_drive.c", RUNTIME / "drive.c", RUNTIME / "title.c"]
+        sources = [HERE / "c/test_drive.c", RUNTIME / "drive.c", RUNTIME / "memory_watch.c", RUNTIME / "title.c"]
         subprocess.run(["clang", *map(str, sources), "-w", "-O1", f"-I{RUNTIME}", f"-I{HERE}", "-o", str(program)],
                        check=True, capture_output=True, text=True)
         system_title = self.folder / "menu"

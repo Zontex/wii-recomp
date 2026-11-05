@@ -299,3 +299,61 @@ static inline uint32_t double_to_single_flushed(double d) {
   uint32_t bits = double_to_single(d);
   return bits & 0x7f800000u ? bits : bits & 0x80000000u;
 }
+
+// Paired-single loads and stores (psq_l, psq_st and their forms), which convert by the
+// type and scale in a GQR register. Inline, as games run them for every value of a
+// matrix, vertex or movie frame: with W and the register known where it's translated,
+// what's left is a test of the GQR's type. quantized.c wraps these for the interpreter.
+static inline double ps_power_of_two(int exponent) { return as_double((uint64_t)(1023 + exponent) << 52); }
+static inline int ps_scale(uint32_t six_bits) { return six_bits & 32 ? (int)six_bits - 64 : (int)six_bits; }
+
+static inline double ps_load_one(uint32_t address, int type, double factor) {
+  switch (type) {
+    case 4: return (double)(uint8_t)rd8(address) * factor;
+    case 5: return (double)(uint16_t)rd16(address) * factor;
+    case 6: return (double)(int8_t)rd8(address) * factor;
+    case 7: return (double)(int16_t)rd16(address) * factor;
+    default: return single_to_double(rd32(address));
+  }
+}
+
+static inline void ps_store_one(uint32_t address, int type, double factor, double value) {
+  double scaled = value * factor;
+  switch (type) {
+    case 4: wr8(address, scaled <= 0 ? 0 : scaled >= 255 ? 255 : (uint32_t)scaled); break;
+    case 5: wr16(address, scaled <= 0 ? 0 : scaled >= 65535 ? 65535 : (uint32_t)scaled); break;
+    case 6: wr8(address, (uint32_t)(scaled <= -128 ? -128 : scaled >= 127 ? 127 : (int32_t)scaled)); break;
+    case 7: wr16(address, (uint32_t)(scaled <= -32768 ? -32768 : scaled >= 32767 ? 32767 : (int32_t)scaled)); break;
+    default: wr32(address, double_to_single_flushed(value)); break;
+  }
+}
+
+static inline int ps_bytes(int type) { return type == 4 || type == 6 ? 1 : type == 5 || type == 7 ? 2 : 4; }
+
+static inline void ps_load_inline(uint32_t address, int w, int gqr, int rd) {
+  uint32_t q = cpu.spr[912 + gqr];
+  int type = (q >> 16) & 7;
+  if (__builtin_expect(type < 4, 1)) {  // Floats, the usual case: no scaling.
+    double first = single_to_double(rd32(address));
+    cpu.p[rd] = w ? 1.0 : single_to_double(rd32(address + 4));
+    cpu.f[rd] = first;
+    return;
+  }
+  double factor = ps_power_of_two(-ps_scale((q >> 24) & 63));
+  double first = ps_load_one(address, type, factor);
+  cpu.p[rd] = w ? 1.0 : ps_load_one(address + (uint32_t)ps_bytes(type), type, factor);
+  cpu.f[rd] = first;
+}
+
+static inline void ps_store_inline(uint32_t address, int w, int gqr, int rs) {
+  uint32_t q = cpu.spr[912 + gqr];
+  int type = q & 7;
+  if (__builtin_expect(type < 4, 1)) {
+    wr32(address, double_to_single_flushed(cpu.f[rs]));
+    if (!w) wr32(address + 4, double_to_single_flushed(cpu.p[rs]));
+    return;
+  }
+  double factor = ps_power_of_two(ps_scale((q >> 8) & 63));
+  ps_store_one(address, type, factor, cpu.f[rs]);
+  if (!w) ps_store_one(address + (uint32_t)ps_bytes(type), type, factor, cpu.p[rs]);
+}
