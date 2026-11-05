@@ -116,7 +116,7 @@ static void report_read(int device, uint32_t address, uint32_t bytes) {
       return;
     }
     if (from_attachment) attachment_bytes(device, offset + done, report + MEMORY_HEADER, part);
-    else if (from_camera) camera_read(offset + done, report + MEMORY_HEADER, part);
+    else if (from_camera) camera_read(device, offset + done, report + MEMORY_HEADER, part);
     else read_memory(offset + done, report + MEMORY_HEADER, part);
     sink(device, report, sizeof report);
     done += part;
@@ -149,7 +149,7 @@ void wii_remote_simulated_output(int device, const uint8_t *data, uint32_t bytes
       if (is_board(device)) board_write(address & 0xffff, data + 6, bytes_written);
       else attachment_write(device, address & 0xffff, data + 6, bytes_written);
     } else if (address >> 16 == CAMERA_SPACE && !is_board(device)) {
-      camera_write(address & 0xffff, data + 6, bytes_written);
+      camera_write(device, address & 0xffff, data + 6, bytes_written);
     }
     acknowledge(device, report);
   } else if (report == OUTPUT_LEDS || report == OUTPUT_RUMBLE) {
@@ -183,7 +183,7 @@ void wii_remote_simulated_update(int device, uint64_t now) {
     report[5] = 0x9a;
   }
   if (mode->camera_bytes && !is_board(device)) {
-    camera_fill(player.pointer_x, player.pointer_y, report + mode->camera_at, mode->camera_bytes);
+    camera_fill(device, player.pointer_x, player.pointer_y, report + mode->camera_at, mode->camera_bytes);
   } else if (mode->camera_bytes) {
     memset(report + mode->camera_at, 0xff, mode->camera_bytes);
   }

@@ -24,9 +24,9 @@ void attachment_fill(int device, const PlayerState *player, uint8_t *out, uint32
 void board_read(uint32_t address, uint8_t *out, uint32_t bytes) {}
 void board_write(uint32_t address, const uint8_t *data, uint32_t bytes) {}
 void board_fill(uint8_t *out, uint32_t bytes) {}
-void camera_read(uint32_t address, uint8_t *out, uint32_t bytes) {}
-void camera_write(uint32_t address, const uint8_t *data, uint32_t bytes) {}
-void camera_fill(float x, float y, uint8_t *out, uint32_t bytes) {}
+void camera_read(int device, uint32_t address, uint8_t *out, uint32_t bytes) {}
+void camera_write(int device, uint32_t address, const uint8_t *data, uint32_t bytes) {}
+void camera_fill(int device, float x, float y, uint8_t *out, uint32_t bytes) {}
 static uint64_t now;
 uint64_t time_base(void) { return now; }
 static int backend_started, searches;

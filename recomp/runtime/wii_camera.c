@@ -4,6 +4,7 @@
 // WiiBrew and Dolphin's Camera.cpp.
 #include <string.h>
 
+#include "input.h"
 #include "wii_camera.h"
 
 enum {
@@ -23,20 +24,22 @@ static const float REACH_X = 250, REACH_Y = 226, LIGHTS_APART = 130;
 // the bar below; Wii Fit Plus puts its cursor at the middle of the screen with it too.
 static const float BAR_OFFSET = 132;
 
-static uint8_t registers[REGISTERS];
+static uint8_t registers[PLAYERS][REGISTERS];  // Each remote has its own camera.
 static int bar_above;  // The console setting BT.BAR: 1 above the TV, 0 below.
+
+static uint8_t *camera(int device) { return registers[device >= 0 && device < PLAYERS ? device : 0]; }
 
 void camera_set_bar_above(int above) { bar_above = above; }
 
-void camera_write(uint32_t address, const uint8_t *data, uint32_t bytes) {
-  for (uint32_t i = 0; i < bytes && address + i < REGISTERS; i++) registers[address + i] = data[i];
+void camera_write(int device, uint32_t address, const uint8_t *data, uint32_t bytes) {
+  for (uint32_t i = 0; i < bytes && address + i < REGISTERS; i++) camera(device)[address + i] = data[i];
 }
 
-void camera_read(uint32_t address, uint8_t *out, uint32_t bytes) {
-  for (uint32_t i = 0; i < bytes; i++) out[i] = address + i < REGISTERS ? registers[address + i] : 0;
+void camera_read(int device, uint32_t address, uint8_t *out, uint32_t bytes) {
+  for (uint32_t i = 0; i < bytes; i++) out[i] = address + i < REGISTERS ? camera(device)[address + i] : 0;
 }
 
-int camera_mode(void) { return registers[TRACKING] == TRACKING_ON ? registers[MODE] : 0; }
+int camera_mode(int device) { return camera(device)[TRACKING] == TRACKING_ON ? camera(device)[MODE] : 0; }
 
 // Pointing right moves the lights left in the camera's picture, and pointing down moves
 // them down, as the Wii Menu reads them.
@@ -53,8 +56,8 @@ void camera_dots(float pointer_x, float pointer_y, int dots[4][2]) {
 }
 
 // Basic: two dots in five bytes, twice. Extended: three bytes a dot.
-void camera_fill(float pointer_x, float pointer_y, uint8_t *out, uint32_t bytes) {
-  int dots[4][2], mode = camera_mode();
+void camera_fill(int device, float pointer_x, float pointer_y, uint8_t *out, uint32_t bytes) {
+  int dots[4][2], mode = camera_mode(device);
   memset(out, 0xff, bytes);
   if (mode != MODE_BASIC && mode != MODE_EXTENDED) return;  // Off, or full mode, which no data report carries.
   camera_dots(pointer_x, pointer_y, dots);
@@ -79,4 +82,4 @@ void camera_fill(float pointer_x, float pointer_y, uint8_t *out, uint32_t bytes)
   }
 }
 
-void camera_reset(void) { memset(registers, 0, sizeof registers); }
+void camera_reset(int device) { memset(camera(device), 0, REGISTERS); }
