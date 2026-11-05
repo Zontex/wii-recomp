@@ -38,7 +38,7 @@ python3 -m ruff check                    # Python lint, bug rules only (ruff.tom
 - **Fix causes by measurement**, comparing against Dolphin, one change at a time.
 - **Performance bar:** Wii Fit Plus holds 60 fps on the fixed benchmark (`recomp/tools/perf_run.py`, Mac only — reads `pmset`) plus a scripted Body Test walk. Only compare numbers from a quiet machine: screen unlocked, CPU speed limit 100, nothing building.
 - **No Nintendo data in the repo.** Discs (`*.rvz *.iso *.wbfs *.wad *.wrd`), `extracted/`, NAND/keys (`wii/`, `nand.bin`, `keys.bin`), recordings, screenshots, autoplay images and `pi_walk/ref/` images stay local. Never `git add -f` these.
-- Code taken from Dolphin must be listed in CREDITS.md (GPL-2.0-or-later).
+- The project is GPL-3.0-or-later. Code taken from Dolphin (GPL-2.0-or-later) or WiiCompiled (GPL-3.0) must be listed in CREDITS.md with the file it came from.
 
 ## Git
 

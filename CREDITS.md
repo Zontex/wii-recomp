@@ -1,6 +1,6 @@
 # Credits
 
-This project is licensed under the GNU General Public License, version 2 or later. See `LICENSE`.
+This project is licensed under the GNU General Public License, version 3 or later. See `LICENSE`. It moved from version 2 or later on 5 November 2026, so code from GPL-3.0 projects such as WiiCompiled can be used; Dolphin's GPL-2.0-or-later code allows that.
 
 - [Dolphin](https://github.com/dolphin-emu/dolphin) (GPL-2.0-or-later) is the reference for how the Wii's hardware behaves, through `docs/hardware_inventory.md`. Any code or tables taken from it must be listed here with the file they came from.
   - Texture sampling (`recomp/runtime/gx_draw.c`, `gx_texture.c`): the rules for which stored mip levels are read, the level of detail clamp where the largest level wins, and wrap mode 3 clamping follow `Source/Core/VideoCommon/RenderState.cpp` (`SamplerState::Generate`) and `TextureInfo.cpp`.
@@ -18,7 +18,7 @@ This project is licensed under the GNU General Public License, version 2 or late
   - Disc drive (`recomp/runtime/dvd.c`, `drive.c`): the drive request numbers, the open-partition buffers, and the unencrypted area's layout of partition table and region follow `Source/Core/Core/IOS/DI/DI.cpp` and `Source/Core/DiscIO/VolumeWii.cpp`.
   - NAND import (`recomp/tools/import_nand.py`): the backup's layout with its spare bytes, the SFFS superblock with its cluster chain and file tree, and decrypting each cluster with the console's NAND key follow `Source/Core/DiscIO/NANDImporter.cpp`.
   - Real Wii Remotes (`recomp/runtime/remote_link.c`, `remote_link_linux.c`, `remote_link_mac.c`): reaching a remote over raw L2CAP sockets on PSM 0x11 and 0x13, searching with the LAP for devices in pairing mode, and telling the board from a remote by its attachment ID at 0xa400fe follow `Source/Core/Core/HW/WiimoteReal/IOLinux.cpp` and `WiimoteReal.cpp` (`IsBalanceBoard`). Using IOKit's HID on the Mac follows Dolphin's move to `IOhidapi.cpp`.
-- [WiiCompiled](https://github.com/patchzyy/Wiicompiled) (GPL-3.0) showed two designs we built our own versions of, with none of its code: passing a physical Wii Remote's reports straight to the game's own Bluetooth code, and a flat guest memory at a fixed host address.
+- [WiiCompiled](https://github.com/patchzyy/Wiicompiled) (GPL-3.0). Any code taken from it must be listed here with the file it came from, as for Dolphin. Before the move to version 3 it showed two designs we built our own versions of, with none of its code: passing a physical Wii Remote's reports straight to the game's own Bluetooth code, and a flat guest memory at a fixed host address.
 - [Hector Martin (marcan)](https://github.com/marcan) and others documented the Wii Remote and its attachments.
 - [WiiBrew](https://wiibrew.org) and YAGCD document the hardware.
 
