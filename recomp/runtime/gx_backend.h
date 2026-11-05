@@ -113,6 +113,26 @@ typedef struct {
   void (*copy_depth)(GxTexture *to, const GxRectangle *from, int width, int height);
 
   void (*present)(const GxRectangle *from);
+
+  // Reading pictures back to the processor, for copies that land in memory and EFB peeks.
+  // Each read starts in order after the work sent before it and gives a ticket, 0 if it
+  // can't be done; finishing it waits if it must. Pixels come top row first: red, green,
+  // blue and alpha bytes, or a float from 0 to 1 for depth, and stay until the next read starts.
+  //   read_texture: a copy's texture whole, as stored, before its channels, at about
+  //                 `width` by `height`: shrunk to it, mixing neighbours if `smooth`.
+  //   read_picture: the picture itself at the Wii's own size, `area` in its pixels.
+  unsigned (*read_texture)(GxTexture *texture, int width, int height, int smooth);
+  unsigned (*read_picture)(int depth, const GxRectangle *area);
+  int (*read_ready)(unsigned ticket);  // Finished on the card, so finishing won't wait.
+  const void *(*read_finish)(unsigned ticket, int *width, int *height);
+  // EFB pokes: one of the game's pixels set to a color, red in the low byte, or a depth.
+  void (*poke)(int depth, int x, int y, uint32_t rgba, float depth_value);
+  // The bounding box, as four values from left, right, top, bottom: setting two of them
+  // from `first` in order with the draws, and reading all four, waiting for the card.
+  // Shaders written with their bounding box on widen it (gx_tev_write_shader). Null where
+  // shaders can't write to memory.
+  int (*bounding_box_set)(int first, int a, int b);  // 0 if it has none after all.
+  void (*bounding_box_get)(int values[4]);
 } GxBackend;
 
 // Shader text has no #version line. The backend puts its own first, with these:
@@ -120,6 +140,7 @@ typedef struct {
 //   GX_BLOCK(n)     before a uniform block: which block of constants_send it reads.
 //   GX_MAP(n)       before `uniform sampler2D mapN`: which texture map it reads.
 //   GX_DEPTH(z, w)  the clip space depth for the chip's z, which runs from -w to 0.
+//   GX_BOUNDING_BOX before the bounding box's buffer, where it has one.
 //   GX_NO_DUAL_SOURCE  defined where a shader can't have a second color output.
 // Blocks use std140, so the C structs must match that layout.
 

@@ -170,6 +170,10 @@ void vk_create_device(void) {
   wanted.dualSrcBlend = available.dualSrcBlend;
   vk.dual_source = available.dualSrcBlend == VK_TRUE;
   if (!vk.dual_source) fprintf(stderr, "vulkan: no dual-source blending, so constant alpha will blend slightly wrong\n");
+  // The bounding box: each pixel drawn widens it, from the shader.
+  wanted.fragmentStoresAndAtomics = available.fragmentStoresAndAtomics;
+  vk.bounding_box = available.fragmentStoresAndAtomics == VK_TRUE;
+  if (!vk.bounding_box) fprintf(stderr, "vulkan: shaders can't write to buffers, so the bounding box stays as the game set it\n");
   wanted.samplerAnisotropy = available.samplerAnisotropy;
   vk.max_anisotropy = available.samplerAnisotropy ? vk.limits.maxSamplerAnisotropy : 0;
   if (!vk.max_anisotropy) fprintf(stderr, "vulkan: no anisotropic filtering, so textures seen at a slope will blur more\n");
@@ -256,13 +260,20 @@ void vk_retire(VkImage image, VkImageView view, VkDeviceMemory memory) {
   frame->retired[frame->retired_count++] = (Retired){image, view, memory};
 }
 
-Ring vk_create_ring(VkDeviceSize size, VkBufferUsageFlags usage) {
+static Ring create_ring(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags wanted);
+
+Ring vk_create_ring(VkDeviceSize size, VkBufferUsageFlags usage) { return create_ring(size, usage, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT); }
+
+// The processor reads these, which is many times slower from memory it doesn't cache.
+Ring vk_create_read_ring(VkDeviceSize size) { return create_ring(size, VK_BUFFER_USAGE_TRANSFER_DST_BIT, VK_MEMORY_PROPERTY_HOST_CACHED_BIT); }
+
+static Ring create_ring(VkDeviceSize size, VkBufferUsageFlags usage, VkMemoryPropertyFlags wanted) {
   Ring ring = {.size = size};
   VkBufferCreateInfo info = {.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO, .size = size, .usage = usage};
   vk_check(vkCreateBuffer(vk.device, &info, 0, &ring.buffer), "creating a buffer");
   VkMemoryRequirements needs;
   vkGetBufferMemoryRequirements(vk.device, ring.buffer, &needs);
-  ring.memory = allocate(needs, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
+  ring.memory = allocate(needs, wanted, VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT | VK_MEMORY_PROPERTY_HOST_COHERENT_BIT);
   vk_check(vkBindBufferMemory(vk.device, ring.buffer, ring.memory, 0), "binding buffer memory");
   vk_check(vkMapMemory(vk.device, ring.memory, 0, VK_WHOLE_SIZE, 0, (void **)&ring.mapped), "mapping a buffer");
   return ring;

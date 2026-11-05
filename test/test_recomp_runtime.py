@@ -51,6 +51,9 @@ class Runtime(unittest.TestCase):
     def test_guest_memory_window(self):
         self.build_and_run([HERE / "c/test_guest_memory.c", RUNTIME / "guest_memory.c", RUNTIME / "memory_watch.c"])
 
+    def test_copy_encoding_and_efb_values(self):
+        self.build_and_run([HERE / "c/test_encode.c", RUNTIME / "gx_encode.c"])
+
     def test_interpreter_logs_each_address_once(self):
         program = self.compile(INTERPRETER)
         result = subprocess.run([str(program), "logs"], capture_output=True, text=True, timeout=20)

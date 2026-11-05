@@ -203,7 +203,7 @@ enum {
 void gx_text_add(ShaderText *text, const char *format, ...);
 unsigned gx_tev_read(TevKey *key, TevValues *values);
 void gx_tev_reads(const TevKey *key, unsigned *maps, unsigned *coordinates, unsigned *channels);
-void gx_tev_write_shader(const TevKey *key, ShaderText *text);
+void gx_tev_write_shader(const TevKey *key, int bounding_box, ShaderText *text);
 unsigned gx_tev_apply(TevKey *key);
 
 void gx_transform_read(TevKey *tev, VertexKey *key);
@@ -240,6 +240,25 @@ int gx_constant_alpha_used(void);
 int gx_blend_needs_second_output(const TevKey *key);
 struct GxTexture *gx_copy_find(int map);
 int gx_copy_is_depth(int map);
+// Picture copies reaching memory (gx_copy.c): the bytes of any copy overlapping a range
+// are filled in before the runtime reads it, and copies read before are fetched as each
+// picture is shown, so the processor finds them there.
+void gx_copy_prepare_read(uint32_t address, uint32_t bytes);
+void gx_copy_frame_shown(void);
+// EFB peeks, pokes and the bounding box (gx_efb.c), for hardware.c.
+int gx_efb_read(uint32_t address, int bytes, uint32_t *value);
+int gx_efb_write(uint32_t address, uint32_t value, int bytes);
+void gx_efb_changed(void);
+int gx_draw_started(void);  // The backend has started, so it can be asked to read.
+// The bounding box (gx_efb.c): on from a write to BP 0x55 or 0x56 until it's read or a
+// picture is shown, while every pixel drawn widens it.
+extern int gx_bounding_box_on;
+void gx_bounding_box_write(int reg, uint32_t data);
+int gx_bounding_box_read(uint32_t address, uint32_t *value);
+void gx_bounding_box_off(void);
+void gx_bounding_box_started(void);  // Sends what was set before the backend started.  // Anything drawn, cleared or poked, so peeks look again.
+// Runs work on the thread that owns the graphics backend, waiting for it (gx_fifo.c).
+void gx_run_on_graphics(void (*work)(void *), void *argument);
 // Frames shown so far, for work done once a frame.
 unsigned gx_frame_number(void);
 

@@ -68,6 +68,7 @@ static void start(void) {
   for (int i = 0; i < ATTRIBUTE_MATRIX_GROUPS; i++) attributes[count++] = (GxAttribute){ATTRIBUTE_MATRICES + i, 4, GX_ATTRIBUTE_BYTE, offsetof(Vertex, matrix) + (size_t)i * 4};
   gx_backend->start(attributes, count, sizeof(Vertex));
   started = 1;
+  gx_bounding_box_started();
   gx_recipes_start();
 }
 
@@ -333,9 +334,12 @@ int gx_output_is_opaque(void) {
   return mixed + least[3] >= 0.999f;
 }
 
+int gx_draw_started(void) { return started; }
+
 // Draws the vertices just decoded into the reserved room.
 void gx_draw(int primitive, int count) {
   if (!gx_draw_wanted(primitive, count)) return;  // Too many were left out.
+  gx_efb_changed();
   // What a draw works out from the registers is the same as the last draw's until one is
   // written, and in a model's display lists most draws follow one another with only
   // matrices and vertices between them. So the color stages, the transform's shape, the
@@ -487,6 +491,7 @@ void gx_clear(void) {
   if (!gx_target_has_alpha() && clear.color_write) clear.alpha_write = 1;
   clear.depth_write = (gx.bp[BP_Z_MODE] >> 4) & 1;
   gx_backend->clear(&clear);
+  gx_efb_changed();
 }
 
 // With WII_RECOMP_FPS_LOG set, the frames shown in each second of real time.
@@ -513,6 +518,8 @@ void gx_present(void) {
   GxRectangle from;
   gx_copy_rectangle(&from.x, &from.y, &from.width, &from.height);
   gx_backend->present(&from);
+  gx_efb_changed();  // A backend may hold the picture's pixels apart until it's shown.
+  gx_copy_frame_shown();
   watch_next_frame();
   if (++frames <= 3 || frames % 300 == 0) {
     fprintf(stderr, "frame %u: %u writes caught watching memory, list draws %u reused and %u decoded\n", frames, watch_faults(), gx_list_draws_reused, gx_list_draws_decoded);

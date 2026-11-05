@@ -17,7 +17,7 @@
 enum {
   COMMAND_BP = 0x61, BP_COMMAND_BYTES = 5, XF_REGISTERS_START = 0x1000,
   BP_DRAW_DONE = 0x45, BP_TOKEN = 0x47, BP_TOKEN_NOW = 0x48, BP_COPY_ORIGIN = 0x49, BP_COPY_SIZE = 0x4a, BP_COPY = 0x52,
-  BP_PRELOAD = 0x63, BP_LOAD_PALETTE = 0x65, BP_PERFORMANCE = 0x67, COPY_HEIGHT_SHIFT = 10,
+  BP_PRELOAD = 0x63, BP_BOUNDING_BOX = 0x55, BP_LOAD_PALETTE = 0x65, BP_PERFORMANCE = 0x67, COPY_HEIGHT_SHIFT = 10,
   PHYSICAL_MASK = 0x1fffffff, FRAME_NAME_DIGITS = 4,
   EXIT_USAGE = 2, EXIT_STOP = 10, RGB_BYTES = 3, RGBA_BYTES = 4,
 };
@@ -86,9 +86,10 @@ static void write_bp(uint32_t reg, uint32_t value) {
   gx_parse(command, sizeof command);
 }
 
-// Writing these does something once, rather than setting state.
+// Writing these does something once, rather than setting state. Setting the bounding box
+// also starts it widening, which only the game's own commands should do.
 static int bp_is_state(uint32_t reg) {
-  return reg != BP_DRAW_DONE && reg != BP_TOKEN && reg != BP_TOKEN_NOW && reg != BP_COPY
+  return reg != BP_BOUNDING_BOX && reg != BP_BOUNDING_BOX + 1 && reg != BP_DRAW_DONE && reg != BP_TOKEN && reg != BP_TOKEN_NOW && reg != BP_COPY
       && reg != BP_PRELOAD && reg != BP_LOAD_PALETTE && reg != BP_PERFORMANCE;
 }
 
@@ -160,6 +161,55 @@ static uint32_t parse_frame_limit(const char *text) {
   return (uint32_t)limit;
 }
 
+// What the processor would find once the frames are played, for tests: --poke address=value
+// writes a word of the picture (an EFB poke), --peek address reads one, and
+// --memory address:bytes:file saves guest memory, as the CPU reads it, to a file, and
+// --bounding-box 0 reads the PE's bounding box.
+enum { MOST_ACTIONS = 64 };
+static struct { char kind; uint32_t address, value; const char *file; } actions[MOST_ACTIONS];
+static int action_count;
+
+static int add_action(char kind, const char *text) {
+  if (action_count == MOST_ACTIONS) return 0;
+  char *end;
+  actions[action_count].kind = kind;
+  actions[action_count].address = (uint32_t)strtoul(text, &end, 0);
+  if (kind == 'w') {
+    if (*end != '=') return 0;
+    actions[action_count].value = (uint32_t)strtoul(end + 1, &end, 0);
+  } else if (kind == 'm') {
+    if (*end != ':') return 0;
+    actions[action_count].value = (uint32_t)strtoul(end + 1, &end, 0);
+    if (*end != ':' || !end[1]) return 0;
+    actions[action_count].file = end + 1;
+    end += strlen(end);
+  }
+  if (*end) return 0;
+  action_count++;
+  return 1;
+}
+
+static void run_actions(void) {
+  for (int i = 0; i < action_count; i++) {
+    if (actions[i].kind == 'w') {
+      gx_efb_write(actions[i].address, actions[i].value, 4);
+    } else if (actions[i].kind == 'b') {
+      uint32_t value[4] = {0, 0, 0, 0};
+      for (int side = 0; side < 4; side++) gx_bounding_box_read(0xcc001010u + (uint32_t)side * 2, &value[side]);
+      printf("bounding box %u %u %u %u\n", value[0], value[1], value[2], value[3]);
+    } else if (actions[i].kind == 'r') {
+      uint32_t value = 0;
+      gx_efb_read(actions[i].address, 4, &value);
+      printf("peek %08x = %08x\n", actions[i].address, value);
+    } else {
+      FILE *to = fopen(actions[i].file, "wb");
+      if (!to) stop_because("can't write memory to", actions[i].file);
+      for (uint32_t at = 0; at < actions[i].value; at++) fputc(rd8(actions[i].address + at), to);
+      fclose(to);
+    }
+  }
+}
+
 static double clock_ms(clockid_t clock) {
   struct timespec t;
   clock_gettime(clock, &t);
@@ -174,10 +224,15 @@ int main(int argc, char **argv) {
     if (i + 1 >= argc) bad = 1;
     else if (!strcmp(argv[i], "--frames")) limit = parse_frame_limit(argv[i + 1]);
     else if (!strcmp(argv[i], "--repeat")) repeats = parse_frame_limit(argv[i + 1]);
+    else if (!strcmp(argv[i], "--poke")) bad = !add_action('w', argv[i + 1]);
+    else if (!strcmp(argv[i], "--peek")) bad = !add_action('r', argv[i + 1]);
+    else if (!strcmp(argv[i], "--memory")) bad = !add_action('m', argv[i + 1]);
+    else if (!strcmp(argv[i], "--bounding-box")) bad = !add_action('b', argv[i + 1]);
     else bad = 1;
   }
   if (bad) {
     fprintf(stderr, "usage: %s <recording.dff> <folder for the frames> [--frames <count>] [--repeat <times>]\n"
+                    "       [--poke <address>=<value>] [--peek <address>] [--memory <address>:<bytes>:<file>] [--bounding-box 0]\n"
                     "  --repeat plays the frames again and again, saving the pictures only the first time, to time them.\n", argv[0]);
     return EXIT_USAGE;
   }
@@ -212,6 +267,7 @@ int main(int argc, char **argv) {
     save_png(path);
     saved++;
   }
+  run_actions();
   // Each turn after the first starts from the recording's memory and registers again, so
   // every turn draws the same. The first frame of a turn also brings all memory in.
   // Pictures aren't read back while timing, as a game never waits for that.

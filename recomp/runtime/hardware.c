@@ -9,6 +9,7 @@
 #include "audio.h"
 #include "cpu.h"
 #include "gaps.h"
+#include "gx.h"
 #include "hardware.h"
 #include "ios.h"
 
@@ -102,27 +103,16 @@ static int first_touch(const char *kind, uint32_t address, uint32_t value) {
 
 // Registers that only keep their values here, where a Wii would act, by inventory row.
 // The PE's z and alpha settings are left out, as every game sets them up and only EFB
-// peeks and pokes use them, which are reported themselves. AI volume only scales
+// pokes use them, which report what they don't follow (gx_efb.c). AI volume only scales
 // streamed disc audio, which Wii discs don't use.
 enum { READS = 1, WRITES = 2 };
 static const struct { uint32_t start, end; int on; const char *id; } unmodelled[] = {
-  {0xcc001010u, 0xcc001018u, READS, "gx.pe_bounding_box_0x10_0x16"},
   {0xcc001018u, 0xcc001030u, READS, "gx.pe_performance_counters"},
   {0xcc00202cu, 0xcc002030u, READS, "hw.beam_position_0x2c_0x2e"},
   {0xcc005004u, 0xcc005008u, READS, "hw.mail_from_dsp"},
 };
 
-// The picture's own memory (EFB) is checked on every access, as its addresses share
-// first_touch's map with the registers'. Others only the first time.
 static void note_unmodelled(uint32_t address, int on, int first) {
-  static int efb_said;
-  if ((address & 0x0f000000u) == 0x08000000u) {
-    if (!(efb_said & on)) {
-      efb_said |= on;
-      gap_hit(on == WRITES ? "pixel.efb_poke_cpu_writes" : "pixel.efb_peek_cpu_reads_color_depth", address);
-    }
-    return;
-  }
   if (!first) return;
   for (size_t i = 0; i < sizeof unmodelled / sizeof *unmodelled; i++) {
     if (address >= unmodelled[i].start && address < unmodelled[i].end && (unmodelled[i].on & on)) gap_hit(unmodelled[i].id, address);
@@ -296,7 +286,9 @@ static uint32_t dtv_status(void) {
 }
 
 uint32_t hw_read(uint32_t address, int bytes) {
-  uint32_t value = get(address, bytes);
+  uint32_t value;
+  if (gx_efb_read(address, bytes, &value)) return value;  // The picture's own memory: EFB peeks.
+  value = get(address, bytes);
   if (address == PI_CAUSE) value = interrupt_cause();
   else if (is_register(address, AI_SAMPLE_COUNT)) value = audio_samples();
   else if (is_register(address, VI_DTV_STATUS)) value = dtv_status();
@@ -308,6 +300,7 @@ uint32_t hw_read(uint32_t address, int bytes) {
 }
 
 void hw_write(uint32_t address, uint32_t value, int bytes) {
+  if (gx_efb_write(address, value, bytes)) return;
   note_unmodelled(address, WRITES, first_touch("write", address, value));
   if (address == PI_CAUSE) {
     cause &= ~value;

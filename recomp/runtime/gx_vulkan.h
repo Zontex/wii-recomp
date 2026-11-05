@@ -20,7 +20,7 @@ enum {
   TEXTURE_SETS_PER_POOL = 1024,
   COLOR_FORMAT = VK_FORMAT_R8G8B8A8_UNORM,
   DEPTH_FORMAT = VK_FORMAT_D32_SFLOAT,  // Available everywhere, unlike 24 bits. The picture only ever compares it.
-  SET_CONSTANTS = 0, SET_TEXTURES = 1, SET_COUNT = 2,
+  SET_CONSTANTS = 0, SET_TEXTURES = 1, SET_BOUNDING_BOX = 2, SET_COUNT = 3,
 };
 
 // One share of a buffer the processor writes and the card reads, used from the start each frame.
@@ -65,6 +65,7 @@ typedef struct {
   VkPhysicalDeviceLimits limits;
   PFN_vkCmdPushDescriptorSetKHR push_descriptors;  // Null where the driver lacks them.
   int depth_filters_linear, dual_source;
+  int bounding_box;  // Shaders can write to a buffer, which the bounding box needs.
   float max_anisotropy;  // 0 when the device can't filter along a slope.
 
   VkSwapchainKHR swapchain;
@@ -102,6 +103,7 @@ void vk_create_instance_and_surface(struct GLFWwindow *window);
 void vk_create_device(void);
 void vk_create_frames(void);
 Ring vk_create_ring(VkDeviceSize size, VkBufferUsageFlags usage);
+Ring vk_create_read_ring(VkDeviceSize size);  // For the card to write and the processor to read.
 void vk_create_swapchain(void);
 int vk_swapchain_matches_window(void);
 void vk_create_image(VkFormat format, VkImageUsageFlags usage, uint32_t width, uint32_t height, uint32_t levels,

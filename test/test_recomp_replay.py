@@ -78,6 +78,7 @@ def base_state(clear=BLUE):
     bp[0x4f] = (255 << 8) | clear[0]
     bp[0x50] = (clear[1] << 8) | clear[2]
     bp[0x51] = 0xffffff
+    bp[0x53], bp[0x54] = (21 << 12) | (22 << 18), 21  # The vertical copy filter passes each row unchanged.
     bp[0xc0] = (1 << 19) | (ZERO << 12) | (ZERO << 8) | (ZERO << 4) | RASTER_COLOR
     bp[0xc1] = (1 << 19) | (7 << 13) | (7 << 10) | (7 << 7) | (5 << 4)
     bp[0xf3] = (7 << 16) | (7 << 19)  # The alpha test always passes.

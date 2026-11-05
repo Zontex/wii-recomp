@@ -17,6 +17,8 @@ int ipc_write(uint32_t a, uint32_t v) { return 0; }
 int graphics_read(uint32_t a, uint32_t *v) { return 0; }
 int graphics_write(uint32_t a, uint32_t v, int n) { return 0; }
 void graphics_retrace(void) {}
+int gx_efb_read(uint32_t a, int n, uint32_t *v) { return 0; }
+int gx_efb_write(uint32_t a, uint32_t v, int n) { return 0; }
 static int resets_told, gaps;
 void stm_reset_button(void) { resets_told++; }
 void gap_hit(const char *id, uint32_t detail) { gaps++; }

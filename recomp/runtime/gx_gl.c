@@ -33,7 +33,7 @@ static const char *const block_names[CONSTANTS_BLOCKS] = {
 
 struct GxTexture {
   GLuint name;
-  int width, height;
+  int width, height, depth;
 };
 
 typedef struct {
@@ -366,6 +366,8 @@ static void blit_from(const GxRectangle *from, int width, int height, GLbitfield
 }
 
 static void copy_color(GxTexture *to, const GxRectangle *from, int width, int height, GxChannels channels, int smooth) {
+  if (to->depth) to->width = 0;  // A new image of its own kind.
+  to->depth = 0;
   prepare_copy(to, width, height, GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE);
   set_channels(channels);
   glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, to->name, 0);
@@ -374,6 +376,8 @@ static void copy_color(GxTexture *to, const GxRectangle *from, int width, int he
 }
 
 static void copy_depth(GxTexture *to, const GxRectangle *from, int width, int height) {
+  if (!to->depth) to->width = 0;
+  to->depth = 1;
   prepare_copy(to, width, height, GL_DEPTH_COMPONENT24, GL_DEPTH_COMPONENT, GL_UNSIGNED_INT);
   GxChannels channels = {GX_CHANNEL_RED, GX_CHANNEL_RED, GX_CHANNEL_RED, GX_CHANNEL_ONE};
   set_channels(channels);
@@ -399,6 +403,92 @@ static void present(const GxRectangle *from) {
   glBindFramebuffer(GL_FRAMEBUFFER, efb);
 }
 
+// Reading back. OpenGL waits for the card on each read, so every ticket is ready at
+// once. Copies' textures hold their top row first; the picture holds its bottom row first.
+enum { READ_SLOTS = 8 };
+static struct { unsigned ticket; int width, height; uint8_t *pixels; size_t size; } reads[READ_SLOTS];
+static unsigned next_ticket = 1;
+
+static int read_slot(int width, int height) {
+  int slot = (int)(next_ticket % READ_SLOTS);
+  size_t bytes = (size_t)width * (size_t)height * 4;
+  if (bytes > reads[slot].size) reads[slot].pixels = realloc(reads[slot].pixels, reads[slot].size = bytes);
+  reads[slot].ticket = next_ticket++;
+  reads[slot].width = width, reads[slot].height = height;
+  return slot;
+}
+
+static unsigned read_texture(GxTexture *t, int width, int height, int smooth) {
+  (void)width, (void)height, (void)smooth;  // Read whole: gx_copy.c picks each texel's pixels.
+  if (!t->width || !t->height) return 0;
+  int slot = read_slot(t->width, t->height);
+  glActiveTexture(GL_TEXTURE0 + SETUP_UNIT);
+  glBindTexture(GL_TEXTURE_2D, t->name);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  if (t->depth) glGetTexImage(GL_TEXTURE_2D, 0, GL_DEPTH_COMPONENT, GL_FLOAT, reads[slot].pixels);
+  else glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA, GL_UNSIGNED_BYTE, reads[slot].pixels);
+  return reads[slot].ticket;
+}
+
+// The picture is read at its own size, then each of the game's pixels takes the one at its middle.
+static unsigned read_picture(int depth, const GxRectangle *area) {
+  static uint8_t *whole;
+  static size_t whole_size;
+  if (area->width <= 0 || area->height <= 0 || area->x < 0 || area->y < 0 || area->x + area->width > EFB_WIDTH || area->y + area->height > EFB_HEIGHT) return 0;
+  int left = area->x * EFB_SCALE, bottom = (EFB_HEIGHT - area->y - area->height) * EFB_SCALE;
+  int width = (area->x + area->width) * EFB_SCALE - left, height = (EFB_HEIGHT - area->y) * EFB_SCALE - bottom;
+  size_t bytes = (size_t)width * (size_t)height * 4;
+  if (bytes > whole_size) whole = realloc(whole, whole_size = bytes);
+  glBindFramebuffer(GL_READ_FRAMEBUFFER, efb);
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  if (depth) glReadPixels(left, bottom, width, height, GL_DEPTH_COMPONENT, GL_FLOAT, whole);
+  else glReadPixels(left, bottom, width, height, GL_RGBA, GL_UNSIGNED_BYTE, whole);
+  int slot = read_slot(area->width, area->height);
+  for (int y = 0; y < area->height; y++) {
+    int from_y = height - 1 - (int)(((int64_t)y * 2 + 1) * height / (area->height * 2));
+    for (int x = 0; x < area->width; x++) {
+      int from_x = (int)(((int64_t)x * 2 + 1) * width / (area->width * 2));
+      memcpy(reads[slot].pixels + ((size_t)y * area->width + x) * 4, whole + ((size_t)from_y * width + from_x) * 4, 4);
+    }
+  }
+  return reads[slot].ticket;
+}
+
+static int read_ready(unsigned ticket) { return reads[ticket % READ_SLOTS].ticket == ticket; }
+
+static const void *read_finish(unsigned ticket, int *width, int *height) {
+  int slot = (int)(ticket % READ_SLOTS);
+  if (reads[slot].ticket != ticket) return 0;
+  *width = reads[slot].width, *height = reads[slot].height;
+  return reads[slot].pixels;
+}
+
+// A poke clears the pixels covering the game's one, with everything a clear follows put back after.
+static void poke(int depth, int x, int y, uint32_t rgba, float depth_value) {
+  GLboolean colors[4], depth_mask, scissor_on = glIsEnabled(GL_SCISSOR_TEST);
+  GLint scissor_box[4];
+  glGetBooleanv(GL_COLOR_WRITEMASK, colors);
+  glGetBooleanv(GL_DEPTH_WRITEMASK, &depth_mask);
+  glGetIntegerv(GL_SCISSOR_BOX, scissor_box);
+  glBindFramebuffer(GL_FRAMEBUFFER, efb);
+  glEnable(GL_SCISSOR_TEST);
+  int left = x * EFB_SCALE, bottom = (EFB_HEIGHT - y - 1) * EFB_SCALE;
+  glScissor(left, bottom, (x + 1) * EFB_SCALE - left, (EFB_HEIGHT - y) * EFB_SCALE - bottom);
+  if (depth) {
+    glDepthMask(GL_TRUE);
+    glClearDepth(depth_value);
+    glClear(GL_DEPTH_BUFFER_BIT);
+  } else {
+    glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+    glClearColor((rgba & 255) / 255.0f, ((rgba >> 8) & 255) / 255.0f, ((rgba >> 16) & 255) / 255.0f, (rgba >> 24) / 255.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+  }
+  glColorMask(colors[0], colors[1], colors[2], colors[3]);
+  glDepthMask(depth_mask);
+  glScissor(scissor_box[0], scissor_box[1], scissor_box[2], scissor_box[3]);
+  if (!scissor_on) glDisable(GL_SCISSOR_TEST);
+}
+
 const GxBackend gx_backend_opengl = {
   .name = "opengl",
   .window_prepare = window_prepare,
@@ -420,4 +510,9 @@ const GxBackend gx_backend_opengl = {
   .copy_color = copy_color,
   .copy_depth = copy_depth,
   .present = present,
+  .read_texture = read_texture,
+  .read_picture = read_picture,
+  .read_ready = read_ready,
+  .read_finish = read_finish,
+  .poke = poke,
 };

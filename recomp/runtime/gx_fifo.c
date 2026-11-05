@@ -5,9 +5,9 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
-#ifdef __linux__
 #include <pthread.h>
 #include <sched.h>
+#ifdef __linux__
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
@@ -17,6 +17,7 @@
 #include "debug.h"
 #include "title.h"
 #include "gx.h"
+#include "gx_backend.h"
 #include "gaps.h"
 #include "hardware.h"
 #include "memory_watch.h"
@@ -28,7 +29,7 @@ enum {
 };
 enum {
   BP_MASK = 0xfe, BP_DRAW_DONE = 0x45, BP_TOKEN = 0x47, BP_TOKEN_NOW = 0x48, BP_COPY = 0x52,
-  BP_LOAD_PALETTE = 0x65, BP_PIXEL_FORMAT = 0x43, PIXEL_FORMAT_MASK = 7, PIXEL_FORMAT_DEPTH = 3, BP_TEV_REGISTER = 0xe0, TEV_KONST_FLAG = 0x800000,
+  BP_LOAD_PALETTE = 0x65, BP_BOUNDING_BOX = 0x55, BP_PIXEL_FORMAT = 0x43, PIXEL_FORMAT_MASK = 7, PIXEL_FORMAT_DEPTH = 3, BP_TEV_REGISTER = 0xe0, TEV_KONST_FLAG = 0x800000,
   BP_GEN_MODE = 0x00, MULTISAMPLE_BIT = 9, Z_FREEZE_BIT = 19, BP_PRELOAD = 0x63,
   PIXEL_FORMAT_RGB565_Z16 = 2, PIXEL_FORMAT_Y8 = 4, DEPTH_FORMAT_SHIFT = 3,
 };
@@ -111,7 +112,6 @@ static void copy_gaps(uint32_t control) {
   if (to_screen && gamma) gap_hit("pixel.gamma_on_xfb_copy_1_0_1_7_2_2", gamma);
   if (to_screen && ((control >> 10) & 1) && y_scale != 0x100) gap_hit("pixel.copy_y_scale", y_scale);
   if (field) gap_hit("pixel.field_copy_frame_to_field", field);
-  if (!to_screen && ((control >> 15) & 1)) gap_hit("pixel.copy_intensity_rgb_to_yuv", (control >> 3) & 15);
 }
 
 // Pixel settings we don't follow, named as the game sets them. Bits from Dolphin's BPMemory.h.
@@ -158,6 +158,8 @@ static void write_bp(uint32_t value) {
     }
   } else if (reg == BP_LOAD_PALETTE) {
     gx_load_palette();
+  } else if (reg == BP_BOUNDING_BOX || reg == BP_BOUNDING_BOX + 1) {
+    gx_bounding_box_write((int)reg, gx.bp[reg]);
   } else if (reg == BP_COPY) {
     gx_stats.copies++;
     copy_gaps(data);
@@ -172,6 +174,7 @@ static void write_bp(uint32_t value) {
     }
     // The chip copies the picture out first, then clears for the next frame.
     if (data & (1u << COPY_TO_SCREEN_BIT)) {
+      gx_bounding_box_off();  // As Dolphin does at a copy to the screen.
       uint64_t present_start = time_base();
       TIMELINE_BEGIN("present");
       gx_present();
@@ -304,6 +307,21 @@ static int threaded = -1;
 #define EMPTY_SLEEP_NANOSECONDS 50000
 static uint8_t *ring;
 static _Atomic uint64_t ring_written, ring_parsed;
+static pthread_t commands_thread_id;
+
+// Work another thread hands the commands thread, such as a peek at the picture or
+// filling in a copy the processor touched. It runs once the commands before it have, or
+// once the rest are waiting on the processor, and the thread asking waits for it.
+static struct { void (*work)(void *); void *argument; } handed;
+static atomic_flag handing = ATOMIC_FLAG_INIT;
+static _Atomic int handed_waiting, handed_done;
+
+static void run_handed(void) {
+  if (!atomic_load_explicit(&handed_waiting, memory_order_acquire)) return;
+  handed.work(handed.argument);
+  atomic_store_explicit(&handed_waiting, 0, memory_order_relaxed);
+  atomic_store_explicit(&handed_done, 1, memory_order_release);
+}
 
 static void wait_briefly(void) {
   struct timespec pause = {0, EMPTY_SLEEP_NANOSECONDS};
@@ -317,6 +335,7 @@ static void *commands_thread(void *unused) {
   while (1) {
     uint64_t written = atomic_load_explicit(&ring_written, memory_order_acquire);
     uint32_t used = written == parsed ? 0 : parse_one(ring + (parsed & (RING_BYTES - 1)), (uint32_t)(written - parsed));
+    if (!used) run_handed();
     if (used) {
       parsed += used;
       atomic_store_explicit(&ring_parsed, parsed, memory_order_release);
@@ -344,8 +363,28 @@ static int start_commands_thread(void) {
   pthread_attr_t attributes;
   pthread_attr_init(&attributes);
   pthread_attr_setstacksize(&attributes, 16u * 1024u * 1024u);
-  pthread_t thread;
-  return pthread_create(&thread, &attributes, commands_thread, 0) == 0;
+  return pthread_create(&commands_thread_id, &attributes, commands_thread, 0) == 0;
+}
+
+static void lock_graphics(void);
+static void unlock_graphics(void);
+static int may_use_graphics(void);
+
+void gx_run_on_graphics(void (*work)(void *), void *argument) {
+  if (threaded <= 0 || pthread_equal(pthread_self(), commands_thread_id)) {
+    if (!may_use_graphics()) return;
+    lock_graphics();
+    work(argument);
+    unlock_graphics();
+    return;
+  }
+  while (atomic_flag_test_and_set_explicit(&handing, memory_order_acquire)) wait_briefly();
+  handed.work = work;
+  handed.argument = argument;
+  atomic_store_explicit(&handed_done, 0, memory_order_relaxed);
+  atomic_store_explicit(&handed_waiting, 1, memory_order_release);
+  while (!atomic_load_explicit(&handed_done, memory_order_acquire)) sched_yield();
+  atomic_flag_clear_explicit(&handing, memory_order_release);
 }
 
 int graphics_busy(void) {
@@ -360,12 +399,60 @@ static void ring_add(const uint8_t *bytes, uint32_t count) {
 }
 #else
 static int start_commands_thread(void) { return 0; }
+static void lock_graphics(void);
+static void unlock_graphics(void);
+static int may_use_graphics(void);
+
+void gx_run_on_graphics(void (*work)(void *), void *argument) {
+  if (!may_use_graphics()) return;
+  lock_graphics();
+  work(argument);
+  unlock_graphics();
+}
 int graphics_busy(void) { return 0; }
 static void ring_add(const uint8_t *bytes, uint32_t count) { (void)bytes; (void)count; }
 #endif
 
+// With no thread of their own, commands run on the game's, which holds this while it
+// runs them. Another thread that needs the backend, such as one touching a picture copy's
+// memory, waits for it to be between commands. OpenGL works only on the thread that made
+// it current, so there such a thread is refused and names it.
+static atomic_flag graphics_lock = ATOMIC_FLAG_INIT;
+static pthread_t lock_owner, first_runner;
+static _Atomic int lock_owned, first_runner_known;
+static int lock_depth;
+
+static void lock_graphics(void) {
+  if (atomic_load_explicit(&lock_owned, memory_order_acquire) && pthread_equal(lock_owner, pthread_self())) {
+    lock_depth++;
+    return;
+  }
+  while (atomic_flag_test_and_set_explicit(&graphics_lock, memory_order_acquire)) sched_yield();
+  lock_owner = pthread_self();
+  atomic_store_explicit(&lock_owned, 1, memory_order_release);
+  lock_depth = 1;
+  if (!atomic_load_explicit(&first_runner_known, memory_order_relaxed)) {
+    first_runner = pthread_self();
+    atomic_store_explicit(&first_runner_known, 1, memory_order_release);
+  }
+}
+
+static void unlock_graphics(void) {
+  if (--lock_depth) return;
+  atomic_store_explicit(&lock_owned, 0, memory_order_release);
+  atomic_flag_clear_explicit(&graphics_lock, memory_order_release);
+}
+
+static int may_use_graphics(void) {
+  if (!gx_backend || strcmp(gx_backend->name, "opengl") || !atomic_load_explicit(&first_runner_known, memory_order_acquire)) return 1;
+  if (pthread_equal(first_runner, pthread_self())) return 1;
+  gap_hit("pixel.copy_to_texture", 0x0e1u);  // OpenGL from another thread.
+  return 0;
+}
+
 static void run_stream(void) {
   uint32_t at = 0;
+  lock_graphics();
   while (at < stream_used && !held_at_token) {
     uint32_t used = parse_one(stream + at, stream_used - at);
     if (!used) break;
@@ -375,6 +462,7 @@ static void run_stream(void) {
     memmove(stream, stream + at, stream_used - at);
     stream_used -= at;
   }
+  unlock_graphics();
 }
 
 // The FIFO's end register is 4 bytes short of the true end, and writes arrive in
@@ -591,6 +679,7 @@ int graphics_read(uint32_t address, uint32_t *value) {
   else if (address == CP_DISTANCE_HIGH) *value = fifo_distance() >> 16;
   else if (address == CP_STATUS) *value = CP_IDLE | (at_breakpoint ? CP_STATUS_BREAK : 0) | fifo_flags;
   else if (address == PE_STATUS) *value = pe_enabled | pe_status;
+  else if (gx_bounding_box_read(address, value)) {}
   else if (address == PE_TOKEN_VALUE) {
     *value = pe_token;
     // The SDK's interrupt handler also reads it, which doesn't count. That read comes
