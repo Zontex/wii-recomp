@@ -41,6 +41,40 @@ The console keeps its controller settings in `controllers.ini`, in the console f
 
 With no changes, player 1 is the keyboard and mouse, and the remote has a Nunchuk. Default keys: arrows for the D-pad, Enter for A, Backspace for B, `1`, `2`, `=` for plus, `-` for minus, `H` for Home. The arrows also tilt the Classic Controller's left stick and the Nunchuk's stick, X, C, Z and V are the Classic Controller's L, R, ZL and ZR (in Mario Kart Wii, L uses an item and R drifts), and C and Z are the Nunchuk's C and Z. Q shakes the remote. F2 plugs the next attachment into the remote: none, a Nunchuk, a Classic Controller. The remote tells the game, as when one is plugged in by hand. The mouse is the pointer. Space steps on or off the board, and W, A, S, D lean. A control pipe takes the same buttons by name, `l`, `r`, `zl`, `zr`, `c` and `z` among them, and `stick x y`.
 
+### Switch controllers and other gamepads
+
+Controllers are read through SDL3 (`runtime/pads.c`). A controller that connects joins the first player whose `source` takes one, a player named by its serial number first. That player's remote calls the game, as switching a remote on does, and leaves when the controller does. With the defaults, the first controller is player 1 alongside the keyboard, and the next ones are players 2 to 4.
+
+| The remote has | Controller | Wii |
+| --- | --- | --- |
+| A Nunchuk, or nothing | A, B / ZR, Y, X | A, B, 1, 2 |
+| | Left stick, L, ZL | Nunchuk stick, C, Z |
+| | R | A shake |
+| | D-pad, +, −, Home | the same |
+| A Classic Controller | Every button and both sticks where a Nintendo controller has them | the same |
+| Held sideways (`sideways = yes`, or one Joy-Con alone) | the D-pad or stick turned a quarter, B, A, X, Y | the D-pad, 1, 2, A, B |
+
+- **Pointer.** The gyro moves it. Turning 20 degrees from the middle reaches the side of the screen, or less with a higher `gyro_speed`. Turning left and right counts about whichever way is up, however the controller is held. `recenter` (the right stick's click by default) brings it back to the middle. `pointer = stick` moves it with the right stick instead.
+- **Motion and drift.** The controller's motion and turn are the remote's. A Joy-Con pair moves as two hands: the right one is the remote and the left one the Nunchuk. The gyro's zero is taken again whenever the controller is still for a second, so the pointer doesn't drift.
+- **Outputs.** The game's rumble rumbles the controller, the remote's lit light shows as its player light, and its battery shows in the game's Home Menu.
+- **Linux setup.** On Linux, run `sudo recomp/tools/remotes_setup.sh pads` once so SDL reads Switch controllers itself, with their gyro and rumble.
+- **Switch 2 controllers** work by cable only, as SDL 3.4 starts them over USB.
+- **Linux limitation.** Setting up for real remotes turns off what wireless controllers connect through. So on Linux, until remotes are read another way, play with either real remotes or wireless Switch controllers, or with Switch controllers by cable.
+- **Mac.** Pair controllers in System Settings.
+
+`WII_RECOMP_INPUT_STATS=1` prints, every five seconds for each controller:
+- how many gyro samples arrived a second
+- how often the remote read its player
+- how old the newest sample was when it did, at the middle and the 99th percentile
+- the gyro's zero
+
+The control pipe drives virtual controllers through SDL, so scripts and tests take the same path as real ones:
+- `pad add pro` or `pad add joycons` adds one, numbered from 1; `pad remove <n>` removes it.
+- `pad press|hold|release <n> <button>` works its buttons (`a`, `b`, `x`, `y`, `l`, `r`, `zl`, `zr`, `plus`, `minus`, `home`, `capture`, `left_stick`, `right_stick`, `dpad_up` and so on).
+- `pad stick <n> left|right x y` tilts a stick.
+- `pad accel <n> x y z` (in g) and `pad gyro <n> x y z` (degrees a second, SDL's axes) set its motion.
+- `pad turn <n> <right> <up>` turns it by that many degrees.
+
 ### Real Wii Remotes and the Balance Board
 
 On the same `--virtual-bluetooth` builds, real remotes and a real board pass their reports straight to the game's own code, so the pointer, motion, attachments, rumble, the speaker and the board's sensors work with nothing simulated (`runtime/remote_link.c`). `WII_RECOMP_REMOTES` chooses:
@@ -110,6 +144,7 @@ Each frame of the recording gives one PNG, of its last copy to the screen. A fra
   - `guest_memory.h`, `guest_memory.c`: the Wii's memory, one window at a fixed host address. A load or store is a mask, one compare that sends the hardware block to `hardware.c`, and the access, and an access through the stack pointer skips the compare. Where a Wii has no memory, the first touch opens a zero page and is named in `gaps.txt` as `cpu.dsi_isi`. A real crash prints the faulting address and function first.
   - `threads.c`, `interrupts.c`: the game's threads, interrupts and clocks.
   - `hardware.c`: hardware registers.
+  - `pads.c`: host controllers through SDL3, and `pad_map.c`, how one stands in for a Wii Remote, with the gyro pointer.
   - `input.c`: the four players' controls and the board's weight, set by the keyboard, mouse and control pipe. `control_pipe.c` reads the pipe, and `input_direct.c` stands in for the game's own remote functions in builds without `--virtual-bluetooth`. `controllers.c` reads `controllers.ini` with `settings_file.c`, a small INI reader.
   - `bluetooth.c`, `bluetooth_channels.c`, `wii_remote.c`: the virtual Bluetooth chip and each slot's device. `remote_link.c` links real devices into the slots, through `remote_link_linux.c` or `remote_link_mac.c`, or `remote_link_loopback.c` for testing.
   - `audio.c`, `ax.c`, `audio_output_mac.c`: sound. `ax.c` does the audio processor's mixing from the game's own voices and command lists, `audio.c` paces it and hands samples to the output thread, and the output file is the only per-platform part.

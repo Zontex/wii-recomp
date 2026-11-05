@@ -11,6 +11,7 @@
 
 #include "controllers.h"
 #include "gx_backend.h"
+#include "pads.h"
 #include "input.h"
 
 enum { WINDOW_WIDTH = 1280, WINDOW_HEIGHT = 720 };
@@ -123,6 +124,9 @@ void window_size(int *width, int *height) {
 }
 
 void window_run(void) {
-  while (!glfwWindowShouldClose(window)) glfwWaitEventsTimeout(0.05);
+  while (!glfwWindowShouldClose(window)) {
+    glfwWaitEventsTimeout(pads_wait_seconds());
+    pads_poll();
+  }
   exit(0);
 }

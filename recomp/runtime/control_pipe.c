@@ -17,11 +17,12 @@
 #include "gx.h"
 #include "hardware.h"
 #include "input.h"
+#include "pads.h"
 
 static void run_command(const char *line) {
   char path[1024];
   int first, last;
-  if (input_run_command(line)) return;
+  if (input_run_command(line) || pads_command(line)) return;
   if (!strncmp(line, "reset", 5)) reset_button_press();
   else if (!strncmp(line, "dump", 4)) gx_inspect_dump();
   else if (sscanf(line, "record %d %1023s", &first, path) == 2) gx_record_request(first, path);

@@ -28,8 +28,8 @@ Statuses:
 | 5. Hardware blocks | 25 | 12 | 6 | 0 | 6 | 16 | 65 |
 | 6. Audio microcodes | 9 | 3 | 7 | 0 | 0 | 3 | 22 |
 | 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
-| 8. Controllers | 45 | 8 | 5 | 0 | 5 | 2 | 65 |
-| **All** | **346** | **102** | **45** | **4** | **36** | **56** | **589** |
+| 8. Controllers | 49 | 7 | 5 | 0 | 5 | 2 | 68 |
+| **All** | **350** | **101** | **45** | **4** | **36** | **56** | **592** |
 
 ## Biggest gaps
 
@@ -777,7 +777,10 @@ The AX work is rewritten in C. There's no DSP interpreter, so each program needs
 | `ctl.kpadread_replacement` | `KPADRead` replacement | partial | `runtime/input_direct.c` | Player n's remote on channel n, the board on channel 3 in games with one. Fixed motion. An older SDK layout reports no samples (`system_functions.json`). |
 | `ctl.wpadprobe_replacement` | `WPADProbe` replacement | done | `runtime/input_direct.c` | A channel is connected while its player is. |
 | `ctl.balance_board` | Balance Board | done | `runtime/input.c`, `runtime/input_direct.c` | Through signature-matched functions. Only for games with the board library. |
-| `ctl.host_input` | Host input | partial | `runtime/input.c`, `runtime/controllers.c`, `runtime/control_pipe.c`, `runtime/window.c` | Four players' controls, set up from `controllers.ini`. The keyboard (with keys from the settings) and mouse drive one player each; the control pipe drives any player (`p2 press a`). No host controllers yet. |
+| `ctl.host_input` | Host input | done | `runtime/input.c`, `runtime/controllers.c`, `runtime/control_pipe.c`, `runtime/window.c`, `runtime/pads.c` | Four players' controls, set up from `controllers.ini`. The keyboard (with keys from the settings) and mouse drive one player each, host controllers any; the control pipe drives any player (`p2 press a`). |
+| `ctl.host_controllers` | Host controllers (SDL3) | done | `runtime/pads.c`, `runtime/pad_map.c` | Switch Pro Controllers, Joy-Cons (a pair as one, one alone held sideways), Switch 2 controllers by cable, and other gamepads, as a remote with a Nunchuk, a Classic Controller, or a remote held sideways. Each joins the first player whose settings take one, by serial number first; that player's remote calls the console, and leaves when the controller does. Tested with SDL's virtual controllers; real ones wait for hardware. |
+| `ctl.host_gyro_pointer` | Gyro pointer and motion | done | `runtime/pad_map.c` (`pad_pointer_update`, `pad_roll`) | Turning left and right is about whichever way is up; the gyro's zero is retaken whenever the controller is still for a second. The remote's motion, roll and a Joy-Con pair's Nunchuk motion come from the controllers' accelerometers. |
+| `ctl.host_controller_outputs` | Rumble, lights and battery on host controllers | done | `runtime/pads.c` (`show_outputs`) | The game's rumble, the remote's first lit light as the controller's player light, and the controller's battery in the remote's status. |
 
 ### Bluetooth stack
 
@@ -852,5 +855,5 @@ The AX work is rewritten in C. There's no DSP interpreter, so each program needs
 | `ctl.shinkansen_controller` | Shinkansen controller | not needed |  | One game in Japan. |
 | `ctl.wii_motionplus` | Wii MotionPlus | missing | `runtime/wii_remote.c:76` | Reports no device. |
 | `ctl.balance_board_over_bluetooth` | Balance Board over Bluetooth | done | `runtime/wii_board.c`, `runtime/bluetooth.c`, `runtime/remote_link.c` | A real board takes slot 5, found by name or by its attachment ID `04 02`. Otherwise the simulated board, in games with a calibration flag. |
-| `ctl.real_wii_remotes_wiimotereal` | Real Wii Remotes (`WiimoteReal`) | partial | `runtime/remote_link.c`, `remote_link_linux.c`, `remote_link_mac.c` | Remotes and the board pass their reports straight to the game's own code. Linux uses raw L2CAP sockets, the Mac IOKit's HID. Tested with a loopback stand-in and fake sockets; not yet with a real remote. |
+| `ctl.real_wii_remotes_wiimotereal` | Real Wii Remotes (`WiimoteReal`) | partial | `runtime/remote_link.c`, `remote_link_linux.c`, `remote_link_mac.c` | Remotes and the board pass their reports straight to the game's own code. Linux uses raw L2CAP sockets, the Mac IOKit's HID. Tested with a loopback stand-in and fake sockets; not yet with a real remote. On Linux the setup turns bluetoothd's input plugin off, which wireless Switch controllers need, so the two don't yet work wirelessly together (`remotes_setup.sh`). |
 | `ctl.passthrough_bluetooth_adapter` | Passthrough Bluetooth adapter | not needed |  |  |

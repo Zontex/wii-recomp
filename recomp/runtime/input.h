@@ -45,6 +45,10 @@ void input_pointer(int player, float x, float y);
 void input_stick(int player, float x, float y);  // The left stick, -1 to 1 with y growing up.
 void input_snapshot(int player, PlayerState *out);
 uint32_t input_buttons(int player);
+// A host controller's share of a player's buttons, kept apart from the keyboard's holds so
+// each lets go of only its own.
+void input_pad_buttons(int player, uint32_t buttons);
+void input_classic_sticks(int player, const float left[2], const float right[2]);
 void input_motion(int player, const float accel[3], float roll);  // Both at once, from a controller's sensors.
 void input_accel(int player, const float accel[3]);
 void input_roll(int player, float roll);
@@ -57,6 +61,15 @@ void input_attach(int player, Attachment attachment);
 Attachment input_attachment(int player);
 const char *input_attachment_name(Attachment attachment);
 int input_attachment_named(const char *name, Attachment *out);  // 0 if the name isn't one.
+
+// For measuring (WII_RECOMP_INPUT_STATS): a controller marks each sample it gives a
+// player, and each snapshot the remote takes after one counts how old it was by then.
+typedef struct {
+  int snapshots, samples_seen;
+  float age_p50_ms, age_p99_ms;
+} InputStats;
+void input_pad_sampled(int player);
+InputStats input_stats(int player);  // Since the last call.
 
 // What the game does to a player's remote: rumble on or off, which of the four lights
 // are lit (bit 0 the first), and the battery level the remote reports (0 to 1).

@@ -1,4 +1,5 @@
 """Rarely used IOS and Bluetooth requests, each answered as a Wii would, in small C harnesses."""
+import os
 import shutil
 import subprocess
 import sys
@@ -63,6 +64,26 @@ class RareRequests(unittest.TestCase):
         sources = [HERE / "c/test_controllers.c"] + [RUNTIME / name for name in ("controllers.c", "settings_file.c", "input.c")]
         result = self.build_and_run(sources, self.folder)
         self.assertIn("controllers: wrote", result.stderr)
+
+    def test_controller_mapping_and_gyro_pointer(self):
+        self.build_and_run([HERE / "c/test_pad_map.c", RUNTIME / "pad_map.c"])
+
+    def test_controllers_through_sdl(self):
+        sys.path.insert(0, str(HERE.parent / "recomp/translate"))
+        import build_file
+        compile_flags, link_flags = build_file.sdl3_flags()
+        sources = [HERE / "c/test_pads_virtual.c"] + [RUNTIME / name for name in ("pads.c", "pad_map.c", "input.c", "controllers.c", "settings_file.c")]
+        program = self.folder / "program"
+        subprocess.run(["clang", *map(str, sources), *FLAGS, *compile_flags.split(), *link_flags.split(), "-o", str(program)], check=True)
+        result = subprocess.run([str(program)], capture_output=True, text=True, timeout=60, env={**os.environ, "SDL_JOYSTICK_HIDAPI": "0"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(result.stdout.endswith("ok\n"), result.stdout)
+        self.assertIn("controllers: Virtual Pro Controller is player 1, with its gyro as the pointer", result.stderr)
+        self.assertIn("controllers: Virtual Joy-Con pair is player 2", result.stderr)
+        self.assertIn("control: virtual controller 1 rumbles", result.stderr)
+        self.assertIn("control: virtual controller 1 stops rumbling", result.stderr)
+        self.assertIn("control: virtual controller 1 shows player light 2", result.stderr)
+        self.assertIn("control: there's no virtual controller 1", result.stderr)
 
     @unittest.skipUnless(sys.platform == "linux", "Linux's Bluetooth backend")
     def test_linux_remote_sockets(self):

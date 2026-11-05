@@ -16,7 +16,7 @@ static const float SHAKE_G = 2.5f;  // Well past what KPAD counts as a shake.
 
 typedef struct {
   int connected, attachment_chosen;
-  uint32_t held, pulsed;
+  uint32_t held, pulsed, pad;
   uint64_t pulse_until, shake_until;
   float pointer_x, pointer_y, roll;
   float sticks[4];
@@ -24,6 +24,9 @@ typedef struct {
   Attachment attachment;
   PlayerOutputs outputs;
   float battery;
+  uint64_t sampled_at, sample_seen;
+  int snapshots, ages_count;
+  float ages[1024];  // Milliseconds from a controller's sample to the snapshot that took it.
 } Player;
 
 #define AT_REST {0, 0, 1}
@@ -91,7 +94,22 @@ void input_stick(int player, float x, float y) {
 // Called with the lock held.
 static uint32_t current_buttons(Player *p) {
   if (p->pulsed && time_base() >= p->pulse_until) p->pulsed = 0;
-  return p->held | p->pulsed;
+  return p->held | p->pulsed | p->pad;
+}
+
+void input_pad_buttons(int player, uint32_t buttons) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].pad = buttons;
+  pthread_mutex_unlock(&lock);
+}
+
+void input_classic_sticks(int player, const float left[2], const float right[2]) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  memcpy(players[player].sticks, left, sizeof(float) * 2);
+  memcpy(players[player].sticks + 2, right, sizeof(float) * 2);
+  pthread_mutex_unlock(&lock);
 }
 
 static const char *attachment_names[ATTACHMENT_KINDS] = {"none", "nunchuk", "classic"};
@@ -129,6 +147,11 @@ void input_snapshot(int player, PlayerState *out) {
   memcpy(out->nunchuk_stick, p->nunchuk_stick, sizeof out->nunchuk_stick);
   memcpy(out->nunchuk_accel, p->nunchuk_accel, sizeof out->nunchuk_accel);
   out->attachment = attachment_of(p);
+  p->snapshots++;
+  if (p->sampled_at != p->sample_seen) {
+    p->sample_seen = p->sampled_at;
+    if (p->ages_count < (int)(sizeof p->ages / sizeof *p->ages)) p->ages[p->ages_count++] = (float)(now - p->sampled_at) / TICKS_PER_MS;
+  }
   // A shake swings the remote back and forth along its length.
   if (now < p->shake_until) out->accel[1] += (now / (SHAKE_SWING_MS * TICKS_PER_MS)) % 2 ? SHAKE_G : -SHAKE_G;
   pthread_mutex_unlock(&lock);
@@ -355,4 +378,35 @@ int input_run_command(const char *line) {
     input_board(!strcmp(word, "on"), kilograms, x, y);
   } else return 0;
   return 1;
+}
+
+void input_pad_sampled(int player) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].sampled_at = time_base();
+  pthread_mutex_unlock(&lock);
+}
+
+static int by_size(const void *a, const void *b) {
+  float x = *(const float *)a, y = *(const float *)b;
+  return (x > y) - (x < y);
+}
+
+InputStats input_stats(int player) {
+  InputStats stats = {0};
+  if (!valid(player)) return stats;
+  static float ages[1024];
+  pthread_mutex_lock(&lock);
+  Player *p = &players[player];
+  stats.snapshots = p->snapshots;
+  stats.samples_seen = p->ages_count;
+  memcpy(ages, p->ages, sizeof(float) * (size_t)p->ages_count);
+  p->snapshots = p->ages_count = 0;
+  pthread_mutex_unlock(&lock);
+  if (stats.samples_seen) {
+    qsort(ages, (size_t)stats.samples_seen, sizeof *ages, by_size);
+    stats.age_p50_ms = ages[stats.samples_seen / 2];
+    stats.age_p99_ms = ages[(stats.samples_seen * 99) / 100];
+  }
+  return stats;
 }

@@ -14,6 +14,7 @@
 #include "console.h"
 #include "controllers.h"
 #include "input.h"
+#include "pads.h"
 #include "cpu.h"
 #include "dispatch.h"
 #include "drive.h"
@@ -170,6 +171,7 @@ int main(int count, char **arguments) {
   pthread_attr_setstacksize(&attributes, STACK_BYTES);
   controllers_start();
   window_create();
+  pads_start();  // On this thread, which the Mac's controller frameworks need, as the window does.
   if (getenv("WII_RECOMP_CONTROL")) input_start_control_pipe(getenv("WII_RECOMP_CONTROL"));
   pthread_t thread;
   pthread_create(&thread, &attributes, run, 0);

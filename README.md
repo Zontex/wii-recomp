@@ -69,14 +69,15 @@ You can play a game **directly**, which starts one game in a window and is the q
 
 ### 1. Install the tools
 
-You need `clang`, `ninja`, Python 3, GLFW, the Vulkan loader and shaderc.
+You need `clang`, `ninja`, Python 3, GLFW, the Vulkan loader, shaderc, and SDL3 for controllers.
 
 ```sh
 # macOS (Xcode's command line tools provide clang)
-brew install ninja glfw molten-vk vulkan-loader shaderc
+brew install ninja glfw molten-vk vulkan-loader shaderc sdl3
 
 # Raspberry Pi OS
 sudo apt install clang ninja-build python3 libglfw3-dev libvulkan-dev mesa-vulkan-drivers libshaderc-dev libasound2-dev
+recomp/tools/sdl3_setup.sh   # SDL3 new enough for Switch 2 controllers; --prefix ~/.local needs no root
 ```
 
 On a Mac you can install the LunarG Vulkan SDK instead, and set `VULKAN_SDK` to its folder. `import_nand.py` also needs Python's `cryptography` package (`python3 -m pip install cryptography`).
