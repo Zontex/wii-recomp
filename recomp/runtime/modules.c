@@ -7,8 +7,6 @@
 #include "modules.h"
 #include "title.h"
 
-enum { SECTION_TABLE = 0x0c, SECTION_COUNT = 0x08, HEADER_TABLE_AT = 0x58 };
-
 static int is_guest(uint32_t address) { return address >= 0x80000000u && address < 0x81800000u; }
 
 static uint64_t code_check(const Module *module, uint32_t code) {
@@ -28,9 +26,10 @@ static uint64_t code_check(const Module *module, uint32_t code) {
 static int looks_linked(const Module *module, uint32_t code, uint32_t *header) {
   *header = code - module->code_at;
   if (!is_guest(*header) || !is_guest(code + module->code_bytes - 1)) return 0;
-  if (rd32(*header + SECTION_COUNT) != module->section_count) return 0;
-  uint32_t table = rd32(*header + SECTION_TABLE);
-  if (table != *header + HEADER_TABLE_AT) return 0;
+  if (module->id && rd32(*header) != module->id) return 0;
+  if (rd32(*header + module->count_field) != module->section_count) return 0;
+  uint32_t table = rd32(*header + module->table_field);
+  if (table != *header + module->table_offset) return 0;
   return (rd32(table + module->code_section * 8) & ~1u) == code;
 }
 
@@ -42,14 +41,19 @@ static uint32_t branch_target(uint32_t at) {
 
 static void bind(const Module *module, uint32_t code, uint32_t header) {
   *module->code = code;
-  uint32_t table = rd32(header + SECTION_TABLE);
+  uint32_t table = rd32(header + module->table_field);
   for (uint32_t i = 0; i < module->section_count; i++) module->sections[i] = rd32(table + i * 8) & ~1u;
   for (int i = 0; i < module->import_count; i++) {
     const ImportSite *site = &module->imports[i];
-    if (site->kind == 1) module->import_addresses[i] = branch_target(code + site->first);
+    if (site->kind == 1 || site->kind == 3) module->import_addresses[i] = branch_target(code + site->first);
     else if (site->kind == 2) {
       uint32_t high = rd32(code + site->first) & 0xffff, low = rd32(code + site->second) & 0xffff;
       module->import_addresses[i] = (high << 16) + (uint32_t)(int32_t)(int16_t)low - site->addend;
+    }
+    if (site->kind == 3 && module->import_addresses[i] != site->expected) {
+      fprintf(stderr, "stop: module %s branches to %08x at %x, where it was translated to call %08x\n", module->name,
+              module->import_addresses[i], site->first, site->expected);
+      exit(4);
     }
     if (site->kind == 1 && !translated_at(module->import_addresses[i])) {
       fprintf(stderr, "stop: module %s calls %08x, which has no native code\n", module->name, module->import_addresses[i]);

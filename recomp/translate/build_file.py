@@ -13,6 +13,7 @@ holding the Vulkan libraries and headers, if they aren't installed system-wide.
 """
 import hashlib
 import os
+import re
 import sys
 from glob import glob
 from pathlib import Path
@@ -94,7 +95,7 @@ def main():
     for source in generated:
         target = f"obj/{source.stem}.o"
         # Hidden, so calls within the title stay direct; only its description is exported.
-        optimization = QUICK_OPTIMIZATION if source.name.startswith("cold") else GAME_OPTIMIZATION
+        optimization = QUICK_OPTIMIZATION if re.match(r"(m\d+_)?cold", source.name) else GAME_OPTIMIZATION
         lines.append(f"build {target}: cc generated/{source.name}\n  cflags = {optimization} {FLAGS} -fPIC -fvisibility=hidden {interface}")
         title_objects.append(target)
     for source in sorted(Path(build / "../runtime").glob("*.c")):

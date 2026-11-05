@@ -72,13 +72,16 @@ void attachment_classic_state(uint8_t *to, uint32_t buttons, const float sticks[
   static const struct { uint32_t remote; int byte, bit; } map[] = {
     {BUTTON_A, 5, 4}, {BUTTON_B, 5, 6}, {BUTTON_ONE, 5, 3}, {BUTTON_TWO, 5, 5}, {BUTTON_UP, 5, 0}, {BUTTON_LEFT, 5, 1},
     {BUTTON_DOWN, 4, 6}, {BUTTON_RIGHT, 4, 7}, {BUTTON_PLUS, 4, 2}, {BUTTON_MINUS, 4, 4}, {BUTTON_HOME, 4, 3},
+    {BUTTON_CLASSIC_L, 4, 5}, {BUTTON_CLASSIC_R, 4, 1}, {BUTTON_CLASSIC_ZL, 5, 7}, {BUTTON_CLASSIC_ZR, 5, 2},
   };
   uint32_t left_x = (uint32_t)((sticks[0] + 1) / 2 * STICK_LEFT_RANGE + 0.5f), left_y = (uint32_t)((sticks[1] + 1) / 2 * STICK_LEFT_RANGE + 0.5f);
   uint32_t right_x = (uint32_t)((sticks[2] + 1) / 2 * STICK_RIGHT_RANGE + 0.5f), right_y = (uint32_t)((sticks[3] + 1) / 2 * STICK_RIGHT_RANGE + 0.5f);
   to[0] = (uint8_t)((right_x >> 3) << 6 | left_x);
   to[1] = (uint8_t)(((right_x >> 1) & 3) << 6 | left_y);
-  to[2] = (uint8_t)((right_x & 1) << 7 | right_y);
-  to[3] = 0;
+  // A held shoulder button is also pressed all the way down.
+  uint32_t left_trigger = buttons & BUTTON_CLASSIC_L ? 31 : 0, right_trigger = buttons & BUTTON_CLASSIC_R ? 31 : 0;
+  to[2] = (uint8_t)((right_x & 1) << 7 | (left_trigger >> 3) << 5 | right_y);
+  to[3] = (uint8_t)((left_trigger & 7) << 5 | right_trigger);
   to[4] = to[5] = 0xff;
   for (size_t i = 0; i < sizeof map / sizeof map[0]; i++) {
     if (buttons & map[i].remote) to[map[i].byte] &= (uint8_t)~(1u << map[i].bit);

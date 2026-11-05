@@ -25,7 +25,7 @@ python3 recomp/tools/prepare_console.py wii/nand console --menu recomp/build-men
 cp game.wrd console/drive/ && recomp/build/wii-recomp --console console
 ```
 
-Keys: arrows for the D-pad, Enter for A, Backspace for B, `1`, `2`, `=` for plus, `-` for minus, `H` for Home. The mouse is the pointer. Space steps on or off the board, and W, A, S, D lean.
+Keys: arrows for the D-pad, Enter for A, Backspace for B, `1`, `2`, `=` for plus, `-` for minus, `H` for Home. The arrows also tilt the Classic Controller's left stick, and X, C, Z and V are its L, R, ZL and ZR (in Mario Kart Wii, L uses an item and R drifts). The mouse is the pointer. Space steps on or off the board, and W, A, S, D lean. A control pipe takes the same buttons by name, `l`, `r`, `zl` and `zr` among them, and `stick x y`.
 
 A game built with `emit.py --virtual-bluetooth` reads the simulated Wii Remote and Balance Board through its own Bluetooth code. That remote has a Classic Controller plugged in; set `WII_RECOMP_ATTACHMENT=none` to unplug it, as a game such as Wii Fit Plus expects, since with one plugged in it turns its pointer off and its Home Menu waits for Classic Controller buttons.
 
@@ -87,6 +87,7 @@ Each frame of the recording gives one PNG, of its last copy to the screen. A fra
 
 - `translate/decode.py` names each instruction.
 - `translate/functions.py` finds the functions.
+- `translate/modules.py` reads the modules a program loads at run time, the Wii Menu's RSOs and the REL modules most games keep the bulk of their code in, and prepares their code for translation wherever they end up loaded. `emit.py` translates every module it finds in `sys/modules` and in the disc's files, and `runtime/modules.c` checks each one, once the game links it, against what was translated.
 - `translate/emit.py` writes the C. Its `REPLACED` list holds system functions we skip on purpose, and `IDLE_LOOPS` holds waits that sleep instead of spinning.
 - `runtime/` holds the native side:
   - `main.c`, `loader.c`: start-up and loading the game.

@@ -243,6 +243,7 @@ static uint32_t button_named(const char *name) {
   static const struct { const char *name; uint32_t bit; } names[] = {
     {"left", BUTTON_LEFT}, {"right", BUTTON_RIGHT}, {"down", BUTTON_DOWN}, {"up", BUTTON_UP}, {"plus", BUTTON_PLUS},
     {"two", BUTTON_TWO}, {"one", BUTTON_ONE}, {"b", BUTTON_B}, {"a", BUTTON_A}, {"minus", BUTTON_MINUS}, {"home", BUTTON_HOME},
+    {"l", BUTTON_CLASSIC_L}, {"r", BUTTON_CLASSIC_R}, {"zl", BUTTON_CLASSIC_ZL}, {"zr", BUTTON_CLASSIC_ZR},
   };
   for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
     if (!strcmp(name, names[i].name)) return names[i].bit;

@@ -24,6 +24,8 @@ static void on_key(GLFWwindow *from, int key, int scancode, int action, int mods
     {GLFW_KEY_LEFT, BUTTON_LEFT}, {GLFW_KEY_RIGHT, BUTTON_RIGHT}, {GLFW_KEY_UP, BUTTON_UP}, {GLFW_KEY_DOWN, BUTTON_DOWN},
     {GLFW_KEY_ENTER, BUTTON_A}, {GLFW_KEY_BACKSPACE, BUTTON_B}, {GLFW_KEY_1, BUTTON_ONE}, {GLFW_KEY_2, BUTTON_TWO},
     {GLFW_KEY_EQUAL, BUTTON_PLUS}, {GLFW_KEY_MINUS, BUTTON_MINUS}, {GLFW_KEY_H, BUTTON_HOME},
+    // The Classic Controller's shoulders: in Mario Kart, L uses an item and R drifts.
+    {GLFW_KEY_X, BUTTON_CLASSIC_L}, {GLFW_KEY_C, BUTTON_CLASSIC_R}, {GLFW_KEY_Z, BUTTON_CLASSIC_ZL}, {GLFW_KEY_V, BUTTON_CLASSIC_ZR},
   };
   for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
     if (key == keys[i].key) input_hold(keys[i].button, action == GLFW_PRESS);
