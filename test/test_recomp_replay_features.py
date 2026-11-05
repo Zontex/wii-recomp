@@ -905,6 +905,38 @@ class DepthRange(Scene):
         self.scene(self.HALF, 2.0 * 0xffffff)
         self.assertIn("viewport depth past the depth buffer", self.log)
 
+    def depth_through(self, *betweens):
+        """Four frames: a near red quad, then one of `betweens` in turn, then a far green quad tested against it.
+        A pass whose draws leave depth alone runs with a scratch depth picture, so the real one
+        must come through it untouched, frame after frame, as each frame learns from the last."""
+        state = base_state()
+        state[0][0x40] = 1 | (1 << 1) | (1 << 4)  # So the player's opening clear clears depth too.
+        tested = bp_command(0x40, 1 | (1 << 1) | (1 << 4))
+        near = tested + quad(self.RED)  # In front, at a quarter.
+        far = tested + self.depth_range(self.HALF, 0xffffff) + quad(self.GREEN, 150, 150, 350, 350) + self.depth_range(self.HALF, self.HALF)
+        recording, out = self.folder / "scene.dff", self.folder / "frames"
+        write_dff(recording, state, [(near + betweens[i % len(betweens)] + far + show_frame(), []) for i in range(4)])
+        result = replay(recording, out)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.log = result.stderr
+        for i in range(1, 4):  # The first frame starts from the player's own opening clear.
+            picture = Image.open(out / f"frame-{i:04d}.png").convert("RGB")
+            self.assert_pixel(picture, 200, 200, self.RED)  # The far quad stays behind.
+            self.assert_pixel(picture, 320, 320, self.GREEN)
+
+    # A copy ends the pass, as copies do, then a draw across the whole picture with depth off
+    # and nothing written opens one of its own.
+    COPY = copy_picture(0x00300000, 0, width=8, height=8, stride=64)
+    UNSEEN = COPY + bp_command(0x40, 0) + bp_command(0x41, 0) + quad(WHITE, 0, 0, 640, 456) + bp_command(0x41, 0x18)
+
+    def test_depth_outlives_a_pass_that_never_uses_it(self):
+        self.depth_through(self.UNSEEN + self.COPY)
+
+    def test_a_pass_without_depth_ends_when_a_draw_needs_it(self):
+        # Frames alternate, so the pass after the copy left depth alone in the last one, and
+        # each frame with the far quad straight after it finds it needs depth after all.
+        self.depth_through(self.UNSEEN + self.COPY, self.UNSEEN)
+
 
 class DestinationAlpha(Scene):
     """Draws into the corner, copies it with its alpha, and shows that alpha as gray."""
