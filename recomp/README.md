@@ -47,7 +47,7 @@ The board always takes the fifth slot, where games look for it. Each remote keep
 
 None of this has been tried with real hardware yet: the link, the Bluetooth chip's side and the Linux sockets are tested with stand-ins (`test/test_recomp_ios_rare.py`), and Wii Fit Plus plays through setup on `loopback`.
 
-Set `WII_RECOMP_CONTROL=<path>` to drive it from a script through a pipe at that path, one command per line: `press a`, `hold a`, `release a`, `pointer x y`, `board on <kg> <lean x> <lean y>`, `board off`. Saves go to `recomp/build/saves`, or to `WII_RECOMP_SAVES`.
+Set `WII_RECOMP_CONTROL=<path>` to drive it from a script through a pipe at that path, one command per line: `press a`, `hold a`, `release a`, `pointer x y`, `stick x y` (the Classic Controller's left stick, -1 to 1), `board on <kg> <lean x> <lean y>`, `board off`. Saves go to `recomp/build/saves`, or to `WII_RECOMP_SAVES`. On first start, files the Wii Menu makes on a new Wii and that neither folder has are made there, empty: WiiConnect24's settings, lists and mailboxes, and the Mii database. Games such as Mario Kart Wii stop at "Could not write to/read from Wii system memory" without them.
 
 Set `WII_RECOMP_MUTE=1` to skip the sound device, and `WII_RECOMP_AUDIO_WAV=<path>` to save what the mixer makes.
 
@@ -104,7 +104,7 @@ Each frame of the recording gives one PNG, of its last copy to the screen. A fra
   - `ios.c`, `devices.c`, `es.c`, `files.c`, `fs.c`: stand-ins for the Wii's system services and storage.
   - `gx_fifo.c`, `gx_vertex.c`, `gx_transform.c`, `gx_light.c`, `gx_texture.c`, `gx_tev.c`, `gx_shader.c`, `gx_copy.c`, `gx_draw.c`, `window.c`: graphics, from command stream to window. The vertex and color stages become small shaders written for each setup the game uses, cached by key in `gx_shader.c`.
   - `dff.c`: reads Dolphin's FIFO recordings, for `tools/replay`.
-  - `debug.c`: set `WII_RECOMP_ACTIVITY=1` for per-second counts and a line for each frame over 20 ms, or `WII_RECOMP_DUMP_AFTER=<seconds>` to list what each thread is waiting for.
+  - `debug.c`: set `WII_RECOMP_ACTIVITY=1` for per-second counts and a line for each frame over 20 ms, or `WII_RECOMP_DUMP_AFTER=<seconds>` to list what each thread is waiting for. `WII_RECOMP_FPS_LOG=1` prints the frames shown in each second, and `WII_RECOMP_DISC_LOG=1` prints where on the disc each read lands and its size, to match against the disc's file table and see what a game loads.
   - `gaps.c`: every time a game asks for something we don't do, it's logged once as `gap: <id>`, where the ID is its row in `docs/hardware_inventory.md`. The list goes to `gaps.txt` beside the program (`cache/gaps.txt` in a console folder), or to `WII_RECOMP_GAPS`. `WII_RECOMP_GAPS_STRICT=1` stops at the first one, with exit code 12.
   - `gx_recipes.c`: the shader recipes each title has drawn with, kept in its data folder and carried in its disc image, and built before the first picture.
   - `profile.c`: what each title's code did, kept in its own folder under `title-data/` beside the program (`cache/titles/` in a console folder, or `WII_RECOMP_TITLE_DATA`): `profile.txt`, how often each function built to count has run over every run, and `discovered.txt`, code the interpreter had to run. `add_game.py` hands both to the next build.
