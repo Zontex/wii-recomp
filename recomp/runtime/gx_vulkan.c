@@ -10,8 +10,10 @@
 
 #include "gx_vulkan.h"
 
+#define EFB_PIXEL_WIDTH (EFB_WIDTH * EFB_SCALE)
+#define EFB_PIXEL_HEIGHT (EFB_HEIGHT * EFB_SCALE)
 enum {
-  EFB_PIXEL_WIDTH = EFB_WIDTH * EFB_SCALE, EFB_PIXEL_HEIGHT = EFB_HEIGHT * EFB_SCALE, BYTES_PER_PIXEL = 4,
+  BYTES_PER_PIXEL = 4,
   // Dropping a picture beats holding up the game, which OpenGL never did either.
   ACQUIRE_TIMEOUT_NS = 0,
   VERTICES_PER_QUAD = 4, INDICES_PER_QUAD = 6, INDICES_PER_TRIANGLE = 3, QUADS = MAX_VERTICES / VERTICES_PER_QUAD,
@@ -247,12 +249,13 @@ static void begin_frame(Frame *frame) {
 // when it is set to a number n of 2 or more.
 enum { MARKS = 96 };
 static VkQueryPool mark_pool; static int marks, mark_on = -1, mark_frame, mark_period = 300; static int capturing; static char mark_names[MARKS][48];
-static unsigned mark_draws;
+// Draws recorded, counted where they land: a draw that reopens a pass belongs to the new one.
+static unsigned mark_draws, recorded_draws;
 static void mark(const char *name, int w, int h) {
   if (!capturing || marks >= MARKS || in_strip) return;
   vkCmdWriteTimestamp(vk.frame->draw, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mark_pool, (uint32_t)marks);
-  snprintf(mark_names[marks], 48, "%s %dx%d draws %u", name, w, h, gx_stats.draws - mark_draws);
-  mark_draws = gx_stats.draws;
+  snprintf(mark_names[marks], 48, "%s %dx%d draws %u", name, w, h, recorded_draws - mark_draws);
+  mark_draws = recorded_draws;
   marks++;
 }
 static void mark_frame_start(void) {
@@ -519,7 +522,7 @@ static VkRect2D drawn_area(void) {
   if (right > scissor_right) right = scissor_right;
   if (bottom > scissor_bottom) bottom = scissor_bottom;
   if (gx_bounds_known) {
-    enum { MARGIN = 2 * EFB_SCALE };
+    const int MARGIN = 2 * EFB_SCALE;
     float x = viewport_wanted.x, y = viewport_wanted.y, w = viewport_wanted.width / 2, h = viewport_wanted.height / 2;
     float x0 = x + (gx_bounds[0] + 1) * w, x1 = x + (gx_bounds[2] + 1) * w;
     float y0 = y + (gx_bounds[1] + 1) * h, y1 = y + (gx_bounds[3] + 1) * h;
@@ -683,7 +686,7 @@ static void drop_recorded_commands(void) {
   memset(waiting_clear.values, 0, sizeof waiting_clear.values);
   waiting_clear.values[1].depthStencil.depth = 0;  // What fell behind the page stays behind it.
   flat_depth.known = 0;
-  if (capturing) { vkCmdResetQueryPool(vk.frame->draw, mark_pool, 0, MARKS); marks = 0; mark_draws = gx_stats.draws; mark("start", 0, 0); }
+  if (capturing) { vkCmdResetQueryPool(vk.frame->draw, mark_pool, 0, MARKS); marks = 0; mark_draws = recorded_draws; mark("start", 0, 0); }
 }
 
 // Games copy the picture out, clear, and draw the copy straight back, ready for effects.
@@ -843,6 +846,7 @@ static void draw(int primitive, int count) {
   VkDeviceSize start_of_buffer = 0;
   vkCmdBindVertexBuffers(commands, 0, 1, &frame->vertices.buffer, &start_of_buffer);
   int32_t first = (int32_t)(reserved_at / vertex_bytes);
+  recorded_draws++;
   if (primitive == PRIM_TRIANGLES) {
     vkCmdDraw(commands, (uint32_t)count, 1, (uint32_t)first, 0);
     return;
@@ -912,6 +916,7 @@ static void clear_now(const GxClear *c) {
   set_viewport_and_scissor(commands, &whole, &area);
   vkCmdPushConstants(commands, vk.pipeline_layout, VK_SHADER_STAGE_VERTEX_BIT | VK_SHADER_STAGE_FRAGMENT_BIT, 0, sizeof values, &values);
   vkCmdDraw(commands, 3, 1, 0, 0);
+  recorded_draws++;
 }
 
 // Clips a copy's source to the picture, moving the target's edges to keep the scale.

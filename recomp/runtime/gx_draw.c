@@ -31,6 +31,20 @@ enum {
 
 static unsigned frames;
 
+int gx_scale_numerator = 2, gx_scale_denominator = 1;
+
+// Read before anything is drawn, as every picture and copy is made at this size. From 1,
+// the Wii's own, to 4; 2 keeps a heavy scene within reach of a small graphics chip.
+__attribute__((constructor)) static void choose_scale(void) {
+  const char *asked = getenv("WII_RECOMP_SCALE");
+  int numerator = 0, denominator = 1;
+  if (!asked) return;
+  if (sscanf(asked, "%d/%d", &numerator, &denominator) < 1 || denominator < 1 || numerator < denominator || numerator > 4 * denominator) {
+    fprintf(stderr, "WII_RECOMP_SCALE=%s isn't a scale from 1 to 4, such as 2 or 5/2, so it stays at %d\n", asked, gx_scale_numerator);
+    return;
+  }
+  gx_scale_numerator = numerator, gx_scale_denominator = denominator;
+}
 unsigned gx_frame_number(void) { return frames; }
 
 typedef struct {

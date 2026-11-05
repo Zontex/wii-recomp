@@ -83,7 +83,7 @@ recomp/tools/replay/build/replay scene.dff recomp/build/frames [--frames <count>
 python3 recomp/tools/compare_frames.py <folder a> <folder b> --out <folder for difference pictures>
 ```
 
-Each frame of the recording gives one PNG, of its last copy to the screen. A frame with none repeats the last picture, as a TV would. Frames are at the picture's `EFB_SCALE`, 2 by default; add `EFB_SCALE=1 BUILD=build-1x` to `make` for the Wii's own size, or pass `--resize` to `compare_frames.py`. The `WII_RECOMP_*` switches above work here too.
+Each frame of the recording gives one PNG, of its last copy to the screen. A frame with none repeats the last picture, as a TV would. Frames are at the picture's scale, 2 by default; set `WII_RECOMP_SCALE=1` for the Wii's own size, or pass `--resize` to `compare_frames.py`. The `WII_RECOMP_*` switches above work here too.
 
 - `translate/decode.py` names each instruction.
 - `translate/functions.py` finds the functions.

@@ -220,11 +220,11 @@ void gx_constants_send(int binding, const void *data, size_t bytes);
 // images in the part of it that never reaches the screen.
 #define EFB_WIDTH 640
 #define EFB_HEIGHT 528
-// The picture's size against the Wii's. It can be a fraction such as 5/2, so always
+// The picture's size against the Wii's: 2 unless WII_RECOMP_SCALE asks for another, such
+// as 5/2 or 3/2, read as the program starts (gx_draw.c). It can be a fraction, so always
 // multiply by it, as in width * EFB_SCALE, which leaves the division for last.
-#ifndef EFB_SCALE
-#define EFB_SCALE 2  // Sharper than the Wii. build_file.py sets it for each platform.
-#endif
+extern int gx_scale_numerator, gx_scale_denominator;
+#define EFB_SCALE gx_scale_numerator / gx_scale_denominator
 #define MAX_VERTICES 65536
 struct GxTexture;
 void gx_copy_rectangle(int *x, int *y, int *width, int *height);
