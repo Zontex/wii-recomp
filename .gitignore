@@ -10,6 +10,8 @@ roms/
 # Left over from the browser version: converted game assets and saved progress.
 web/
 data/
+# Except the audio processor's free boot ROM and filter table, which Dolphin ships.
+!recomp/runtime/data/
 node_modules/
 
 __pycache__/

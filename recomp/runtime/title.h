@@ -25,7 +25,6 @@ typedef struct {
   uint64_t program_check;  // FNV-1a 64 of the program file it was translated from.
   uint32_t title_high, title_low;
   uint32_t ios_version;           // The IOS the title asks for, such as 53.
-  uint32_t ax_frame_done;         // Called when the audio processor finishes a frame.
   uint32_t calibration_flag;      // 0 in a game with no Balance Board.
   int virtual_bluetooth;          // Whether the game talks to bluetooth.c rather than direct input.
   int fifo_breakpoints;           // Whether the chip honours FIFO breakpoints: see gx_fifo.c.

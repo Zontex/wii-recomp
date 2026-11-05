@@ -193,8 +193,6 @@ def resolve(program, functions, entries):
         address = found[entry["name"]]
         for name, position in entry.get("small_data", {}).items():
             values[name] = small_data_references(program, functions[address], base)[position]
-        if "value" in entry:
-            values[entry["value"]] = address
     for entry in wanted:
         address = found[entry["name"]]
         if "idle_offset" in entry:

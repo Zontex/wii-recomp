@@ -6,6 +6,8 @@
 
 #include "audio.h"
 #include "cpu.h"
+#include "debug.h"
+#include "dsp.h"
 #include "gaps.h"
 
 enum { COMMAND_SETUP, COMMAND_ADD, COMMAND_SUBTRACT, COMMAND_ADD_SUBTRACT, COMMAND_VOICES, COMMAND_AUX_A, COMMAND_AUX_B,
@@ -279,23 +281,20 @@ static void run_compressor(uint32_t threshold, uint32_t frames, uint32_t table) 
 }
 
 // The surround channel goes back to the game's memory, for next frame's mix to fold
-// into left and right. The guest's output buffer has right first.
-static void write_output(uint32_t volume, uint32_t surround, uint32_t stereo, int16_t *output) {
+// into left and right. The stereo buffer, right first, is what the audio DMA plays.
+static void write_output(uint32_t volume, uint32_t surround, uint32_t stereo) {
   for (int i = 0; i < AUDIO_FRAME_SAMPLES; i++) {
     wr32(surround + i * 4, (uint32_t)buses[BUS_MAIN][SURROUND][i]);
     int64_t gain = ramped(last_output_volume, volume, i);
     int left = clamp16((int)(buses[BUS_MAIN][LEFT][i] * gain >> VOLUME_SHIFT));
     int right = clamp16((int)(buses[BUS_MAIN][RIGHT][i] * gain >> VOLUME_SHIFT));
-    output[i * AUDIO_CHANNELS] = (int16_t)left;
-    output[i * AUDIO_CHANNELS + 1] = (int16_t)right;
     wr16(stereo + i * 4, (uint16_t)right);
     wr16(stereo + i * 4 + 2, (uint16_t)left);
   }
   last_output_volume = volume;
 }
 
-void ax_run_list(uint32_t list, int16_t *output) {
-  memset(output, 0, AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS * sizeof(int16_t));
+void ax_run_list(uint32_t list) {
   for (uint32_t at = list;;) {
     uint32_t command = rd16(at);
     at += 2;
@@ -317,7 +316,7 @@ void ax_run_list(uint32_t list, int16_t *output) {
         break;
       case COMMAND_COMPRESSOR: run_compressor(rd16(at), rd16(at + 2), pair(at, 4)); at += 8; break;
       case COMMAND_OUTPUT: case COMMAND_OUTPUT_SURROUND:
-        write_output(rd16(at), pair(at, 2), pair(at, 6), output);
+        write_output(rd16(at), pair(at, 2), pair(at, 6));
         at += 10;
         break;
       case COMMAND_REMOTES: gap_hit("audio.axwii_wii_remote_speaker_output", command); at += 16; break;
@@ -328,3 +327,50 @@ void ax_run_list(uint32_t list, int16_t *output) {
     }
   }
 }
+
+// The program behind the mailbox, as Dolphin's AX.cpp answers its mail. The game sends
+// the list's size, then its address; the list runs at once, and the program yields. The
+// game then says what comes next: carry on, a new program, or the boot ROM again.
+#define MAIL_LIST 0xbabe0000u
+// Dolphin's AX_EMPTY_COMMAND_LIST_CYCLES: some games hang if the yield comes sooner.
+#define LIST_CYCLES 2500u
+
+enum { WAIT_LIST_SIZE, WAIT_LIST_ADDRESS, WAIT_NEXT_TASK };
+static int mail_state;
+
+static void ax_start(void) {
+  mail_state = WAIT_LIST_SIZE;
+  dsp_push_mail(DSP_MAIL_INIT, 1, 0);
+}
+
+static void ax_mail(uint32_t mail) {
+  switch (mail_state) {
+  case WAIT_LIST_SIZE:
+    if ((mail & TASK_MAIL_MASK) == MAIL_LIST) mail_state = WAIT_LIST_ADDRESS;
+    else gap_note("unlisted.audio.ax_mail", mail);
+    break;
+  case WAIT_LIST_ADDRESS: {
+    uint64_t started = time_base();
+    ax_run_list(mail);
+    stage_add(STAGE_AUDIO, time_base() - started);
+    dsp_push_mail(DSP_MAIL_YIELD, 1, LIST_CYCLES);
+    mail_state = WAIT_NEXT_TASK;
+    break;
+  }
+  case WAIT_NEXT_TASK:  // The program itself doesn't check the CDD1 prefix.
+    switch (TASK_MAIL_TO_DSP | (mail & ~TASK_MAIL_MASK)) {
+    case TASK_RESUME: dsp_push_mail(DSP_MAIL_RESUME, 1, 0); mail_state = WAIT_LIST_SIZE; break;
+    case TASK_NEW_PROGRAM: dsp_expect_new_program(); mail_state = WAIT_LIST_SIZE; break;
+    case TASK_RESET: dsp_set_program(PROGRAM_ROM); break;
+    case TASK_CONTINUE: mail_state = WAIT_LIST_SIZE; break;
+    default: gap_note("unlisted.audio.ax_mail", mail); break;
+    }
+    break;
+  }
+}
+
+static void ax_update(void) {
+  if (dsp_needs_resume_mail()) dsp_push_mail(DSP_MAIL_RESUME, 1, 0);
+}
+
+const DspProgram ax_wii_program = {"AXWii", ax_start, ax_mail, ax_update};

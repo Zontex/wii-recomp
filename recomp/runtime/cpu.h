@@ -30,7 +30,6 @@ void input_board_sensors(void);
 void input_board_calibration(void);
 void input_board_weights(void);
 void guest_fatal(void);
-void audio_dsp_mail(uint32_t mail);
 void system_call(uint32_t address);
 void trap_taken(uint32_t address);  // A tw or twi whose condition held: processor.c.
 void fpscr_mode_changed(uint32_t fpscr);  // Applies the rounding and non-IEEE modes: processor.c.

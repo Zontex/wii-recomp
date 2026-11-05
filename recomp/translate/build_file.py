@@ -89,6 +89,9 @@ def main():
              # The runtime's headers change, and files that include them must follow.
              "rule runtime_cc", "  command = clang $cflags -MMD -MF $out.d -c $in -o $out", "  description = $in",
              "  depfile = $out.d", "  deps = gcc", "",
+             # Data the console carries inside, such as the audio processor's ROM.
+             "rule embed", f"  command = {sys.executable} {Path(__file__).resolve().with_name('embed.py')} $in $out $symbol",
+             "  description = $in", "",
              "rule link", f"  command = clang $in -o $out {link_flags} {CONSOLE_LINK_FLAGS[sys.platform]}", "",
              "rule link_title", f"  command = clang $in -o $out {TITLE_LINK_FLAGS[sys.platform]}", ""]
     title_objects, objects = [], []
@@ -104,6 +107,11 @@ def main():
         target = f"obj/runtime_{source.stem}.o"
         lines.append(f"build {target}: runtime_cc ../runtime/{source.name}\n  cflags = {RUNTIME_OPTIMIZATION} {FLAGS} {defines} {interface}")
         objects.append(target)
+    for data in sorted(Path(build / "../runtime/data").glob("*.bin")):
+        symbol = f"data_{data.stem}"
+        lines.append(f"build obj/{symbol}.c: embed ../runtime/data/{data.name}\n  symbol = {symbol}")
+        lines.append(f"build obj/{symbol}.o: cc obj/{symbol}.c")
+        objects.append(f"obj/{symbol}.o")
     lines.append(f"build wii-recomp: link {' '.join(objects)}")
     lines.append(f"build title.{LIBRARY_SUFFIX}: link_title {' '.join(title_objects)}")
     (build / "build.ninja").write_text("\n".join(lines) + "\n")

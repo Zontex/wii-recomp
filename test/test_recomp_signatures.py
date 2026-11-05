@@ -119,11 +119,6 @@ class Resolving(unittest.TestCase):
         _, idle_loops, _ = self.resolve({0x5000: self.TARGET}, entries)
         self.assertEqual(list(idle_loops), [0x5008])
 
-    def test_a_found_function_can_supply_a_value(self):
-        entries = [entry("frame done", self.TARGET, value="ax_frame_done")]
-        _, _, values = self.resolve({0x5000: self.TARGET}, entries)
-        self.assertEqual(values, {"ax_frame_done": 0x5000})
-
 
 class Similarity(unittest.TestCase):
     WORDS = [0x7c000214 + (i << 11) for i in range(20)]
