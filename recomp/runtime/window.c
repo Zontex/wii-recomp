@@ -24,20 +24,29 @@ static void on_key(GLFWwindow *from, int key, int scancode, int action, int mods
     {GLFW_KEY_LEFT, BUTTON_LEFT}, {GLFW_KEY_RIGHT, BUTTON_RIGHT}, {GLFW_KEY_UP, BUTTON_UP}, {GLFW_KEY_DOWN, BUTTON_DOWN},
     {GLFW_KEY_ENTER, BUTTON_A}, {GLFW_KEY_BACKSPACE, BUTTON_B}, {GLFW_KEY_1, BUTTON_ONE}, {GLFW_KEY_2, BUTTON_TWO},
     {GLFW_KEY_EQUAL, BUTTON_PLUS}, {GLFW_KEY_MINUS, BUTTON_MINUS}, {GLFW_KEY_H, BUTTON_HOME},
-    // The Classic Controller's shoulders: in Mario Kart, L uses an item and R drifts.
-    {GLFW_KEY_X, BUTTON_CLASSIC_L}, {GLFW_KEY_C, BUTTON_CLASSIC_R}, {GLFW_KEY_Z, BUTTON_CLASSIC_ZL}, {GLFW_KEY_V, BUTTON_CLASSIC_ZR},
+    // The Classic Controller's shoulders: in Mario Kart, L uses an item and R drifts. C and
+    // Z are the Nunchuk's buttons too; each attachment reads only its own.
+    {GLFW_KEY_X, BUTTON_CLASSIC_L}, {GLFW_KEY_C, BUTTON_CLASSIC_R | BUTTON_NUNCHUK_C}, {GLFW_KEY_Z, BUTTON_CLASSIC_ZL | BUTTON_NUNCHUK_Z},
+    {GLFW_KEY_V, BUTTON_CLASSIC_ZR},
   };
   for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
     if (key == keys[i].key) input_hold(0, keys[i].button, action == GLFW_PRESS);
   }
   int down = action == GLFW_PRESS;
-  // The arrows also tilt the Classic Controller's stick, which games such as Mario Kart steer with.
+  // The arrows also tilt the Classic Controller's left stick, which games such as Mario
+  // Kart steer with, and the Nunchuk's.
   static int left, right, up, low;
   if (key == GLFW_KEY_LEFT) left = down;
   if (key == GLFW_KEY_RIGHT) right = down;
   if (key == GLFW_KEY_UP) up = down;
   if (key == GLFW_KEY_DOWN) low = down;
-  if (key >= GLFW_KEY_RIGHT && key <= GLFW_KEY_UP) input_stick(0, (float)(right - left), (float)(up - low));
+  if (key >= GLFW_KEY_RIGHT && key <= GLFW_KEY_UP) {
+    input_stick(0, (float)(right - left), (float)(up - low));
+    input_nunchuk_stick(0, (float)(right - left), (float)(up - low));
+  }
+  if (key == GLFW_KEY_Q && down) input_shake(0);
+  // F2 plugs the next attachment into player 1's remote: none, a Nunchuk, a Classic Controller.
+  if (key == GLFW_KEY_F2 && down) input_attach(0, (Attachment)((input_attachment(0) + 1) % ATTACHMENT_KINDS));
   if (key == GLFW_KEY_SPACE && down) input_board_toggle();
   static float lean_x, lean_y;
   if (key == GLFW_KEY_A) lean_x = down ? -0.6f : 0;

@@ -28,8 +28,8 @@ Statuses:
 | 5. Hardware blocks | 25 | 12 | 6 | 0 | 6 | 16 | 65 |
 | 6. Audio microcodes | 9 | 3 | 7 | 0 | 0 | 3 | 22 |
 | 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
-| 8. Controllers | 35 | 15 | 7 | 0 | 6 | 2 | 65 |
-| **All** | **336** | **109** | **47** | **4** | **37** | **56** | **589** |
+| 8. Controllers | 45 | 8 | 5 | 0 | 5 | 2 | 65 |
+| **All** | **346** | **102** | **45** | **4** | **36** | **56** | **589** |
 
 ## Biggest gaps
 
@@ -44,7 +44,7 @@ Ordered by how likely a real game is to hit them.
 7. **Self-modifying code** (`cpu.self_modifying_code_icbi`). `icbi` is a no-op, so translated code is never replaced.
 8. **Video interface registers are only stored** (`hw.*` in VI). No beam position, interlace, PAL or 480p modes.
 9. **No GameCube controllers** (`hw.gc_controller_wheel_keyboard_dance_mat`). Every port answers that nothing is plugged in.
-10. **Wii Remote motion is fixed at rest, and there's no Nunchuk, MotionPlus or speaker** (`ctl.*`). Covered by the controllers stage of `ROADMAP.md`.
+10. **No Wii MotionPlus or remote speaker** (`ctl.*`). Covered by the controllers stage of `ROADMAP.md`.
 11. **Floating-point status flags aren't worked out from arithmetic** (`cpu.status_flags_fprf_fr_fi_fx_and_others`). Only the game's own writes change them.
 12. **No guest exceptions or memory mapping** (`cpu.program_trap_illegal`, `cpu.dsi_isi`, `cpu.game_defined_bat_maps`, `cpu.page_tables_segment_registers`).
 13. **Copy filters are ignored**: Y scale, gamma, anti-aliasing and deflicker, clamp and field copies (`pixel.copy_*`, `pixel.gamma_on_xfb_copy_1_0_1_7_2_2`).
@@ -806,8 +806,8 @@ The AX work is rewritten in C. There's no DSP interpreter, so each program needs
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
-| `ctl.0x10_rumble` | 0x10 rumble | partial | `runtime/wii_remote.c:109` | Accepted, not felt. Rumble bit in other reports ignored. |
-| `ctl.0x11_leds` | 0x11 LEDs | partial | `runtime/wii_remote.c:109` | Accepted, not shown. |
+| `ctl.0x10_rumble` | 0x10 rumble | done | `runtime/wii_remote.c` (`wii_remote_simulated_output`) | The rumble bit of every output report is the player's to feel (`input_outputs`); a host controller rumbles with it. |
+| `ctl.0x11_leds` | 0x11 LEDs | done | `runtime/wii_remote.c` | Shown in status reports, and the player's to show (`input_outputs`). |
 | `ctl.0x12_data_mode` | 0x12 data mode | done | `runtime/wii_remote.c:95` |  |
 | `ctl.0x13_0x1a_ir_enable` | 0x13, 0x1A IR enable | partial | `runtime/wii_remote.c:152` | 0x13 switches the camera flag in status reports, which WPAD checks before keeping the pointer on. 0x1A is a bare acknowledgement. The camera works from its register writes. |
 | `ctl.0x14_speaker_enable` | 0x14 speaker enable | missing | `runtime/wii_remote.c:154` | Status reports carry the speaker flag, but no sound is played. Reported when switched on. |
@@ -816,17 +816,17 @@ The AX work is rewritten in C. There's no DSP interpreter, so each program needs
 | `ctl.0x17_read_memory` | 0x17 read memory | partial | `runtime/wii_remote.c:103`, `:53`, `:65` | Calibration and attachment. Mii block reads zero. |
 | `ctl.0x18_speaker_data` | 0x18 speaker data | missing | `runtime/wii_remote.c:112` | Acks every packet. A real one doesn't unless asked. |
 | `ctl.0x19_speaker_mute` | 0x19 speaker mute | missing | `runtime/wii_remote.c:112` | Bare ack. |
-| `ctl.0x20_status` | 0x20 status | partial | `runtime/wii_remote.c:36` | Battery full, attachment always in. No LED bits. |
+| `ctl.0x20_status` | 0x20 status | done | `runtime/wii_remote.c` (`report_status`) | Attachment, speaker, camera, lights and the low-battery flag; the battery from the player's controller, full by default. Sent unasked when an attachment goes in or out. |
 | `ctl.0x21_read_reply` | 0x21 read reply | done | `runtime/wii_remote.c:65` |  |
 | `ctl.0x22_ack` | 0x22 ack | done | `runtime/wii_remote.c:44` |  |
 | `ctl.0x30_core` | 0x30 core | done | `runtime/wii_remote.c:22` |  |
-| `ctl.0x31_core_motion` | 0x31 core, motion | partial | `runtime/wii_remote.c:125` | Motion fixed at rest. |
+| `ctl.0x31_core_motion` | 0x31 core, motion | done | `runtime/wii_remote.c` (`wii_remote_accel_bytes`) |  |
 | `ctl.0x32_core_attachment_8` | 0x32 core, attachment 8 | done | `runtime/wii_remote.c:22` |  |
-| `ctl.0x33_core_motion_ir_12` | 0x33 core, motion, IR 12 | partial | `runtime/wii_remote.c:22`, `runtime/wii_camera.c` | IR from the camera. Motion fixed at rest. |
+| `ctl.0x33_core_motion_ir_12` | 0x33 core, motion, IR 12 | done | `runtime/wii_remote.c`, `runtime/wii_camera.c` | IR from the camera. |
 | `ctl.0x34_core_attachment_19` | 0x34 core, attachment 19 | done | `runtime/wii_remote.c:22` |  |
-| `ctl.0x35_core_motion_attachment_16` | 0x35 core, motion, attachment 16 | partial | `runtime/wii_remote.c:22` | Motion fixed. |
+| `ctl.0x35_core_motion_attachment_16` | 0x35 core, motion, attachment 16 | done | `runtime/wii_remote.c` |  |
 | `ctl.0x36_core_ir_10_attachment_9` | 0x36 core, IR 10, attachment 9 | done | `runtime/wii_remote.c:22`, `runtime/wii_camera.c` | IR zero. |
-| `ctl.0x37_core_motion_ir_10_attachment_6` | 0x37 core, motion, IR 10, attachment 6 | partial | `runtime/wii_remote.c:22`, `runtime/wii_camera.c` | IR from the camera. Motion fixed at rest. |
+| `ctl.0x37_core_motion_ir_10_attachment_6` | 0x37 core, motion, IR 10, attachment 6 | done | `runtime/wii_remote.c`, `runtime/wii_camera.c` | IR from the camera. |
 | `ctl.0x3d_attachment_21` | 0x3D attachment 21 | done | `runtime/wii_remote.c:31` | 21 attachment bytes and no buttons. |
 | `ctl.0x3e_0x3f_interleaved` | 0x3E, 0x3F interleaved | on demand | `runtime/wii_remote.c:121` | Needs the camera's full mode. Reported when asked for. |
 | `ctl.report_timing` | Report timing | done | `runtime/wii_remote.c:13`, `:117` | 100 a second. |
@@ -836,16 +836,16 @@ The AX work is rewritten in C. There's no DSP interpreter, so each program needs
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
 | `ctl.buttons` | Buttons | done | `runtime/wii_remote.c:30` |  |
-| `ctl.accelerometer` | Accelerometer | missing | `runtime/wii_remote.c:125-129` | Fixed. Shakes and tilt aren't possible. |
-| `ctl.ir_camera` | IR camera | done | `runtime/wii_camera.c`, `runtime/wii_remote.c:151-156` | Basic and extended modes from the host pointer. 0xFF when off. Full mode is the 0x3E/0x3F row. |
+| `ctl.accelerometer` | Accelerometer | done | `runtime/wii_remote.c` (`wii_remote_accel_bytes`), `runtime/input.c` | Ten bits an axis against the calibration in the remote's memory. Still and flat until a controller or the pipe moves it (`accel`, `shake`). |
+| `ctl.ir_camera` | IR camera | done | `runtime/wii_camera.c` | Basic and extended modes from the player's pointer, turned with the remote's roll. One camera a remote. 0xFF when off. Full mode is the 0x3E/0x3F row. |
 | `ctl.speaker` | Speaker | missing |  |  |
 | `ctl.eeprom` | EEPROM | partial | `runtime/wii_remote.c:53` | Calibration only. Mii storage missing. |
 | `ctl.several_remotes` | Several remotes | done | `runtime/bluetooth.c` (`simulated_here`), `runtime/input.c` | Four remotes and the board. A simulated remote is there while its player is connected, and calls the console when they join; each has its own attachment and key (`runtime/wii_attachment.c`). |
 | `ctl.attachment_wire_protocol` | Attachment wire protocol | done | `runtime/wii_attachment.c:58-72` |  |
 | `ctl.attachment_encryption` | Attachment encryption | done | `runtime/wii_attachment_key.c` | Tables made from the key the game writes. |
-| `ctl.attachment_hot_plug` | Attachment hot plug | on demand |  | Plugging in is the player's doing, not a game's request, so it needs a host control from the controllers stage. |
-| `ctl.classic_controller` | Classic Controller | done | `runtime/wii_attachment.c:76` | Sticks need a host source (`input.c:99`). |
-| `ctl.nunchuk` | Nunchuk | missing |  | Common. |
+| `ctl.attachment_hot_plug` | Attachment hot plug | done | `runtime/wii_remote.c` (`follow_plug`), `runtime/wii_attachment.c` (`attachment_plug`) | F2, the pipe's `attach`, or a controller plugs one in. The remote stops its data reports and sends its status, as a real one does; the new attachment starts unencrypted. |
+| `ctl.classic_controller` | Classic Controller | done | `runtime/wii_attachment.c` (`attachment_classic_state`) | Left stick from the arrows, the pipe or a controller. |
+| `ctl.nunchuk` | Nunchuk | done | `runtime/wii_attachment.c` (`attachment_nunchuk_state`) | Identity, calibration and data as Dolphin's `Nunchuk.cpp`. Stick on the arrows, C and Z on the keys C and Z. |
 | `ctl.guitar_drums_turntable` | Guitar, Drums, Turntable | on demand |  | Few titles. Built when one is tested. |
 | `ctl.taiko_drum_tatacon` | Taiko drum (TaTaCon) | on demand |  | Few titles. Built when one is tested. |
 | `ctl.udraw_drawsome_tablets` | uDraw, Drawsome tablets | on demand |  | Few titles. Built when one is tested. |

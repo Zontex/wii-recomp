@@ -18,8 +18,11 @@ enum {
   OUTPUT_RUMBLE = 0x10, OUTPUT_LEDS = 0x11, OUTPUT_DATA_MODE = 0x12, OUTPUT_CAMERA_CLOCK = 0x13, OUTPUT_SPEAKER = 0x14, OUTPUT_STATUS = 0x15, OUTPUT_WRITE = 0x16, OUTPUT_READ = 0x17,
   REPORT_STATUS = 0x20, REPORT_MEMORY = 0x21, REPORT_ACK = 0x22, REPORT_BYTES = 22, MEMORY_PIECE = 16, MEMORY_HEADER = 6,
   ADDRESS_SPACE_SHIFT = 24, ATTACHMENT_SPACE = 0x04a4, CAMERA_SPACE = 0x04b0, READ_NO_DEVICE = 7, ACK_WANTED = 2, CONTINUOUS = 4,
-  STATUS_ATTACHMENT = 2, STATUS_SPEAKER = 4, STATUS_CAMERA = 8, SWITCH_ON = 4, BATTERY_FULL = 0xc8, CALIBRATION_START = 0x16, CALIBRATION_COPY = 0x20, REPORT_TICKS = 607500,  // 100 a second.
+  STATUS_BATTERY_LOW = 1, STATUS_ATTACHMENT = 2, STATUS_SPEAKER = 4, STATUS_CAMERA = 8, SWITCH_ON = 4, RUMBLE_ON = 1,
+  BATTERY_FULL = 0xc8, CALIBRATION_START = 0x16, CALIBRATION_COPY = 0x20, REPORT_TICKS = 607500,  // 100 a second.
+  ACCEL_ZERO_G = 0x80 << 2, ACCEL_ONE_G = 0x9a << 2,  // As the calibration in its memory says: Dolphin's WiimoteEmu.h.
 };
+static const float BATTERY_LOW = 0.1f;
 
 // Where each data mode puts things: motion, camera and attachment bytes, by position.
 typedef struct {
@@ -34,10 +37,12 @@ static const Mode modes[] = {
 
 static struct {
   const Mode *mode;
-  int continuous, camera_on, speaker_on;
+  int continuous, camera_on, speaker_on, rumble;
   uint8_t lights;
   uint64_t next_report;
   uint8_t last_report[REPORT_BYTES];
+  int plug_known;
+  Attachment plugged;
 } remotes[BLUETOOTH_DEVICES];
 
 static int is_board(int device) { return device == BLUETOOTH_BOARD; }
@@ -46,12 +51,14 @@ static int is_board(int device) { return device == BLUETOOTH_BOARD; }
 static void (*sink)(int device, const uint8_t *report, uint32_t bytes) = bluetooth_send_report;
 void wii_remote_simulated_sink(void (*to)(int device, const uint8_t *report, uint32_t bytes)) { sink = to; }
 
-// The remote has a Classic Controller plugged in, unless WII_RECOMP_ATTACHMENT=none. A game
-// that sees one may switch its pointer off and expect the Classic Controller's buttons.
+// What's plugged into the remote is its player's choice (input_attach), or what
+// WII_RECOMP_ATTACHMENT names. A game that sees a Classic Controller may switch its pointer
+// off and expect the Classic Controller's buttons.
+static void follow_plug(int device, int on_connect);
 static int has_attachment(int device) {
-  static int plugged = -1;
-  if (plugged < 0) plugged = !getenv("WII_RECOMP_ATTACHMENT") || strcmp(getenv("WII_RECOMP_ATTACHMENT"), "none");
-  return is_board(device) || plugged;
+  if (is_board(device)) return 1;
+  if (!remotes[device].plug_known) follow_plug(device, 1);  // Asked before its first report: what's there now.
+  return remotes[device].plugged != ATTACHMENT_NONE;
 }
 
 // Remote n is player n+1's. The board has a single button, its power switch, which
@@ -66,11 +73,51 @@ static void buttons_into(int device, uint8_t *to) { put_buttons(is_board(device)
 static void report_status(int device) {
   uint8_t report[7] = {REPORT_STATUS};
   buttons_into(device, report + 1);
-  // Its flags: an attachment, the speaker and camera as the game last switched them, and its lights.
+  // Its flags: an attachment, the speaker and camera as the game last switched them, and its
+  // lights; then how full its batteries are.
+  float battery = is_board(device) ? 1 : input_battery_level(device);
   report[3] = (uint8_t)((has_attachment(device) ? STATUS_ATTACHMENT : 0) | (remotes[device].speaker_on ? STATUS_SPEAKER : 0) |
-                        (remotes[device].camera_on ? STATUS_CAMERA : 0) | remotes[device].lights);
-  report[6] = BATTERY_FULL;
+                        (remotes[device].camera_on ? STATUS_CAMERA : 0) | remotes[device].lights |
+                        (battery < BATTERY_LOW ? STATUS_BATTERY_LOW : 0));
+  report[6] = (uint8_t)(battery * BATTERY_FULL + 0.5f);
   sink(device, report, sizeof report);
+}
+
+// A player plugging an attachment in or out. The remote stops its data reports and sends
+// its status unasked, and the game sets the data mode again once it has looked, as on a
+// real remote. On connecting, the port starts fresh with no report.
+static void follow_plug(int device, int on_connect) {
+  if (is_board(device)) return;
+  Attachment kind = input_attachment(device);
+  if (!on_connect && remotes[device].plug_known && kind == remotes[device].plugged) return;
+  int changed = remotes[device].plug_known && kind != remotes[device].plugged;
+  remotes[device].plugged = kind;
+  remotes[device].plug_known = 1;
+  if (kind != ATTACHMENT_NONE) attachment_plug(device, kind);
+  if (changed && !on_connect) {
+    fprintf(stderr, "remotes: player %d's remote now has %s plugged in\n", device + 1, input_attachment_name(kind));
+    remotes[device].mode = 0;
+    report_status(device);
+  }
+}
+
+// The game's rumble and lights, for a controller standing in for the remote to show.
+static void tell_outputs(int device) {
+  if (!is_board(device)) input_set_outputs(device, remotes[device].rumble, (uint8_t)(remotes[device].lights >> 4));
+}
+
+// Motion as the report carries it: 10 bits an axis, zero at 0x200 and one g 0x68 above.
+// The top eight bits have bytes of their own; x's lowest two and the second-lowest of y
+// and z sit in the buttons' spare bits.
+void wii_remote_accel_bytes(const float accel[3], uint8_t buttons[2], uint8_t out[3]) {
+  uint32_t value[3];
+  for (int axis = 0; axis < 3; axis++) {
+    float raw = ACCEL_ZERO_G + accel[axis] * (ACCEL_ONE_G - ACCEL_ZERO_G);
+    value[axis] = raw < 0 ? 0 : raw > 0x3ff ? 0x3ff : (uint32_t)(raw + 0.5f);
+    out[axis] = (uint8_t)(value[axis] >> 2);
+  }
+  buttons[0] = (uint8_t)((buttons[0] & 0x9f) | (value[0] & 3) << 5);
+  buttons[1] = (uint8_t)((buttons[1] & 0x9f) | (value[1] >> 1 & 1) << 5 | (value[2] >> 1 & 1) << 6);
 }
 
 static void acknowledge(int device, int output) {
@@ -125,11 +172,22 @@ static void report_read(int device, uint32_t address, uint32_t bytes) {
 
 static uint32_t big32(const uint8_t *p) { return (uint32_t)p[0] << 24 | (uint32_t)p[1] << 16 | (uint32_t)p[2] << 8 | p[3]; }
 
-void wii_remote_simulated_connected(int device) { report_status(device); }
+void wii_remote_simulated_connected(int device) {
+  remotes[device].mode = 0;
+  remotes[device].lights = 0;
+  remotes[device].rumble = 0;
+  follow_plug(device, 1);
+  tell_outputs(device);
+  report_status(device);
+}
 
 void wii_remote_simulated_output(int device, const uint8_t *data, uint32_t bytes) {
   int report = data[0];
-  (void)bytes;
+  // Every report the game sends carries the rumble switch in its first bit.
+  if (bytes >= 2 && (data[1] & RUMBLE_ON) != remotes[device].rumble) {
+    remotes[device].rumble = data[1] & RUMBLE_ON;
+    tell_outputs(device);
+  }
   if (report == OUTPUT_DATA_MODE) {
     remotes[device].continuous = data[1] & CONTINUOUS;
     for (size_t i = 0; i < sizeof modes / sizeof modes[0]; i++) {
@@ -153,7 +211,10 @@ void wii_remote_simulated_output(int device, const uint8_t *data, uint32_t bytes
     }
     acknowledge(device, report);
   } else if (report == OUTPUT_LEDS || report == OUTPUT_RUMBLE) {
-    if (report == OUTPUT_LEDS) remotes[device].lights = data[1] & 0xf0;
+    if (report == OUTPUT_LEDS) {
+      remotes[device].lights = data[1] & 0xf0;
+      tell_outputs(device);
+    }
     if (data[1] & ACK_WANTED) acknowledge(device, report);
   } else if (report == OUTPUT_CAMERA_CLOCK || report == OUTPUT_SPEAKER) {
     if (report == OUTPUT_CAMERA_CLOCK) remotes[device].camera_on = (data[1] & SWITCH_ON) != 0;
@@ -170,6 +231,7 @@ void wii_remote_simulated_output(int device, const uint8_t *data, uint32_t bytes
 // only when something in the report changed, such as a button, where it points, or the
 // weight on the board.
 void wii_remote_simulated_update(int device, uint64_t now) {
+  follow_plug(device, 0);
   const Mode *mode = remotes[device].mode;
   if (!mode || now < remotes[device].next_report) return;
   remotes[device].next_report = now + REPORT_TICKS;
@@ -177,13 +239,9 @@ void wii_remote_simulated_update(int device, uint64_t now) {
   PlayerState player = {0};
   if (!is_board(device)) input_snapshot(device, &player);
   put_buttons(player.buttons, report + 1);
-  if (mode->motion) {
-    report[3] = 0x80;  // Held still and flat: one g on the Z axis.
-    report[4] = 0x80;
-    report[5] = 0x9a;
-  }
+  if (mode->motion) wii_remote_accel_bytes(player.accel, report + 1, report + 3);
   if (mode->camera_bytes && !is_board(device)) {
-    camera_fill(device, player.pointer_x, player.pointer_y, report + mode->camera_at, mode->camera_bytes);
+    camera_fill(device, player.pointer_x, player.pointer_y, player.roll, report + mode->camera_at, mode->camera_bytes);
   } else if (mode->camera_bytes) {
     memset(report + mode->camera_at, 0xff, mode->camera_bytes);
   }

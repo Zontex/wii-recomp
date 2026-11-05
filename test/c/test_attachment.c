@@ -71,5 +71,47 @@ int main(void) {
   CHECK_EQ(plain[5], 0xef);
   attachment_fill(0, &second, coded, 6);
   CHECK_EQ(decrypt(coded[5], 5, want_add, want_exclusive), 0xef);
+
+  // A Nunchuk: stick in the middle, held still, nothing pressed. Its motion reads zero at
+  // 0x200 and one g at 0x2cc, ten bits an axis.
+  const float middle[2] = {0, 0}, still[3] = {0, 0, 1};
+  uint8_t chuk[6];
+  attachment_nunchuk_state(chuk, 0, middle, still);
+  CHECK_EQ(chuk[0], 0x80);
+  CHECK_EQ(chuk[1], 0x80);
+  CHECK_EQ(chuk[2], 0x80);
+  CHECK_EQ(chuk[3], 0x80);
+  CHECK_EQ(chuk[4], 0xb3);
+  CHECK_EQ(chuk[5], 0x03);  // C and Z up.
+  const float pushed[2] = {1, -1}, odd[3] = {1.0f / 204, 2.0f / 204, -9};
+  attachment_nunchuk_state(chuk, BUTTON_NUNCHUK_Z, pushed, odd);
+  CHECK_EQ(chuk[0], 0xe0);
+  CHECK_EQ(chuk[1], 0x20);
+  CHECK_EQ(chuk[5], 0x02 | 1 << 2 | 2 << 4 | 0 << 6);  // Z held; the motion's lowest bits.
+  CHECK_EQ(chuk[4], 0);  // Clamped.
+  attachment_nunchuk_state(chuk, BUTTON_NUNCHUK_C, middle, still);
+  CHECK_EQ(chuk[5], 0x01);
+
+  // Plugged into the third remote, it says what it is and how it's calibrated, with the
+  // check bytes the game's library verifies.
+  attachment_plug(2, ATTACHMENT_NUNCHUK);
+  uint8_t nunchuk_id[6], calibration[16];
+  attachment_read(2, 0xfa, nunchuk_id, 6);
+  const uint8_t want_nunchuk[6] = {0, 0, 0xa4, 0x20, 0, 0};
+  for (int i = 0; i < 6; i++) CHECK_EQ(nunchuk_id[i], want_nunchuk[i]);
+  attachment_read(2, 0x20, calibration, 16);
+  uint8_t sum = 0;
+  for (int i = 0; i < 14; i++) sum = (uint8_t)(sum + calibration[i]);
+  CHECK_EQ(calibration[4], 0xb3);
+  CHECK_EQ(calibration[8], 0xe0);
+  CHECK_EQ(calibration[14], (uint8_t)(sum + 0x55));
+  CHECK_EQ(calibration[15], (uint8_t)(sum + 0xaa));
+  PlayerState holding = {.buttons = BUTTON_NUNCHUK_C, .nunchuk_accel = {0, 0, 1}};
+  attachment_fill(2, &holding, chuk, 6);
+  CHECK_EQ(chuk[5], 0x01);
+  // Plugging in again starts afresh: the first remote's encryption is gone.
+  attachment_plug(0, ATTACHMENT_CLASSIC);
+  attachment_read(0, 0xfa, plain, 6);
+  for (int i = 0; i < 6; i++) CHECK_EQ(plain[i], id[i]);
   return finish();
 }

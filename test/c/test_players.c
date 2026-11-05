@@ -82,6 +82,53 @@ int main(void) {
   CHECK(input_run_command("board off\n"));
   CHECK(input_board_total() == 0);
 
+  // Motion, the Nunchuk, and what's plugged in.
+  input_snapshot(0, &state);
+  CHECK(state.accel[0] == 0 && state.accel[1] == 0 && state.accel[2] == 1);  // Still and flat until moved.
+  CHECK(state.nunchuk_accel[2] == 1);
+  CHECK_EQ(state.attachment, ATTACHMENT_CLASSIC);  // Unless WII_RECOMP_ATTACHMENT says otherwise.
+  CHECK(input_run_command("p2 roll 90\n"));  // Turned on its side: gravity along -x.
+  input_snapshot(1, &state);
+  CHECK(state.accel[0] < -0.999f && state.accel[2] < 0.001f && state.accel[2] > -0.001f);
+  CHECK(input_run_command("p2 accel 0.5 -1 2\n"));
+  CHECK(input_run_command("p2 nunchuk stick 0.25 -0.5\n"));
+  CHECK(input_run_command("p2 nunchuk accel 1 0 0\n"));
+  CHECK(input_run_command("p2 attach nunchuk\n"));
+  CHECK(input_run_command("p2 hold c\n"));
+  input_snapshot(1, &state);
+  CHECK(state.accel[0] == 0.5f && state.accel[1] == -1 && state.accel[2] == 2);
+  CHECK(state.roll > 1.57f && state.roll < 1.571f);
+  CHECK(state.nunchuk_stick[0] == 0.25f && state.nunchuk_stick[1] == -0.5f);
+  CHECK(state.nunchuk_accel[0] == 1 && state.nunchuk_accel[2] == 0);
+  CHECK_EQ(state.attachment, ATTACHMENT_NUNCHUK);
+  CHECK_EQ(state.buttons, BUTTON_NUNCHUK_C);
+  CHECK_EQ(input_attachment(0), ATTACHMENT_CLASSIC);
+  CHECK(!input_run_command("p2 attach guitar\n"));
+  CHECK(input_run_command("p2 attach none\n"));
+  CHECK_EQ(input_attachment(1), ATTACHMENT_NONE);
+  Attachment named;
+  CHECK(input_attachment_named("classic", &named) && named == ATTACHMENT_CLASSIC);
+  CHECK(!strcmp(input_attachment_name(ATTACHMENT_NUNCHUK), "nunchuk"));
+  // A shake swings the remote's motion along its length, then stops.
+  CHECK(input_run_command("p4 shake\n"));
+  float lowest = 0, highest = 0;
+  for (int i = 0; i < 8; i++, now += 25 * 60750) {
+    input_snapshot(3, &state);
+    lowest = state.accel[1] < lowest ? state.accel[1] : lowest;
+    highest = state.accel[1] > highest ? state.accel[1] : highest;
+  }
+  CHECK(lowest <= -2 && highest >= 2);
+  now += 500 * 60750;
+  input_snapshot(3, &state);
+  CHECK(state.accel[1] == 0);
+  // Outputs and battery.
+  input_set_outputs(2, 1, 0x9);
+  CHECK_EQ(input_outputs(2).rumble, 1);
+  CHECK_EQ(input_outputs(2).lights, 0x9);
+  CHECK(input_battery_level(2) == 1);
+  input_battery(2, 3);
+  CHECK(input_battery_level(2) == 1);
+
   // A snapshot taken while another thread moves the pointer holds one moment.
   input_stick(2, 0, 0);
   pthread_t thread;

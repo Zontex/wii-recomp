@@ -10,6 +10,7 @@
 #include "input.h"
 #include "remote_link.h"
 #include "title.h"
+#include "wii_remote.h"
 
 const Title *title = &(Title){.virtual_bluetooth = 1};
 uint32_t hw_read(uint32_t a, int n) { return 0; }
@@ -23,19 +24,22 @@ void link_loopback_start(void) {}
 
 enum { REPORT_TICKS = 607500 };
 
-// The newest input report from a device, after time passes; 0 if none came.
-static int report_from(int device, uint8_t out[24]) {
+// The newest input report of a kind (any, for 0) from a device, after time passes; 0 if
+// none came.
+static int report_of(int device, int kind, uint8_t out[24]) {
   int found = 0;
   now += REPORT_TICKS;
   bluetooth_update(now);
   while (chip_collect(0x82)) {
-    if (chip_packet_device() == device && rd8(CHIP_EVENT + 8) == 0xa1) {
+    if (chip_packet_device() == device && rd8(CHIP_EVENT + 8) == 0xa1 && (!kind || rd8(CHIP_EVENT + 9) == kind)) {
       memcpy(out, host(CHIP_EVENT + 9), 24);
       found = 1;
     }
   }
   return found;
 }
+
+static int report_from(int device, uint8_t out[24]) { return report_of(device, 0, out); }
 
 static void expect_call(int device) {
   bluetooth_update(now);
@@ -87,6 +91,72 @@ int main(void) {
     // The Classic Controller's left stick, from byte 6 of the report on.
     CHECK_EQ(report[6] & 63, player == 3 ? 63 : 32);
   }
+
+  // Motion: ten bits an axis, zero at 0x200 and one g at 0x268, x's lowest two bits and
+  // y's and z's second-lowest in the buttons' spare bits.
+  uint8_t motion[3], spare[2] = {0x1f, 0x9f};
+  wii_remote_accel_bytes((float[3]){0, 0, 1}, spare, motion);
+  CHECK_EQ(motion[0], 0x80);
+  CHECK_EQ(motion[1], 0x80);
+  CHECK_EQ(motion[2], 0x9a);
+  CHECK_EQ(spare[0], 0x1f);
+  CHECK_EQ(spare[1], 0x9f);
+  wii_remote_accel_bytes((float[3]){3.0f / 104, 2.0f / 104, -2.0f / 104}, spare, motion);
+  CHECK_EQ(spare[0], 0x1f | 3 << 5);
+  CHECK_EQ(spare[1], 0x9f | 1 << 5 | 1 << 6);  // 0x202 and 0x1fe both have their second bit set.
+  CHECK_EQ(motion[2], 0x7f);
+  wii_remote_accel_bytes((float[3]){-9, 9, 0}, spare, motion);
+  CHECK_EQ(motion[0], 0);
+  CHECK_EQ(motion[1], 0xff);
+  // Player 2 tilts their remote: their reports carry it.
+  input_accel(1, (float[3]){1, 0, 0});
+  CHECK(report_from(1, report));
+  CHECK_EQ(report[3], 0x9a);
+  CHECK_EQ(report[5], 0x80);
+
+  // Player 1 plugs a Nunchuk in: the remote stops its reports and sends its status unasked.
+  input_attach(0, ATTACHMENT_NUNCHUK);
+  CHECK(report_from(0, report));
+  CHECK_EQ(report[0], 0x20);
+  CHECK_EQ(report[3] & 0x02, 0x02);
+  CHECK(!report_from(0, report));  // Nothing more until the game sets the data mode again.
+  // The game looks, and finds a Nunchuk.
+  const uint8_t read_identity[] = {0x17, 0x04, 0xa4, 0x00, 0xfa, 0x00, 0x06};
+  chip_output(0, read_identity, sizeof read_identity);
+  CHECK(chip_collect(0x82));
+  const uint8_t nunchuk[] = {0x21, 0x00, 0x08, 0x50, 0x00, 0xfa, 0x00, 0x00, 0xa4, 0x20, 0x00, 0x00};
+  CHECK(!memcmp(host(CHIP_EVENT + 9), nunchuk, sizeof nunchuk));
+  chip_output(0, mode, sizeof mode);
+  input_nunchuk_stick(0, 1, 0);
+  input_hold(0, BUTTON_NUNCHUK_Z, 1);
+  CHECK(report_from(0, report));
+  CHECK_EQ(report[0], 0x35);
+  CHECK_EQ(report[6], 0xe0);
+  CHECK_EQ(report[11] & 3, 0x02);  // Z held, C up.
+  // And unplugs it: the status says nothing is there.
+  input_attach(0, ATTACHMENT_NONE);
+  CHECK(report_from(0, report));
+  CHECK_EQ(report[0], 0x20);
+  CHECK_EQ(report[3] & 0x02, 0);
+
+  // The game's rumble and lights reach the player, and the battery the player's controller
+  // reports reaches the game.
+  const uint8_t lights[] = {0x11, 0x41};  // The third light, and rumble.
+  chip_output(1, lights, sizeof lights);
+  PlayerOutputs outputs = input_outputs(1);
+  CHECK_EQ(outputs.rumble, 1);
+  CHECK_EQ(outputs.lights, 0x4);
+  const uint8_t still[] = {0x10, 0x00};
+  chip_output(1, still, sizeof still);
+  CHECK_EQ(input_outputs(1).rumble, 0);
+  CHECK_EQ(input_outputs(1).lights, 0x4);
+  input_battery(1, 0.05f);
+  const uint8_t status[] = {0x15, 0x00};
+  chip_output(1, status, sizeof status);
+  CHECK(report_of(1, 0x20, report));
+  CHECK_EQ(report[0], 0x20);
+  CHECK_EQ(report[3], 0x40 | 0x02 | 0x01);  // The third light, a Classic Controller, the battery low.
+  CHECK_EQ(report[6], 10);
 
   // Player 3 leaves: the game hears their remote's link drop, and only theirs.
   input_connect(2, 0);
