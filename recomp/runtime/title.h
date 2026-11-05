@@ -39,6 +39,9 @@ typedef struct {
   uint64_t apploader_check;
   const TitleFunction *apploader_functions;
   int apploader_function_count;
+  // How often each function has run, indexed like `functions`, for the functions built to
+  // count (emit.py --profile). 0 if none do. profile.c keeps them between runs.
+  uint32_t *counts;
 } Title;
 
 #define TITLE_SYMBOL "wii_recomp_title"

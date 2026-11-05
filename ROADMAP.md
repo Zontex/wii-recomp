@@ -68,7 +68,7 @@ Each stage is **done**, **in progress** or **planned**, and each item is ticked 
 - [ ] `.rel` modules translated ahead of time
 - [ ] Self-modifying code sent to the interpreter
 - [ ] BAT and page-table mapping
-- [ ] The `--all-code` sweep on by default
+- [x] The `--all-code` sweep on by default, through `add_game.py`
 
 ### 4. Graphics model (in progress)
 
@@ -163,7 +163,9 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 
 - [x] One console program for every title, loading each title's translated code as a library
 - [x] Recompiled disc images (`recomp/tools/make_disc.py`): the disc with its native code for each platform, in one file
-- [ ] `recomp/tools/add_game.py <image>`: extract, translate with discovery on, find system functions by content, compile, compile shaders ahead of time, and add the title to the console folder, in one command
+- [x] `recomp/tools/add_game.py <image>`: extract, translate with discovery on, find system functions by content, compile, pack a recompiled disc image and put it in a console's drive, in one command. Code the interpreter ran comes back as function starts on the next build
+- [x] Two build tiers. A first build compiles everything about five times faster, and each function counts how often it runs; running `add_game.py` again compiles the functions that did the work for speed, from counts added up over every run. On a Raspberry Pi 5, Wii Fit Plus goes from an extracted disc to a playable image in under a minute and a half instead of over seven minutes, the second build takes about a minute, and its Body Test walk runs as fast as a build compiled entirely for speed
+- [ ] Shaders compiled ahead of time as part of it (4c)
 - [ ] A first run of a new disc starts under the interpreter while compiling continues behind it
 
 ### 11. Frame rate (in progress)
@@ -195,6 +197,7 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - The recompiled Wii Menu runs at 60 fps through its screens, and starts Wii Fit Plus natively from a recompiled disc image in its drive.
 - On the Mac, the game no longer freezes for a second when macOS holds on to the window's pictures.
 - Real Wii Remotes and the Balance Board can drive a game's own Bluetooth code, and the Wii's memory became one window at a fixed address, making each load or store a few instructions.
+- One command turns a disc into a playable image. Code that has barely run compiles quickly and counts its runs, and the next build compiles what did the work for speed: Wii Fit Plus builds in under a minute and a half on a Raspberry Pi 5.
 
 ## Out of scope
 

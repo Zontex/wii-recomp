@@ -20,6 +20,7 @@
 #include "hardware.h"
 #include "ios.h"
 #include "loader.h"
+#include "profile.h"
 #include "title.h"
 
 Cpu cpu;
@@ -97,14 +98,14 @@ static void load_title_from_disc(void) {
   title_load(path);
 }
 
-// Saves, compiled shaders and the native code cache live next to the program, so they
-// don't depend on where it was started from.
+// Saves, compiled shaders, the native code cache and what each title's code did live next
+// to the program, so they don't depend on where it was started from.
 static void use_folders_beside(const char *program) {
   char full[PATH_MAX], path[PATH_MAX + 16];
   if (!realpath(program, full)) return;
   const char *folder = dirname(full);  // Linux's changes `full`, so it's called once.
   const char *names[][2] = {{"WII_RECOMP_SAVES", "saves"}, {"WII_RECOMP_SHADER_CACHE", "shader-cache"},
-                            {"WII_RECOMP_DISCOVERED", "discovered.txt"}, {"WII_RECOMP_CACHE", "native-cache"},
+                            {"WII_RECOMP_TITLE_DATA", "title-data"}, {"WII_RECOMP_CACHE", "native-cache"},
                             {"WII_RECOMP_GAPS", "gaps.txt"}, {"WII_RECOMP_REMOTE_SLOTS", "remotes.txt"}};
   for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
     snprintf(path, sizeof path, "%s/%s", folder, names[i][1]);
@@ -143,16 +144,19 @@ int main(int count, char **arguments) {
   if (!strcmp(arguments[1], "--console")) {
     console_start(arguments[0], arguments[2], count > 3 && !strcmp(arguments[3], "--boot-disc"), &boot);
     count = 1;  // The console's storage is its own, never a separate folder.
-  } else if (!drive_insert(arguments[1])) {
-    return 1;
-  } else if (is_folder(arguments[1])) {  // An extracted disc or a system title, with its native code built beside the console.
-    load_title_beside(arguments[0]);
-    boot_from_folder(arguments[1], &boot);
   } else {
-    load_title_from_disc();
-    boot_from_disc(&boot);
+    use_folders_beside(arguments[0]);  // Before the title loads, as a disc image's native code goes to the cache.
+    if (!drive_insert(arguments[1])) return 1;
+    if (is_folder(arguments[1])) {  // An extracted disc or a system title, with its native code built beside the console.
+      load_title_beside(arguments[0]);
+      boot_from_folder(arguments[1], &boot);
+    } else {
+      load_title_from_disc();
+      boot_from_disc(&boot);
+    }
   }
-  use_folders_beside(arguments[0]);
+  use_folders_beside(arguments[0]);  // For the console, whatever its own folders leave unset.
+  profile_start();
   guest_memory_init();
   time_start();
   hardware_start();

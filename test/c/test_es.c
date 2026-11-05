@@ -8,7 +8,7 @@
 #include <string.h>
 int console_running(void) { return 0; }
 void console_restart(int boot_disc) { exit(99); }
-const Title *title = &(Title){.title_high = 1, .title_low = 2};
+static Title test_title = {.title_high = 1, .title_low = 2};  // title.c holds `title`, linked in.
 void bluetooth_register_remote(uint8_t *settings, size_t bytes) {}
 void camera_set_bar_above(int above) {}
 uint32_t hw_read(uint32_t a, int n) { return 0; }
@@ -36,6 +36,7 @@ static uint32_t buffer(int i) { return BUFFERS + (uint32_t)i * BUFFER_STEP; }
 static void put_title(int i, uint64_t title) { wr32(buffer(i), (uint32_t)(title >> 32)); wr32(buffer(i) + 4, (uint32_t)title); }
 
 int main(int count, char **arguments) {
+  title = &test_title;
   memory_start();
   files_start(arguments[1]);
   drive_insert(arguments[3]);

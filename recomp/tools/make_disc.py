@@ -17,6 +17,7 @@ Kinds: 1 partition data at a disc offset, 2 the disc's unencrypted area at a raw
 3 ticket, 4 TMD, 5 certificates, 6 native code (name: platform).
 """
 import argparse
+import os
 import struct
 import sys
 from pathlib import Path
@@ -100,6 +101,39 @@ def write_image(extracted, output, natives):
         out.write(HEADER.pack(MAGIC, VERSION, len(table), table_at))
     partial.replace(output)  # Only a finished image gets the real name.
     return len(table)
+
+
+def replace_native(image, natives):
+    """Swaps the image's native code for `natives` without copying the disc again.
+
+    The native code is written last, so everything from the first library on is cut
+    off and written again: the libraries, then the table, then the header pointing at
+    it. Returns False, changing nothing, if the image isn't laid out that way."""
+    rows = read_table(image)
+    first = min((at for kind, _, at, _, _ in rows if kind == NATIVE), default=None)
+    if first is None or any(at >= first for kind, _, at, _, _ in rows if kind != NATIVE):
+        return False
+    kept = [row for row in rows if row[0] != NATIVE]
+    missing = [library for _, library in natives if not Path(library).is_file()]
+    if missing:
+        raise SystemExit("missing: " + ", ".join(map(str, missing)))
+    with open(image, "r+b") as out:
+        out.truncate(first)
+        out.seek(first)
+        table = [ENTRY.pack(kind, 0, disc_offset, at, size, name.encode("utf-8")[:31]) for kind, disc_offset, at, size, name in kept]
+        for platform, library in natives:
+            out.write(bytes(-out.tell() % ALIGN))
+            at = out.tell()
+            out.write(Path(library).read_bytes())
+            table.append(ENTRY.pack(NATIVE, 0, 0, at, out.tell() - at, platform.encode("utf-8")[:31]))
+        out.write(bytes(-out.tell() % ALIGN))
+        table_at = out.tell()
+        out.write(b"".join(table))
+        out.flush()
+        os.fsync(out.fileno())
+        out.seek(0)
+        out.write(HEADER.pack(MAGIC, VERSION, len(table), table_at))
+    return True
 
 
 def read_table(path):
