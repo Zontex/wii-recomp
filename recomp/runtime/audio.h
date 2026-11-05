@@ -10,6 +10,9 @@ void audio_start(void);
 void audio_update(uint64_t now);
 uint64_t audio_next_due(void);  // When the next frame is due, or 0 if none is.
 
+// A program's finished frame, interleaved left and right.
+void audio_frame_ready(const int16_t *frame);
+
 // ax.c: runs one frame's command list, leaving interleaved left and right samples.
 void ax_run_list(uint32_t list, int16_t *output);
 

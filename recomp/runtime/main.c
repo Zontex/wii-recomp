@@ -11,6 +11,7 @@
 #include <sys/stat.h>
 
 #include "audio.h"
+#include "dsp.h"
 #include "console.h"
 #include "input.h"
 #include "cpu.h"
@@ -160,6 +161,7 @@ int main(int count, char **arguments) {
   guest_memory_init();
   time_start();
   hardware_start();
+  dsp_start();
   audio_start();
   files_start(count > 2 ? arguments[2] : count == 2 ? default_storage() : 0);
   system_files_make();

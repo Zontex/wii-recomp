@@ -6,6 +6,8 @@
 
 #include "audio.h"
 #include "cpu.h"
+#include "debug.h"
+#include "dsp.h"
 #include "gaps.h"
 
 enum { COMMAND_SETUP, COMMAND_ADD, COMMAND_SUBTRACT, COMMAND_ADD_SUBTRACT, COMMAND_VOICES, COMMAND_AUX_A, COMMAND_AUX_B,
@@ -328,3 +330,52 @@ void ax_run_list(uint32_t list, int16_t *output) {
     }
   }
 }
+
+// The program behind the mailbox, as Dolphin's AX.cpp answers its mail. The game sends
+// the list's size, then its address; the list runs at once, and the program yields. The
+// game then says what comes next: carry on, a new program, or the boot ROM again.
+#define MAIL_LIST 0xbabe0000u
+// Dolphin's AX_EMPTY_COMMAND_LIST_CYCLES: some games hang if the yield comes sooner.
+#define LIST_CYCLES 2500u
+
+enum { WAIT_LIST_SIZE, WAIT_LIST_ADDRESS, WAIT_NEXT_TASK };
+static int mail_state;
+
+static void ax_start(void) {
+  mail_state = WAIT_LIST_SIZE;
+  dsp_push_mail(DSP_MAIL_INIT, 1, 0);
+}
+
+static void ax_mail(uint32_t mail) {
+  static int16_t frame[AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS];
+  switch (mail_state) {
+  case WAIT_LIST_SIZE:
+    if ((mail & TASK_MAIL_MASK) == MAIL_LIST) mail_state = WAIT_LIST_ADDRESS;
+    else gap_note("unlisted.audio.ax_mail", mail);
+    break;
+  case WAIT_LIST_ADDRESS: {
+    uint64_t started = time_base();
+    ax_run_list(mail, frame);
+    stage_add(STAGE_AUDIO, time_base() - started);
+    audio_frame_ready(frame);
+    dsp_push_mail(DSP_MAIL_YIELD, 1, LIST_CYCLES);
+    mail_state = WAIT_NEXT_TASK;
+    break;
+  }
+  case WAIT_NEXT_TASK:  // The program itself doesn't check the CDD1 prefix.
+    switch (TASK_MAIL_TO_DSP | (mail & ~TASK_MAIL_MASK)) {
+    case TASK_RESUME: dsp_push_mail(DSP_MAIL_RESUME, 1, 0); mail_state = WAIT_LIST_SIZE; break;
+    case TASK_NEW_PROGRAM: dsp_expect_new_program(); mail_state = WAIT_LIST_SIZE; break;
+    case TASK_RESET: dsp_set_program(PROGRAM_ROM); break;
+    case TASK_CONTINUE: mail_state = WAIT_LIST_SIZE; break;
+    default: gap_note("unlisted.audio.ax_mail", mail); break;
+    }
+    break;
+  }
+}
+
+static void ax_update(void) {
+  if (dsp_needs_resume_mail()) dsp_push_mail(DSP_MAIL_RESUME, 1, 0);
+}
+
+const DspProgram ax_wii_program = {"AXWii", ax_start, ax_mail, ax_update};

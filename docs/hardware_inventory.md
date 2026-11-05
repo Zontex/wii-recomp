@@ -25,11 +25,11 @@ Statuses:
 | 2. Graphics commands and registers | 64 | 18 | 9 | 0 | 9 | 10 | 110 |
 | 3. TEV and pixel features | 48 | 13 | 10 | 0 | 4 | 1 | 76 |
 | 4. Vertex and texture | 49 | 11 | 0 | 3 | 1 | 2 | 66 |
-| 5. Hardware blocks | 25 | 12 | 6 | 0 | 6 | 16 | 65 |
-| 6. Audio microcodes | 9 | 3 | 7 | 0 | 0 | 3 | 22 |
+| 5. Hardware blocks | 28 | 11 | 6 | 0 | 5 | 15 | 65 |
+| 6. Audio microcodes | 10 | 4 | 9 | 0 | 0 | 1 | 24 |
 | 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
 | 8. Controllers | 34 | 16 | 7 | 0 | 6 | 2 | 65 |
-| **All** | **335** | **110** | **47** | **4** | **37** | **56** | **589** |
+| **All** | **339** | **110** | **49** | **4** | **36** | **53** | **591** |
 
 ## Biggest gaps
 
@@ -589,15 +589,15 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
-| `hw.control_register` | Control register | done | `runtime/hardware.c:164-169` |  |
+| `hw.control_register` | Control register | done | `runtime/hardware.c` (`dsp_control_set`), `runtime/dsp.c` | The processor's own bits (reset, halt, init) live in `dsp.c`, as Dolphin's DSPHLE.cpp keeps them. The rest are interrupt flags and their enables. A reset stops audio DMA. |
 | `hw.audio_dma_interrupt` | Audio DMA interrupt | done | `runtime/hardware.c:104`, `audio.c:115` | Fires on a 3 ms clock. |
 | `hw.audio_dma_start_length` | Audio DMA start, length | partial | `runtime/hardware.c:101` | Only the enable bit is read. Samples are never fetched from the address. Output comes straight from `ax.c`. |
 | `hw.audio_dma_blocks_left` | Audio DMA blocks left | done | `runtime/hardware.c` | Worked out from the time left in the current audio frame, a block every 0.25 ms, zero-based as Dolphin reads it. |
-| `hw.mail_to_dsp` | Mail to DSP | partial | `runtime/audio.c:128`, `translate/system_functions.json` | SDK functions replaced by signature. Only the AX list mail works. |
-| `hw.mail_from_dsp` | Mail from DSP | on demand | `runtime/hardware.c:114` | No DSP runs, so frame-done mail is a call to the AX frame-done function. A game reading the mailbox itself is reported. |
-| `hw.dsp_boot` | DSP boot | partial | `translate/system_functions.json` | Replaced, so it's assumed ready. |
+| `hw.mail_to_dsp` | Mail to DSP | done | `runtime/dsp.c` (`dsp_write`) | Writing the low half hands the mail to the running program, and the full bit drops at once. |
+| `hw.mail_from_dsp` | Mail from DSP | done | `runtime/dsp.c` (`read_high`, `read_low`) | A queue the game reads high half first. Interrupts follow Dolphin's MailHandler.cpp: at once if nothing waits, after a delay if asked, or when the mail before is read. |
+| `hw.dsp_boot` | DSP boot | done | `runtime/dsp.c` | The OS's wake-up runs as the game's own code against the control bits and the start-up program. The boot ROM takes the game's program and hands over to it, as Dolphin's ROM.cpp. |
 | `hw.dsp_accelerator_interrupt` | DSP accelerator interrupt | done | `runtime/hardware.c:228`, `:345` | Accelerator DMA copies between main memory and MEM2 at once, as Dolphin's Wii mode does, then raises its interrupt. |
-| `hw.instruction_ram_rom_real_dsp_code` | Instruction RAM, ROM, real DSP code | not needed |  | Replaced in C. |
+| `hw.instruction_ram_rom_real_dsp_code` | Instruction RAM, ROM, real DSP code | partial | `runtime/dsp.c` (`hash_in_memory`) | The game's program is recognised by a checksum of its code in main memory, as Dolphin does, and a C version runs in its place. The code itself isn't run. A program outside memory is reported. |
 | `hw.aram` | ARAM | not needed |  | Wii has none. A GameCube-style game would need it. |
 | `hw.ar_dma_registers` | AR DMA registers | done | `runtime/hardware.c:228` | See `hw.dsp_accelerator_interrupt`. A transfer outside memory is reported. |
 
@@ -649,7 +649,7 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 
 ## 6. Audio microcodes
 
-The AX work is rewritten in C. There's no DSP interpreter, so each program needs its own version.
+The game's program is recognised by a checksum of its code, as Dolphin does, and its work is rewritten in C. There's no DSP interpreter, so each program needs its own version.
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
@@ -668,12 +668,14 @@ The AX work is rewritten in C. There's no DSP interpreter, so each program needs
 | `audio.axwii_output_stereo` | AXWii output stereo | done | `runtime/ax.c:282` |  |
 | `audio.axwii_dolby_surround_output` | AXWii Dolby surround output | partial | `runtime/ax.c:315` | Treated as stereo. |
 | `audio.axwii_wii_remote_speaker_output` | AXWii Wii Remote speaker output | missing | `runtime/ax.c:319` | Skipped. |
-| `audio.axwii_older_command_format_old` | AXWii older command format (`_OLD`) | missing | `runtime/ax.c:320` | Command numbers differ. Dolphin uses it for Wii Sports (PAL) and the Wii Startup Menu, chosen by checksum. An unknown command loses the frame. |
-| `audio.ax_gamecube_metroid_prime_trilogy` | AX (GameCube, Metroid Prime Trilogy) | missing |  |  |
-| `audio.zelda_galaxy_twilight_princess_pikmin` | Zelda (Galaxy, Twilight Princess, Pikmin) | missing |  |  |
+| `audio.axwii_older_command_format_old` | AXWii older command format (`_OLD`) | missing | `runtime/dsp.c` | Command numbers differ. Dolphin uses it for Wii Sports (PAL) and the Wii Startup Menu, chosen by checksum. An unknown command loses the frame. |
+| `audio.ax_gamecube_metroid_prime_trilogy` | AX (GameCube, Metroid Prime Trilogy) | missing | `runtime/dsp.c` | Recognised by checksum and reported. |
+| `audio.zelda_galaxy_twilight_princess_pikmin` | Zelda (Galaxy, Twilight Princess, Pikmin) | missing | `runtime/dsp.c` | Recognised by checksum and reported. The game carries on without the program's answers. |
 | `audio.asnd_aesnd_homebrew` | ASnd, AESnd (homebrew) | not needed |  | Commercial games don't use them. |
-| `audio.card_gba` | CARD, GBA | not needed |  | GameCube link helpers. |
-| `audio.init_rom` | INIT, ROM | not needed | `translate/system_functions.json` | Boot is skipped. |
+| `audio.card_gba` | CARD, GBA | partial | `runtime/dsp.c` (`card_program`) | GameCube link helpers. CARD unlocks a card and hands back to the ROM, as Dolphin's CARD.cpp. GBA is reported. |
+| `audio.init_rom` | INIT, ROM | done | `runtime/dsp.c` (`init_program`, `rom_program`) | As Dolphin's INIT.cpp and ROM.cpp. |
+| `audio.unknown_program` | A program with no C version | missing | `runtime/dsp.c` | Reported with its checksum. Dolphin falls back to AX. |
+| `audio.program_memory_upload` | Saving and loading a program's memory when programs switch | missing | `runtime/dsp.c` (`dsp_new_program_mail`) | Reported. Dolphin doesn't do it either. |
 | `audio.direct_ai_streaming_without_the_dsp` | Direct AI streaming without the DSP | missing |  | Needed by anything that plays its own buffer. |
 
 ## 7. IOS

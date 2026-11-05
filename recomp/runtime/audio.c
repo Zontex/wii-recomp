@@ -1,14 +1,14 @@
-// Sound timing and delivery. The game's own AX library builds a command list every
-// 3 ms when the audio DMA interrupt fires, and mails it to the audio processor. That
-// mail runs ax.c here, on the game's thread, because voices are only stable between
-// frames. Samples then wait in a ring for the output thread, and neither side ever
-// waits for the other: a full ring drops a frame, and an empty one plays silence.
+// Sound timing and delivery. The audio DMA interrupt comes every 3 ms, and the game's
+// sound code answers it by giving the audio processor its next frame of work (dsp.c),
+// which runs on the game's thread, because voices are only stable between frames. The
+// samples then wait in a ring for the output thread, and neither side ever waits for
+// the other: a full ring drops a frame, and an empty one plays silence.
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "audio.h"
-#include "title.h"
 #include "cpu.h"
 #include "debug.h"
 #include "hardware.h"
@@ -18,8 +18,6 @@
 // Interrupts only reach the game between its slow steps, such as waiting on the
 // graphics card, so they're made up right after. Past this, that time is let go.
 #define MAX_FRAMES_BEHIND 100
-
-#define MAIL_LIST_FOLLOWS 0xbabeu
 
 #define RING_SAMPLES 16384u  // A power of two, so positions can wrap freely.
 #define START_TARGET_SAMPLES 2400u  // 75 ms: what the ring holds to ride out a slow step.
@@ -124,20 +122,8 @@ void audio_update(uint64_t now) {
   audio_dma_interrupt();
 }
 
-// The game mails a header, then the command list's address.
-void audio_dsp_mail(uint32_t mail) {
-  static int list_follows;
-  if (mail >> 16 == MAIL_LIST_FOLLOWS) {
-    list_follows = 1;
-    return;
-  }
-  if (!list_follows) return;
-  list_follows = 0;
-  static int16_t frame[AUDIO_FRAME_SAMPLES * AUDIO_CHANNELS];
-  uint64_t started = time_base();
-  ax_run_list(mail, frame);
-  stage_add(STAGE_AUDIO, time_base() - started);
+// A program finished a frame: on to the speakers, and to the WAV file if one is kept.
+void audio_frame_ready(const int16_t *frame) {
   push_frame(frame);
   if (wave) save_frame(frame);
-  dispatch(title->ax_frame_done);
 }

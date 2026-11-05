@@ -12,6 +12,7 @@
 #include "title.h"
 #include "cpu.h"
 #include "debug.h"
+#include "dsp.h"
 #include "hardware.h"
 
 #define CHECK_EVERY 2000
@@ -131,6 +132,7 @@ void idle_wait(void) {
   if (decrementer_armed) wait = sooner(wait, now, decrementer_deadline);
   wait = sooner(wait, now, graphics_next_due());
   wait = sooner(wait, now, audio_next_due());
+  wait = sooner(wait, now, dsp_next_due());
   if (graphics_busy()) wait = sooner(wait, now, now + BUSY_SLEEP_TICKS);  // A signal may come at any time.
   // An interrupt is taken ahead of the timer, and most sleeps end by raising one, so
   // sleeping past a timer that's due could put it off for good.
