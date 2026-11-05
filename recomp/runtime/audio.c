@@ -131,6 +131,14 @@ static uint32_t blocks_per_second(void) {
 
 static uint64_t block_time(uint64_t block) { return dma_clock_start + block * TIME_BASE_HZ / blocks_per_second(); }
 
+// A new pass over the buffer waits for the game to answer the last interrupt, which is
+// when it mixes the next buffer. On a Wii the game always answers in time, but here a
+// slow step can leave it behind, and making up the time would play the same few
+// milliseconds over and over, which sounds like a buzz. Silence is better.
+static int waiting_for_game(void) {
+  return (dma_control & DMA_ENABLE) && dma_left == (dma_control & DMA_BLOCKS) && audio_dma_interrupt_unanswered();
+}
+
 // One block: 32 bytes from memory, or silence while the DMA is off. In memory each
 // sample is big-endian, right channel first. The count runs down, and at zero the
 // DMA starts over from the start address with the count written last, and interrupts.
@@ -174,6 +182,11 @@ void audio_update(uint64_t now) {
     dma_blocks_done = 0;
   }
   while (block_time(dma_blocks_done + 1) <= now) {
+    if (waiting_for_game()) {  // The clock goes on without it.
+      dma_clock_start = now;
+      dma_blocks_done = 0;
+      break;
+    }
     dma_blocks_done++;
     play_block();
   }

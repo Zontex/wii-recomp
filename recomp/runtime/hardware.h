@@ -12,6 +12,7 @@ void clear_irq(int bit);
 int irq_pending(void);
 void video_retrace(void);
 void audio_dma_interrupt(void);
+int audio_dma_interrupt_unanswered(void);
 void hardware_update(uint64_t now);  // Timed signals: the audio interface's interrupt, and button presses.
 void reset_button_press(void);  // Any thread: presses the console's reset button.
 uint32_t hw_peek(uint32_t address, int bytes);

@@ -10,6 +10,8 @@ static uint32_t ai_control = 0x40;  // 32 kHz.
 uint32_t hw_peek(uint32_t address, int bytes) { return address == 0xcc006c00u ? ai_control : 0; }
 static int interrupts, gaps;
 void audio_dma_interrupt(void) { interrupts++; }
+static int unanswered;  // The game has yet to answer the last interrupt.
+int audio_dma_interrupt_unanswered(void) { return unanswered; }
 void gap_hit(const char *id, uint32_t detail) { gaps++; }
 int audio_output_open(void) { return 1; }
 uint32_t hw_read(uint32_t address, int bytes) { return 0; }
@@ -68,11 +70,22 @@ int main(void) {
   CHECK_EQ(blocks_left(), 3);
   wait_blocks(4);
   CHECK_EQ(interrupts, 3);
-  CHECK_EQ(blocks_left(), 1);
+  CHECK_EQ(blocks_left(), 1);  // Two blocks, the second now playing.
+  // A game that falls behind: it hasn't answered the interrupt that just came, so the
+  // new pass waits rather than playing the old buffer again, and the time is let go.
+  unanswered = 1;
+  uint32_t played_before = written;
+  wait_blocks(200);
+  CHECK_EQ(written, played_before);  // Nothing more played, nothing repeated.
+  CHECK_EQ(interrupts, 3);
+  unanswered = 0;  // Answered: on it goes, from now.
+  wait_blocks(2);
+  CHECK_EQ(written, played_before + 16);
+  CHECK_EQ(interrupts, 4);
   // Off: silence, and no more interrupts. A long wait is let go rather than made up.
   audio_dma_write(CONTROL, 0, 2);
   wait_blocks(3000);
-  CHECK_EQ(interrupts, 3);
+  CHECK_EQ(interrupts, 4);
   now_ticks += 60750000ull;  // A second with no checks, as a slow step would leave.
   audio_update(now_ticks);
   CHECK_EQ(gaps, 0);

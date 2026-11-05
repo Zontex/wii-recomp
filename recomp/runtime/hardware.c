@@ -167,6 +167,12 @@ static void update_dsp_interrupt(void) {
 }
 
 
+// The audio DMA's interrupt is flagged, enabled, and the game hasn't answered it yet.
+int audio_dma_interrupt_unanswered(void) {
+  uint32_t control = get(DSP_CONTROL, 2);
+  return (control & DSP_AUDIO_FLAG) && (control & DSP_AUDIO_FLAG << 1);
+}
+
 void audio_dma_interrupt(void) {
   put(DSP_CONTROL, get(DSP_CONTROL, 2) | DSP_AUDIO_FLAG, 2);
   update_dsp_interrupt();
