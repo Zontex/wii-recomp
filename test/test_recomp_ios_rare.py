@@ -5,6 +5,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 HERE = Path(__file__).parent
@@ -37,24 +38,24 @@ class RareRequests(unittest.TestCase):
         self.assertEqual((saves / "title/b").read_bytes(), b"yes!")
 
     def test_bluetooth_rare_commands_and_channels(self):
-        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "remote_link.c", "gaps.c"]
+        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "wii_motionplus.c", "remote_link.c", "gaps.c"]
         result = self.build_and_run([HERE / "c/test_bluetooth_rare.c"] + [RUNTIME / name for name in sources])
         self.assertIn("gap: ctl.sdp_queries 0x1", result.stderr)  # Refused service discovery is reported.
 
     def test_real_devices_through_the_link(self):
-        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "remote_link.c", "gaps.c"]
+        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "wii_motionplus.c", "remote_link.c", "gaps.c"]
         result = self.build_and_run([HERE / "c/test_remote_link.c"] + [RUNTIME / name for name in sources], self.folder / "remotes.txt")
         self.assertIn("remotes: the board 00:23:31:00:00:09 is player 5", result.stderr)
         self.assertIn("00:23:31:00:00:09 4", (self.folder / "remotes.txt").read_text())  # Its slot is remembered.
 
     def test_loopback_devices_through_the_chip(self):
         sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "remote_link.c", "remote_link_loopback.c", "wii_attachment.c",
-                   "wii_attachment_key.c", "wii_board.c", "wii_camera.c", "input.c", "gaps.c"]
+                   "wii_attachment_key.c", "wii_board.c", "wii_camera.c", "wii_motionplus.c", "input.c", "gaps.c"]
         self.build_and_run([HERE / "c/test_loopback_chip.c"] + [RUNTIME / name for name in sources], self.folder / "remotes.txt")
 
     def test_four_players_through_the_chip(self):
         sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "remote_link.c", "wii_attachment.c", "wii_attachment_key.c",
-                   "wii_board.c", "wii_camera.c", "input.c", "gaps.c"]
+                   "wii_board.c", "wii_camera.c", "wii_motionplus.c", "input.c", "gaps.c"]
         self.build_and_run([HERE / "c/test_players_chip.c"] + [RUNTIME / name for name in sources])
 
     def test_players_controls_and_commands(self):
@@ -84,6 +85,24 @@ class RareRequests(unittest.TestCase):
         self.assertIn("control: virtual controller 1 stops rumbling", result.stderr)
         self.assertIn("control: virtual controller 1 shows player light 2", result.stderr)
         self.assertIn("control: there's no virtual controller 1", result.stderr)
+
+    def test_motionplus_through_the_chip(self):
+        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "wii_motionplus.c", "remote_link.c", "wii_attachment.c",
+                   "wii_attachment_key.c", "wii_board.c", "wii_camera.c", "input.c", "gaps.c"]
+        result = self.build_and_run([HERE / "c/test_motionplus.c"] + [RUNTIME / name for name in sources])
+        # The calibration's check is zlib's CRC-32 of both blocks, less their check bytes.
+        block = bytes.fromhex(result.stderr.split("calibration:")[1].split("\n")[0].replace(" ", ""))
+        crc = zlib.crc32(block[16:30], zlib.crc32(block[:14]))
+        self.assertEqual(block[14:16] + block[30:32], (crc >> 16).to_bytes(2, "big") + (crc & 0xffff).to_bytes(2, "big"))
+
+    def test_motionplus_answers_follow_from_the_numbers(self):
+        sys.path.insert(0, str(HERE.parent / "recomp/tools"))
+        import motionplus_challenge as challenge
+        self.assertEqual((RUNTIME / "wii_motionplus_challenge.h").read_text(), challenge.header())
+        x, y0, y1 = (int.from_bytes(data, "little") for data in challenge.answers().values())
+        n, v = challenge.N, challenge.SQRT_V ** 2 % challenge.N
+        self.assertEqual(y0 * y0 % n, x)
+        self.assertEqual(y1 * y1 % n, x * v % n)
 
     @unittest.skipUnless(sys.platform == "linux", "Linux's Bluetooth backend")
     def test_linux_remote_sockets(self):

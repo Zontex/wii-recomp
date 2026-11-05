@@ -28,8 +28,8 @@ Statuses:
 | 5. Hardware blocks | 25 | 12 | 6 | 0 | 6 | 16 | 65 |
 | 6. Audio microcodes | 9 | 3 | 7 | 0 | 0 | 3 | 22 |
 | 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
-| 8. Controllers | 49 | 7 | 5 | 0 | 5 | 2 | 68 |
-| **All** | **350** | **101** | **45** | **4** | **36** | **56** | **592** |
+| 8. Controllers | 50 | 7 | 4 | 0 | 5 | 2 | 68 |
+| **All** | **351** | **101** | **44** | **4** | **36** | **56** | **592** |
 
 ## Biggest gaps
 
@@ -44,7 +44,7 @@ Ordered by how likely a real game is to hit them.
 7. **Self-modifying code** (`cpu.self_modifying_code_icbi`). `icbi` is a no-op, so translated code is never replaced.
 8. **Video interface registers are only stored** (`hw.*` in VI). No beam position, interlace, PAL or 480p modes.
 9. **No GameCube controllers** (`hw.gc_controller_wheel_keyboard_dance_mat`). Every port answers that nothing is plugged in.
-10. **No Wii MotionPlus or remote speaker** (`ctl.*`). Covered by the controllers stage of `ROADMAP.md`.
+10. **No remote speaker** (`ctl.speaker`, `audio.axwii_wii_remote_speaker_output`). Covered by the controllers stage of `ROADMAP.md`.
 11. **Floating-point status flags aren't worked out from arithmetic** (`cpu.status_flags_fprf_fr_fi_fx_and_others`). Only the game's own writes change them.
 12. **No guest exceptions or memory mapping** (`cpu.program_trap_illegal`, `cpu.dsi_isi`, `cpu.game_defined_bat_maps`, `cpu.page_tables_segment_registers`).
 13. **Copy filters are ignored**: Y scale, gamma, anti-aliasing and deflicker, clamp and field copies (`pixel.copy_*`, `pixel.gamma_on_xfb_copy_1_0_1_7_2_2`).
@@ -853,7 +853,7 @@ The AX work is rewritten in C. There's no DSP interpreter, so each program needs
 | `ctl.taiko_drum_tatacon` | Taiko drum (TaTaCon) | on demand |  | Few titles. Built when one is tested. |
 | `ctl.udraw_drawsome_tablets` | uDraw, Drawsome tablets | on demand |  | Few titles. Built when one is tested. |
 | `ctl.shinkansen_controller` | Shinkansen controller | not needed |  | One game in Japan. |
-| `ctl.wii_motionplus` | Wii MotionPlus | missing | `runtime/wii_remote.c:76` | Reports no device. |
+| `ctl.wii_motionplus` | Wii MotionPlus | done | `runtime/wii_motionplus.c`, `runtime/wii_remote.c` (`wire_read`, `follow_plug`) | Found at 0xa6 until activated; then at 0xa4, alone or passing a Nunchuk or Classic Controller through every other report, with the attachment pin dropping while it changes over. Calibration with its CRC, and the check games run (answers from `wii_motionplus_challenge.h`). Its gyro comes from a controller's or the pipe's `gyro`. Tested through the chip with made-up data; no game that uses one has been run yet. |
 | `ctl.balance_board_over_bluetooth` | Balance Board over Bluetooth | done | `runtime/wii_board.c`, `runtime/bluetooth.c`, `runtime/remote_link.c` | A real board takes slot 5, found by name or by its attachment ID `04 02`. Otherwise the simulated board, in games with a calibration flag. |
 | `ctl.real_wii_remotes_wiimotereal` | Real Wii Remotes (`WiimoteReal`) | partial | `runtime/remote_link.c`, `remote_link_linux.c`, `remote_link_mac.c` | Remotes and the board pass their reports straight to the game's own code. Linux uses raw L2CAP sockets, the Mac IOKit's HID. Tested with a loopback stand-in and fake sockets; not yet with a real remote. On Linux the setup turns bluetoothd's input plugin off, which wireless Switch controllers need, so the two don't yet work wirelessly together (`remotes_setup.sh`). |
 | `ctl.passthrough_bluetooth_adapter` | Passthrough Bluetooth adapter | not needed |  |  |

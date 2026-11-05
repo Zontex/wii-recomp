@@ -15,7 +15,7 @@ static const char *control_names[KEY_CONTROLS] = {
   "up", "down", "left", "right", "a", "b", "one", "two", "plus", "minus", "home",
   "l", "r", "zl", "zr", "c", "z",
   "stick_up", "stick_down", "stick_left", "stick_right",
-  "shake", "next_attachment", "board", "lean_left", "lean_right", "lean_forward", "lean_back",
+  "shake", "next_attachment", "motionplus", "board", "lean_left", "lean_right", "lean_forward", "lean_back",
 };
 
 static const struct { const char *name; int key; } key_names[] = {
@@ -40,7 +40,7 @@ static const char *default_keys[KEY_CONTROLS] = {
   "up", "down", "left", "right", "enter", "backspace", "1", "2", "equal", "minus", "h",
   "x", "c", "z", "v", "c", "z",
   "up", "down", "left", "right",
-  "q", "f2", "space", "a", "d", "w", "s",
+  "q", "f2", "f3", "space", "a", "d", "w", "s",
 };
 
 static struct {
@@ -151,6 +151,7 @@ static int player_key(PlayerSettings *player, const char *key, const char *value
     return 0;
   }
   if (!strcmp(key, "sideways")) return yes_or_no(value, &player->sideways, key, why, why_bytes);
+  if (!strcmp(key, "motionplus")) return yes_or_no(value, &player->motionplus, key, why, why_bytes);
   if (!strcmp(key, "pointer")) {
     int count = settings_list(value, parts, LIST_MOST);
     player->pointer = 0;
@@ -184,7 +185,7 @@ static int player_key(PlayerSettings *player, const char *key, const char *value
     snprintf(player->recenter, sizeof player->recenter, "%s", value);
     return 1;
   }
-  snprintf(why, why_bytes, "a player's settings are source, attachment, sideways, pointer, gyro_speed and recenter");
+  snprintf(why, why_bytes, "a player's settings are source, attachment, motionplus, sideways, pointer, gyro_speed and recenter");
   return 0;
 }
 
@@ -264,6 +265,8 @@ const char *controllers_default_text(void) {
     PUT("# source = %s\n", p == 0 ? "keyboard, mouse, pad" : "pad");
     if (p == 0) PUT("# What's plugged into the remote: none, nunchuk or classic. F2 changes it while playing.\n");
     PUT("# attachment = nunchuk\n");
+    if (p == 0) PUT("# A Wii MotionPlus between the remote and its attachment, for the games that use one: yes or no. F3 changes it.\n");
+    PUT("# motionplus = no\n");
     if (p == 0) PUT("# A controller held sideways, as a Wii Remote alone is in some games: yes or no.\n");
     PUT("# sideways = no\n");
     if (p == 0) PUT("# What moves the pointer: mouse, gyro, stick (a controller's right stick) or none.\n");
@@ -363,5 +366,6 @@ void controllers_start(void) {
       exit(1);
     }
     input_attach(p, attachment);
+    input_attach_motionplus(p, player->motionplus);
   }
 }

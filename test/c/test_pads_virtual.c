@@ -83,9 +83,12 @@ int main(void) {
   send("pad release 1 right_stick\n");
   send("pad gyro 1 0 -20 0\n");
   run(0.5f);
+  input_snapshot(0, &state);
+  CHECK(fabsf(state.gyro[2] + 20) < 0.5f);  // Turning right, about the remote's z, for a MotionPlus.
+  CHECK(fabsf(state.gyro[0]) < 0.5f && fabsf(state.gyro[1]) < 0.5f);
   send("pad gyro 1 0 0 0\n");
   input_snapshot(0, &state);
-  CHECK(state.pointer_x > 0.35f && state.pointer_x < 0.65f);  // Half the reach in half a second.
+  CHECK(state.pointer_x > 0.2f);  // How far depends on how long the polls took; pad turn checks the distance.
   CHECK(fabsf(state.pointer_y) < 0.05f);
   send("pad hold 1 right_stick\n");
   send("pad release 1 right_stick\n");

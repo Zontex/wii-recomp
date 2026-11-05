@@ -13,6 +13,7 @@ typedef struct {
   int sources;          // SOURCE_*: what drives this player.
   char pad[64];         // A controller kept for this player, by serial number, or "" for the next one.
   Attachment attachment;
+  int motionplus;       // A Wii MotionPlus between the remote and its attachment.
   int sideways;         // A controller held sideways, as a Wii Remote alone is in some games.
   int pointer;          // POINTER_*: what moves the pointer.
   float gyro_speed;
@@ -24,7 +25,7 @@ typedef enum {
   KEY_UP, KEY_DOWN, KEY_LEFT, KEY_RIGHT, KEY_A, KEY_B, KEY_ONE, KEY_TWO, KEY_PLUS, KEY_MINUS, KEY_HOME,
   KEY_L, KEY_R, KEY_ZL, KEY_ZR, KEY_C, KEY_Z,
   KEY_STICK_UP, KEY_STICK_DOWN, KEY_STICK_LEFT, KEY_STICK_RIGHT,
-  KEY_SHAKE, KEY_NEXT_ATTACHMENT, KEY_BOARD, KEY_LEAN_LEFT, KEY_LEAN_RIGHT, KEY_LEAN_FORWARD, KEY_LEAN_BACK,
+  KEY_SHAKE, KEY_NEXT_ATTACHMENT, KEY_MOTIONPLUS, KEY_BOARD, KEY_LEAN_LEFT, KEY_LEAN_RIGHT, KEY_LEAN_FORWARD, KEY_LEAN_BACK,
   KEY_CONTROLS,
 } KeyControl;
 

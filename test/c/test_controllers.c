@@ -47,6 +47,7 @@ int main(int count, char **arguments) {
   CHECK(bound(GLFW_KEY_UP, KEY_UP) && bound(GLFW_KEY_UP, KEY_STICK_UP));
   CHECK(bound(GLFW_KEY_C, KEY_R) && bound(GLFW_KEY_C, KEY_C));
   CHECK(bound(GLFW_KEY_F2, KEY_NEXT_ATTACHMENT));
+  CHECK(bound(GLFW_KEY_F3, KEY_MOTIONPLUS));
 
   // The written file is all comments, so it reads as the defaults; with the #s taken
   // away, it reads the same again, so every default it shows is a setting it accepts.
@@ -75,7 +76,7 @@ int main(int count, char **arguments) {
 
   // Settings change what they say.
   CHECK_EQ(line_of("[player1]\nsource = pad\n[player2]\nsource = keyboard, pad:ABC123  # the blue one\n"
-                   "attachment = classic\npointer = stick\ngyro_speed = 2.5\nrecenter = capture\nsideways = yes\n"
+                   "attachment = classic\nmotionplus = yes\npointer = stick\ngyro_speed = 2.5\nrecenter = capture\nsideways = yes\n"
                    "[keys]\na = space, enter\nshake = none\n[board]\nsource = none\n[remotes]\nmode = real\n"), 0);
   CHECK_EQ(controllers_keyboard_player(), 1);
   CHECK_EQ(controllers_mouse_player(), -1);
@@ -83,6 +84,8 @@ int main(int count, char **arguments) {
   CHECK_EQ(second->sources, SOURCE_KEYBOARD | SOURCE_PAD);
   CHECK(!strcmp(second->pad, "ABC123"));
   CHECK_EQ(second->attachment, ATTACHMENT_CLASSIC);
+  CHECK_EQ(second->motionplus, 1);
+  CHECK_EQ(controllers_player(0)->motionplus, 0);
   CHECK_EQ(second->pointer, POINTER_STICK);
   CHECK(second->gyro_speed == 2.5f);
   CHECK(!strcmp(second->recenter, "capture"));
@@ -101,6 +104,7 @@ int main(int count, char **arguments) {
   CHECK_EQ(line_of("[player2]\ngyro_speed = 0\n"), 2);
   CHECK_EQ(line_of("[player2]\nrecenter = q\n"), 2);
   CHECK_EQ(line_of("[player2]\nsideways = maybe\n"), 2);
+  CHECK_EQ(line_of("[player2]\nmotionplus = inside\n"), 2);
   CHECK_EQ(line_of("[keys]\njump = space\n"), 2);
   CHECK_EQ(line_of("[keys]\na = hyperspace\n"), 2);
   CHECK_EQ(line_of("[keys]\na = a, b, c, d, e\n"), 2);
@@ -128,6 +132,7 @@ int main(int count, char **arguments) {
   CHECK(input_connected(0));
   CHECK(!input_connected(1));
   CHECK_EQ(input_attachment(0), ATTACHMENT_NUNCHUK);
+  CHECK(!input_motionplus(0));
   CHECK(!strcmp(getenv("WII_RECOMP_REMOTES"), "auto"));
   CHECK(input_board_enabled());
 

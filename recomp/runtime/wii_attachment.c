@@ -136,11 +136,15 @@ void attachment_nunchuk_state(uint8_t *to, uint32_t buttons, const float stick[2
   to[5] = last;
 }
 
-void attachment_fill(int device, const PlayerState *player, uint8_t *out, uint32_t bytes) {
+void attachment_plain_state(int device, const PlayerState *player, uint8_t out[6]) {
   Port *a = start(device);
+  if (a->kind == ATTACHMENT_NUNCHUK) attachment_nunchuk_state(out, player->buttons, player->nunchuk_stick, player->nunchuk_accel);
+  else attachment_classic_state(out, player->buttons, player->sticks);
+}
+
+void attachment_fill(int device, const PlayerState *player, uint8_t *out, uint32_t bytes) {
   uint8_t state[CLASSIC_BYTES];
-  if (a->kind == ATTACHMENT_NUNCHUK) attachment_nunchuk_state(state, player->buttons, player->nunchuk_stick, player->nunchuk_accel);
-  else attachment_classic_state(state, player->buttons, player->sticks);
+  attachment_plain_state(device, player, state);
   for (uint32_t i = 0; i < bytes; i++) out[i] = i < CLASSIC_BYTES ? state[i] : 0xff;
-  encrypt_if_on(a, out, bytes, 0);
+  encrypt_if_on(start(device), out, bytes, 0);
 }

@@ -8,6 +8,8 @@ void attachment_read(int device, uint32_t address, uint8_t *out, uint32_t bytes)
 void attachment_write(int device, uint32_t address, const uint8_t *data, uint32_t bytes);
 // Its current state from the player's controls, as a data report carries it.
 void attachment_fill(int device, const PlayerState *player, uint8_t *out, uint32_t bytes);
+// Its six bytes of state, never encrypted, as a MotionPlus reads them to pass through.
+void attachment_plain_state(int device, const PlayerState *player, uint8_t out[6]);
 
 // Exposed for testing.
 void attachment_encrypt(uint8_t *bytes, uint32_t count, uint32_t address, const uint8_t add[8], const uint8_t exclusive[8]);

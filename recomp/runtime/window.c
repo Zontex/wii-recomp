@@ -54,6 +54,7 @@ static void on_key(GLFWwindow *from, int key, int scancode, int action, int mods
     if (control == KEY_NEXT_ATTACHMENT && down && player >= 0) {
       input_attach(player, (Attachment)((input_attachment(player) + 1) % ATTACHMENT_KINDS));
     }
+    if (control == KEY_MOTIONPLUS && down && player >= 0) input_attach_motionplus(player, !input_motionplus(player));
     if (control == KEY_BOARD && down) input_board_toggle();
     if (control == KEY_LEAN_LEFT) lean_x = down ? -0.6f : 0;
     if (control == KEY_LEAN_RIGHT) lean_x = down ? 0.6f : 0;

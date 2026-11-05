@@ -20,8 +20,9 @@ typedef struct {
   uint64_t pulse_until, shake_until;
   float pointer_x, pointer_y, roll;
   float sticks[4];
-  float accel[3], nunchuk_stick[2], nunchuk_accel[3];
+  float accel[3], nunchuk_stick[2], nunchuk_accel[3], gyro[3];
   Attachment attachment;
+  int motionplus;
   PlayerOutputs outputs;
   float battery;
   uint64_t sampled_at, sample_seen;
@@ -147,6 +148,8 @@ void input_snapshot(int player, PlayerState *out) {
   memcpy(out->nunchuk_stick, p->nunchuk_stick, sizeof out->nunchuk_stick);
   memcpy(out->nunchuk_accel, p->nunchuk_accel, sizeof out->nunchuk_accel);
   out->attachment = attachment_of(p);
+  memcpy(out->gyro, p->gyro, sizeof out->gyro);
+  out->motionplus = p->motionplus;
   p->snapshots++;
   if (p->sampled_at != p->sample_seen) {
     p->sample_seen = p->sampled_at;
@@ -215,6 +218,28 @@ void input_attach(int player, Attachment attachment) {
   pthread_mutex_lock(&lock);
   players[player].attachment = attachment;
   players[player].attachment_chosen = 1;
+  pthread_mutex_unlock(&lock);
+}
+
+void input_attach_motionplus(int player, int attached) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].motionplus = attached != 0;
+  pthread_mutex_unlock(&lock);
+}
+
+int input_motionplus(int player) {
+  if (!valid(player)) return 0;
+  pthread_mutex_lock(&lock);
+  int attached = players[player].motionplus;
+  pthread_mutex_unlock(&lock);
+  return attached;
+}
+
+void input_gyro(int player, const float gyro[3]) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  memcpy(players[player].gyro, gyro, sizeof players[player].gyro);
   pthread_mutex_unlock(&lock);
 }
 
@@ -342,8 +367,9 @@ static uint32_t button_named(const char *name) {
 
 // The controls' commands: press a, hold a, release a, pointer x y, stick x y, board on
 // kg x y, board off, connect, disconnect, accel x y z, roll degrees (held still), shake, nunchuk
-// stick x y, nunchuk accel x y z, attach none|nunchuk|classic. Any of them but board may
-// start with a player, as in "p2 press a"; without one it is player 1's.
+// stick x y, nunchuk accel x y z, attach none|nunchuk|classic, motionplus on|off, gyro x y z
+// (degrees a second). Any of them but board may start with a player, as in "p2 press a";
+// without one it is player 1's.
 int input_run_command(const char *line) {
   char word[16], name[16];
   float x = 0, y = 0, z = 0, kilograms = input_board_kilograms();
@@ -372,6 +398,9 @@ int input_run_command(const char *line) {
   else if (sscanf(line, "nunchuk accel %f %f %f", &x, &y, &z) == 3) {
     input_nunchuk_accel(player, (float[3]){x, y, z});
   } else if (sscanf(line, "attach %15s", name) == 1 && input_attachment_named(name, &attachment)) input_attach(player, attachment);
+  else if (sscanf(line, "motionplus %15s", name) == 1 && (!strcmp(name, "on") || !strcmp(name, "off"))) {
+    input_attach_motionplus(player, !strcmp(name, "on"));
+  } else if (sscanf(line, "gyro %f %f %f", &x, &y, &z) == 3) input_gyro(player, (float[3]){x, y, z});
   else if (!strncmp(line, "connect", 7)) input_connect(player, 1);
   else if (!strncmp(line, "disconnect", 10)) input_connect(player, 0);
   else if (!skipped && sscanf(line, "board %15s %f %f %f", word, &kilograms, &x, &y) >= 1 && (!strcmp(word, "on") || !strcmp(word, "off"))) {

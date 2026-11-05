@@ -266,9 +266,13 @@ static void pass_to_player(Pad *pad, float seconds, uint64_t now_ms) {
   if ((settings->pointer & POINTER_STICK) && layout == PAD_AS_REMOTE) pad_pointer_stick(&pad->pointer, state.right, seconds, settings->gyro_speed);
   if (settings->pointer & (POINTER_GYRO | POINTER_STICK)) input_pointer(player, pad->pointer.x, pad->pointer.y);
   if (pad->has_gyro || SDL_GamepadHasSensor(pad->gamepad, pad->motion_accel)) {
-    float remote[3], nunchuk[3];
+    float remote[3], nunchuk[3], turn[3], turn_remote[3];
     pad_remote_axes(pad->accel, sideways, remote);
     input_motion(player, remote, pad_roll(&pad->pointer, sideways));
+    // A turn is turned into the remote's axes as motion is, less the gyro's zero, for a MotionPlus.
+    for (int i = 0; i < 3; i++) turn[i] = pad->gyro[i] - pad->pointer.bias[i];
+    pad_remote_axes(turn, sideways, turn_remote);
+    input_gyro(player, turn_remote);
     if (pad->has_left_accel && layout == PAD_AS_REMOTE) {
       pad_remote_axes(pad->nunchuk_accel, 0, nunchuk);
       input_nunchuk_accel(player, nunchuk);

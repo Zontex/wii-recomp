@@ -31,7 +31,10 @@ typedef struct {
   float accel[3];              // The remote's motion.
   float nunchuk_stick[2];      // -1 to 1, y growing up.
   float nunchuk_accel[3];      // The Nunchuk's motion, along the same axes when held beside the remote.
+  float gyro[3];               // How fast the remote turns, in degrees a second, about its own axes by the right-hand
+                               // rule: tipping its front up, rolling its right side down, turning it left.
   Attachment attachment;
+  int motionplus;              // A Wii MotionPlus between the remote and its attachment.
 } PlayerState;
 
 // Player 1 is there from the start, for the keyboard and mouse; the others join when a
@@ -58,6 +61,9 @@ void input_nunchuk_accel(int player, const float accel[3]);
 void input_shake(int player);  // Shakes the remote for a moment, as a swing or a waggle does.
 // Plugs an attachment in, or none, as a player does by hand. The remote tells the game.
 void input_attach(int player, Attachment attachment);
+void input_attach_motionplus(int player, int attached);
+int input_motionplus(int player);
+void input_gyro(int player, const float gyro[3]);
 Attachment input_attachment(int player);
 const char *input_attachment_name(Attachment attachment);
 int input_attachment_named(const char *name, Attachment *out);  // 0 if the name isn't one.
