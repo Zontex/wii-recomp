@@ -1,11 +1,17 @@
 // The audio processor's mailboxes, control bits and program slot. The rules for the mail
 // queue follow Dolphin's HW/DSPHLE/MailHandler.cpp, the registers DSPHLE.cpp, and the
 // boot ROM, start-up and memory card programs ROM.cpp, INIT.cpp and CARD.cpp.
+//
+// A program with no C version is run as it is, by the interpreter (dsp_lle.c) on Dolphin's
+// free boot ROM, which takes over the mailboxes and control bits from then on.
+// WII_RECOMP_DSP=lle runs every program that way, from power-on, to check C versions.
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "cpu.h"
 #include "dsp.h"
+#include "dsp_lle.h"
 #include "gaps.h"
 #include "zelda.h"
 
@@ -18,6 +24,15 @@
 #define CPU_CYCLES_PER_TICK 12u        // 729 MHz against the 60.75 MHz time base.
 #define UPDATE_TICKS (TICKS_PER_SECOND / 1000)  // Programs are looked at every millisecond, as in Dolphin.
 #define INIT_CODE_TICKS 130u           // How long the start-up bit stays set: Dolphin measured it on a Wii.
+
+#define DSP_CYCLES_PER_TICK 2u      // A sixth of the processor's clock, as Dolphin's DSPLLE runs it.
+#define MAIL_SLICE 72u              // Run before a mailbox read, so a waiting loop sees progress (DSP.cpp).
+#define MOST_CYCLES_OWED 243000u    // 2 ms: past this, a long gap between checks is let go.
+
+extern const unsigned char data_dsp_rom[], data_dsp_coef[];  // Embedded by build_file.py.
+static int interpreting;           // The interpreter owns the mailboxes and control bits.
+static uint64_t interpreted_until;
+static uint32_t cycles_owed;
 
 static struct { uint32_t mail; int interrupt; } queue[QUEUE];
 static uint32_t queue_first, queue_count, last_mail, halted;
@@ -32,7 +47,7 @@ static Slot current = {0, PROGRAM_NONE}, parked = {0, PROGRAM_NONE};
 
 // The ten mails after TASK_NEW_PROGRAM describe the next program (UCodes.cpp, PrepareBootUCode).
 static int taking_new_program, new_program_mails, resume_mail_wanted;
-static uint32_t new_iram_address, new_iram_length, new_mram_length, new_dram_length;
+static uint32_t new_iram_address, new_iram_length, new_iram_dsp_address, new_start, new_mram_length, new_dram_length;
 
 uint32_t dsp_hash(const uint8_t *data, uint32_t length) {
   uint32_t crc = 0;
@@ -109,6 +124,7 @@ static uint32_t read_low(void) {
 }
 
 static const DspProgram *program_for(uint32_t crc);
+static int hand_over(uint32_t crc, uint32_t address, uint32_t length, uint32_t dsp_address, uint32_t start);
 
 void dsp_set_program(uint32_t crc) {
   queue_count = 0;
@@ -126,6 +142,7 @@ static void swap_program(uint32_t crc) {
     parked.crc = PROGRAM_NONE;
     return;
   }
+  if (hand_over(crc, new_iram_address, new_iram_length, new_iram_dsp_address, new_start)) return;
   if (!parked.program) parked = current;
   const DspProgram *next = program_for(crc);
   if (next && next == parked.program) gap_hit("limit.dsp_same_program_twice", crc);  // Each keeps one state.
@@ -148,6 +165,8 @@ void dsp_new_program_mail(uint32_t mail) {
   case 1: new_mram_length = mail & 0xffffu; break;
   case 3: new_iram_address = mail; break;
   case 4: new_iram_length = mail & 0xffffu; break;
+  case 5: new_iram_dsp_address = mail & 0xffffu; break;
+  case 6: new_start = mail & 0xffffu; break;
   case 8: new_dram_length = mail & 0xffffu; break;
   }
   if (new_program_mails < 10) return;
@@ -161,7 +180,7 @@ void dsp_new_program_mail(uint32_t mail) {
 
 // The boot ROM. It says it's ready, then takes the program's address, length, and where
 // to start, a key mail before each value. Anything else is answered and ignored.
-static uint32_t rom_key, rom_address, rom_length;
+static uint32_t rom_key, rom_address, rom_length, rom_dsp_address;
 
 static void rom_start(void) {
   rom_key = 0;
@@ -178,10 +197,11 @@ static void rom_mail(uint32_t mail) {
   rom_key = 0;
   if (key == 0x80f3a001u) rom_address = mail;
   else if (key == 0x80f3a002u) rom_length = mail & 0xffffu;
+  else if (key == 0x80f3c002u) rom_dsp_address = mail & 0xffffu;
   else if (key == 0x80f3d001u) {
     uint32_t crc = hash_in_memory(rom_address, rom_length);
     fprintf(stderr, "audio: program %08x (%u bytes at %08x)\n", crc, rom_length, rom_address);
-    dsp_set_program(crc);
+    if (!hand_over(crc, rom_address, rom_length, rom_dsp_address, mail & 0xffffu)) dsp_set_program(crc);
   }
 }
 
@@ -206,11 +226,12 @@ static void card_mail(uint32_t mail) {
 }
 static const DspProgram card_program = {"memory card", card_start, card_mail, card_update};
 
-// Programs we know but have no C version of yet: each names its inventory row, and the
-// game carries on without its answers.
+// Programs we know but have no C version of yet: the interpreter runs them. Each names its
+// inventory row, and if the interpreter can't start, the game carries on without answers.
 #define MISSING(variable, title, row)                                     \
   static void variable##_start(void) { gap_hit(row, current.crc); }       \
   static const DspProgram variable = {title, variable##_start, ignore_mail, nothing};
+static const char *missing_row(const DspProgram *program);
 MISSING(ax_gamecube_missing, "GameCube AX", "audio.ax_gamecube_metroid_prime_trilogy")
 MISSING(ax_wii_old_missing, "AXWii, older commands", "audio.axwii_older_command_format_old")
 MISSING(gba_missing, "Game Boy Advance link", "audio.card_gba")
@@ -248,13 +269,73 @@ static const DspProgram *program_for(uint32_t crc) {
   return &unknown_missing;
 }
 
+static const char *missing_row(const DspProgram *program) {
+  if (program == &ax_gamecube_missing) return "audio.ax_gamecube_metroid_prime_trilogy";
+  if (program == &ax_wii_old_missing) return "audio.axwii_older_command_format_old";
+  if (program == &gba_missing) return "audio.card_gba";
+  if (program == &homebrew_missing) return "audio.asnd_aesnd_homebrew";
+  if (program == &unknown_missing) return "audio.unknown_program";
+  return 0;
+}
+
+static int interpreter_ready(void) {
+  static int tried, ready;
+  if (!tried) {
+    tried = 1;
+    ready = dsp_lle_start(data_dsp_rom, data_dsp_coef);
+    if (!ready) gap_hit("limit.dsp_rom_checksum", 0);
+  }
+  return ready;
+}
+
+// A program with no C version: the interpreter takes it from where the boot ROM would jump.
+static int hand_over(uint32_t crc, uint32_t address, uint32_t length, uint32_t dsp_address, uint32_t start) {
+  const char *row = missing_row(program_for(crc));
+  if (!row || !interpreter_ready()) return 0;
+  fprintf(stderr, "audio: no C version of program %08x, so the interpreter runs it\n", crc);
+  gap_note(row, crc);
+  queue_count = 0;
+  current.crc = crc;
+  current.program = 0;
+  dsp_lle.control_reg = (uint16_t)control;
+  interpreting = 1;
+  interpreted_until = time_base();
+  dsp_lle_boot(address, length, (uint16_t)dsp_address, (uint16_t)start);
+  return 1;
+}
+
 void dsp_start(void) {
+  const char *engine = getenv("WII_RECOMP_DSP");
+  if (engine && !strcmp(engine, "lle")) {
+    if (interpreter_ready()) {
+      fprintf(stderr, "audio: the interpreter runs every program, from the boot ROM\n");
+      interpreting = 1;
+      interpreted_until = time_base();
+      return;
+    }
+  } else if (engine) {
+    fprintf(stderr, "WII_RECOMP_DSP=%s isn't known: lle runs the interpreter\n", engine);
+  }
   dsp_set_program(PROGRAM_ROM);
   control = DSP_CONTROL_HALT | DSP_CONTROL_INIT;
   halted = 1;
 }
 
+// The interpreter keeps time with the game: its share of the cycles since it last ran.
+static void interpret(uint64_t now, uint32_t most) {
+  if (now > interpreted_until) {
+    uint64_t owed = cycles_owed + (now - interpreted_until) * DSP_CYCLES_PER_TICK;
+    cycles_owed = owed > MOST_CYCLES_OWED ? MOST_CYCLES_OWED : (uint32_t)owed;
+    interpreted_until = now;
+  }
+  uint32_t cycles = cycles_owed < most ? cycles_owed : most;
+  if (!cycles) return;
+  cycles_owed -= cycles;
+  if (!dsp_lle_halted()) dsp_lle_run((int)cycles);
+}
+
 uint32_t dsp_control_read(void) {
+  if (interpreting) return dsp_lle_control_read();
   if ((control & DSP_CONTROL_INIT_CODE) && time_base() >= init_code_clear_at) control &= ~DSP_CONTROL_INIT_CODE;
   return control;
 }
@@ -262,6 +343,7 @@ uint32_t dsp_control_read(void) {
 // Reset starts the boot ROM again. Clearing the init bit runs the start-up program, and
 // the init code bit stays set a moment after.
 uint32_t dsp_control_write(uint32_t value) {
+  if (interpreting) return dsp_lle_control_write((uint16_t)value);
   uint32_t next = value & DSP_CONTROL_OWN;
   halted = (next & DSP_CONTROL_HALT) != 0;
   if (next & DSP_CONTROL_RESET) {
@@ -279,6 +361,13 @@ uint32_t dsp_control_write(uint32_t value) {
 
 int dsp_read(uint32_t address, int bytes, uint32_t *value) {
   if (address < MAILBOX_TO_DSP || address >= MAILBOX_FROM_DSP + 4) return 0;
+  if (interpreting) {
+    int cpu = address < MAILBOX_FROM_DSP, high = (address & 2) == 0;
+    if (high) interpret(time_base(), MAIL_SLICE);
+    if (bytes == 4) *value = (uint32_t)dsp_lle_mailbox_read_high(cpu) << 16 | dsp_lle_mailbox_read_low(cpu);
+    else *value = high ? dsp_lle_mailbox_read_high(cpu) : dsp_lle_mailbox_read_low(cpu);
+    return 1;
+  }
   uint32_t mail = address < MAILBOX_FROM_DSP ? to_dsp : 0;
   if (address == MAILBOX_FROM_DSP) {
     uint32_t high = read_high();
@@ -296,6 +385,17 @@ int dsp_write(uint32_t address, uint32_t value, int bytes) {
   if (address < MAILBOX_TO_DSP || address >= MAILBOX_FROM_DSP + 4) return 0;
   if (address >= MAILBOX_FROM_DSP) {
     gap_hit("hw.mail_from_dsp", value);  // Only the processor writes that one.
+    return 1;
+  }
+  if (interpreting) {
+    if (bytes == 4) {
+      dsp_lle_mailbox_write_high(1, (uint16_t)(value >> 16));
+      dsp_lle_mailbox_write_low(1, (uint16_t)value);
+    } else if (address == MAILBOX_TO_DSP) {
+      dsp_lle_mailbox_write_high(1, (uint16_t)value);
+    } else {
+      dsp_lle_mailbox_write_low(1, (uint16_t)value);
+    }
     return 1;
   }
   if (address == MAILBOX_TO_DSP && bytes == 4) to_dsp = value;
@@ -318,12 +418,17 @@ void dsp_update(uint64_t now) {
       dsp_interrupt();
     }
   }
+  if (interpreting) {
+    interpret(now, MOST_CYCLES_OWED);
+    return;
+  }
   if (now < next_update) return;
   next_update = now + UPDATE_TICKS;
   if (current.program) current.program->update();
 }
 
 uint64_t dsp_next_due(void) {
+  if (interpreting && !dsp_lle_halted()) return time_base() + UPDATE_TICKS;  // It runs while the game sleeps.
   uint64_t due = 0;
   for (uint32_t i = 0; i < TIMERS; i++) {
     if (timers[i] && (!due || timers[i] < due)) due = timers[i];

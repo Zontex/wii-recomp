@@ -25,11 +25,11 @@ Statuses:
 | 2. Graphics commands and registers | 64 | 18 | 9 | 0 | 9 | 10 | 110 |
 | 3. TEV and pixel features | 48 | 13 | 10 | 0 | 4 | 1 | 76 |
 | 4. Vertex and texture | 49 | 11 | 0 | 3 | 1 | 2 | 66 |
-| 5. Hardware blocks | 29 | 10 | 6 | 0 | 5 | 15 | 65 |
-| 6. Audio microcodes | 11 | 5 | 14 | 0 | 4 | 1 | 35 |
+| 5. Hardware blocks | 30 | 9 | 6 | 0 | 5 | 15 | 65 |
+| 6. Audio microcodes | 12 | 5 | 13 | 0 | 4 | 1 | 35 |
 | 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
 | 8. Controllers | 34 | 16 | 7 | 0 | 6 | 2 | 65 |
-| **All** | **341** | **110** | **54** | **4** | **40** | **53** | **602** |
+| **All** | **343** | **109** | **53** | **4** | **40** | **53** | **602** |
 
 ## Biggest gaps
 
@@ -597,7 +597,7 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 | `hw.mail_from_dsp` | Mail from DSP | done | `runtime/dsp.c` (`read_high`, `read_low`) | A queue the game reads high half first. Interrupts follow Dolphin's MailHandler.cpp: at once if nothing waits, after a delay if asked, or when the mail before is read. |
 | `hw.dsp_boot` | DSP boot | done | `runtime/dsp.c` | The OS's wake-up runs as the game's own code against the control bits and the start-up program. The boot ROM takes the game's program and hands over to it, as Dolphin's ROM.cpp. |
 | `hw.dsp_accelerator_interrupt` | DSP accelerator interrupt | done | `runtime/hardware.c:228`, `:345` | Accelerator DMA copies between main memory and MEM2 at once, as Dolphin's Wii mode does, then raises its interrupt. |
-| `hw.instruction_ram_rom_real_dsp_code` | Instruction RAM, ROM, real DSP code | partial | `runtime/dsp.c` (`hash_in_memory`) | The game's program is recognised by a checksum of its code in main memory, as Dolphin does, and a C version runs in its place. The code itself isn't run. A program outside memory is reported. |
+| `hw.instruction_ram_rom_real_dsp_code` | Instruction RAM, ROM, real DSP code | done | `runtime/dsp.c` (`hash_in_memory`, `hand_over`), `runtime/dsp_lle.c` | The game's program is recognised by a checksum of its code, as Dolphin does. A C version runs in its place where there is one; otherwise the interpreter runs the code itself on Dolphin's free boot ROM. `WII_RECOMP_DSP=lle` runs every program that way. |
 | `hw.aram` | ARAM | not needed |  | Wii has none. A GameCube-style game would need it. |
 | `hw.ar_dma_registers` | AR DMA registers | done | `runtime/hardware.c:228` | See `hw.dsp_accelerator_interrupt`. A transfer outside memory is reported. |
 
@@ -649,7 +649,7 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 
 ## 6. Audio microcodes
 
-The game's program is recognised by a checksum of its code, as Dolphin does, and its work is rewritten in C. There's no DSP interpreter, so each program needs its own version.
+The game's program is recognised by a checksum of its code, as Dolphin does, and its work is rewritten in C. Programs with no C version are run by an interpreter instead, so rows below that are missing in C still play, only more slowly.
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
@@ -685,7 +685,7 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | `audio.asnd_aesnd_homebrew` | ASnd, AESnd (homebrew) | not needed |  | Commercial games don't use them. |
 | `audio.card_gba` | CARD, GBA | partial | `runtime/dsp.c` (`card_program`) | GameCube link helpers. CARD unlocks a card and hands back to the ROM, as Dolphin's CARD.cpp. GBA is reported. |
 | `audio.init_rom` | INIT, ROM | done | `runtime/dsp.c` (`init_program`, `rom_program`) | As Dolphin's INIT.cpp and ROM.cpp. |
-| `audio.unknown_program` | A program with no C version | missing | `runtime/dsp.c` | Reported with its checksum. Dolphin falls back to AX. |
+| `audio.unknown_program` | A program with no C version | done | `runtime/dsp.c` (`hand_over`) | The interpreter runs it, and it's counted under its checksum. Dolphin's HLE falls back to AX. |
 | `audio.program_memory_upload` | Saving and loading a program's memory when programs switch | missing | `runtime/dsp.c` (`dsp_new_program_mail`) | Reported. Dolphin doesn't do it either. |
 | `audio.direct_ai_streaming_without_the_dsp` | Direct AI streaming without the DSP | done | `runtime/audio.c` | Anything that fills its own buffer and points the audio DMA at it is heard, as everything is. |
 

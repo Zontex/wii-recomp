@@ -12,6 +12,19 @@ static int gaps, interrupts;
 static const char *last_gap;
 void gap_hit(const char *id, uint32_t detail) { gaps++; last_gap = id; }
 void dsp_interrupt(void) { interrupts++; }
+// The interpreter, which these made-up programs never need.
+DspLle dsp_lle;
+const unsigned char data_dsp_rom[1], data_dsp_coef[1];
+int dsp_lle_start(const uint8_t *rom, const uint8_t *coef) { return 0; }
+int dsp_lle_run(int cycles) { return 0; }
+int dsp_lle_halted(void) { return 1; }
+void dsp_lle_boot(uint32_t a, uint32_t n, uint16_t d, uint16_t pc) {}
+uint16_t dsp_lle_mailbox_read_high(int cpu) { return 0; }
+uint16_t dsp_lle_mailbox_read_low(int cpu) { return 0; }
+void dsp_lle_mailbox_write_high(int cpu, uint16_t v) {}
+void dsp_lle_mailbox_write_low(int cpu, uint16_t v) {}
+uint16_t dsp_lle_control_write(uint16_t v) { return 0; }
+uint16_t dsp_lle_control_read(void) { return 0; }
 
 // A stand-in for the AX program, which only remembers what it was told.
 static int ax_starts;
