@@ -190,9 +190,20 @@ static const uint8_t *locate(const uint8_t **p, int kind, int array, uint32_t di
   return host((gx.cp[CP_ARRAY_BASE + array] + index * (gx.cp[CP_ARRAY_STRIDE + array] & 0xff)) | 0x80000000u);
 }
 
+// Several components of one type, the type chosen once rather than for each.
+static inline void read_components(const uint8_t *p, int type, float scale, int count, float *out) {
+  switch (type) {
+    case COMPONENT_U8: for (int i = 0; i < count; i++) out[i] = (float)p[i] * scale; break;
+    case COMPONENT_S8: for (int i = 0; i < count; i++) out[i] = (float)(int8_t)p[i] * scale; break;
+    case COMPONENT_U16: for (int i = 0; i < count; i++) out[i] = (float)(uint16_t)((p[i * 2] << 8) | p[i * 2 + 1]) * scale; break;
+    case COMPONENT_S16: for (int i = 0; i < count; i++) out[i] = (float)(int16_t)((p[i * 2] << 8) | p[i * 2 + 1]) * scale; break;
+    default:
+      for (int i = 0; i < count; i++) out[i] = read_component(p + i * 4, COMPONENT_FLOAT, scale);
+  }
+}
+
 static void read_normal(const uint8_t *source, const Format *f, float out[3]) {
-  uint32_t size = component_bytes(f->normal_type);
-  for (uint32_t i = 0; i < 3; i++) out[i] = read_component(source + i * size, f->normal_type, f->normal_scale);
+  read_components(source, f->normal_type, f->normal_scale, 3, out);
 }
 
 static void read_normals(const uint8_t **p, const Format *f, Vertex *v) {
@@ -240,38 +251,41 @@ int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
   // Color 1 without color 0 feeds the first channel, and the second reads as missing, as
   // Dolphin's VertexShaderGen.cpp has it.
   int color_slot[2] = {0, f.color[0] == KIND_NONE ? 0 : 1};
+  // What every vertex starts as: no position, normal or coordinates, white, and the
+  // draw's matrices. Copied whole for each, which costs less than setting each part.
+  Vertex start;
+  memset(&start, 0, sizeof start);
+  memcpy(start.matrix, matrix_defaults, sizeof matrix_defaults);
+  for (int i = 0; i < 2; i++) {
+    for (int c = 0; c < 4; c++) start.color[i][c] = 1;
+  }
+  uint32_t position_bytes = (uint32_t)f.position_components * component_bytes(f.position_type);
+  uint32_t texture_bytes[TEXTURES];
+  for (int i = 0; i < TEXTURES; i++) texture_bytes[i] = (uint32_t)f.texture_components[i] * component_bytes(f.texture_type[i]);
   const uint8_t *p = data;
   int kept = 0;
   for (int n = 0; n < count; n++) {
     Vertex *v = &out[kept];
-    memset(v, 0, sizeof *v);
-    memcpy(v->matrix, matrix_defaults, sizeof matrix_defaults);
+    *v = start;
     if (f.position_index) v->matrix[VERTEX_MATRIX_POSITION] = *p++ & MATRIX_INDEX_MASK;
     for (int i = 0; i < TEXTURES; i++) {
       if (f.texture_index[i]) v->matrix[VERTEX_MATRIX_COORDINATE + i] = *p++ & MATRIX_INDEX_MASK;
     }
-    uint32_t size = component_bytes(f.position_type);
     int skipped = skips_vertex(p, f.position);
     if (f.position != KIND_NONE) {
-      const uint8_t *source = locate(&p, f.position, ARRAY_POSITION, (uint32_t)f.position_components * size);
-      for (int i = 0; source && i < f.position_components; i++) {
-        v->position[i] = read_component(source + (uint32_t)i * size, f.position_type, f.position_scale);
-      }
+      const uint8_t *source = locate(&p, f.position, ARRAY_POSITION, position_bytes);
+      if (source) read_components(source, f.position_type, f.position_scale, f.position_components, v->position);
     }
     if (f.normal != KIND_NONE) read_normals(&p, &f, v);
     for (int i = 0; i < 2; i++) {
-      for (int c = 0; c < 4; c++) v->color[i][c] = 1;
       if (f.color[i] == KIND_NONE) continue;
       const uint8_t *source = locate(&p, f.color[i], ARRAY_COLOR + i, color_bytes(f.color_type[i]));
       if (source) read_color(source, f.color_type[i], v->color[color_slot[i]]);
     }
     for (int i = 0; i < TEXTURES; i++) {
       if (f.texture[i] == KIND_NONE) continue;
-      uint32_t bytes = component_bytes(f.texture_type[i]);
-      const uint8_t *source = locate(&p, f.texture[i], ARRAY_TEXTURE + i, (uint32_t)f.texture_components[i] * bytes);
-      if (!source) continue;
-      v->uv[i][0] = read_component(source, f.texture_type[i], f.texture_scale[i]);
-      if (f.texture_components[i] > 1) v->uv[i][1] = read_component(source + bytes, f.texture_type[i], f.texture_scale[i]);
+      const uint8_t *source = locate(&p, f.texture[i], ARRAY_TEXTURE + i, texture_bytes[i]);
+      if (source) read_components(source, f.texture_type[i], f.texture_scale[i], f.texture_components[i], v->uv[i]);
     }
     if (n == count - 1) keep_last_normals(&f, v);
     if (!skipped) kept++;
