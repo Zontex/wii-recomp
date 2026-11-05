@@ -248,16 +248,24 @@ static void forget_set_state(void) {
 }
 
 static void mark_frame_start(void);
-// The frame serial each set of commands was last sent with, and the newest the card is
-// known to have finished, so a read back can tell when its pixels are there.
-static uint32_t sent_serial[FRAMES_IN_FLIGHT], finished_serial;
-static void begin_frame(Frame *frame) {
-  if (vk.frame && vk.frame->submitted) sent_serial[vk.frame - vk.frames] = frame_serial;
+// Commands go to the card in batches, one a picture and more when something must wait
+// for it. Each frame's set remembers the batch it was last sent as, and the newest batch
+// the card is known to have finished is kept, so a read back can tell when it's there.
+static uint32_t batch = 1, sent_batch[FRAMES_IN_FLIGHT], finished_batch;
+
+// Starts a set of commands after the last was sent, with nothing of the picture's own.
+static void begin_batch(Frame *frame) {
+  if (vk.frame && vk.frame->submitted) sent_batch[vk.frame - vk.frames] = batch++;
   int was_sent = frame->submitted;
   vk_frame_begin(frame);
-  if (was_sent && sent_serial[frame - vk.frames] > finished_serial) finished_serial = sent_serial[frame - vk.frames];
+  if (was_sent && sent_batch[frame - vk.frames] > finished_batch) finished_batch = sent_batch[frame - vk.frames];
   pass_open = 0;
   restarts++;
+  forget_set_state();
+}
+
+static void begin_frame(Frame *frame) {
+  begin_batch(frame);
   frame_serial++;
   if (depth_use.shape != depth_use.last_shape) {
     memset(depth_use.no_load, 0, sizeof depth_use.no_load);
@@ -495,13 +503,16 @@ static void begin_pass(const VkRect2D *area) {
 }
 
 // Sends what's recorded so far and waits for all of it, for when a frame's memory runs out.
+static void record_reads(void);
 static void finish_commands(void) {
+  record_reads();
   give_up_layer();
   leave_strip();
   Frame *frame = vk.frame;
   end_pass();
   vk_frame_submit(frame, VK_NULL_HANDLE, VK_NULL_HANDLE);
-  begin_frame(frame);
+  // The same picture goes on, so what's learned about its passes, by their place in it, holds.
+  begin_batch(frame);
 }
 
 static void write_shape_indices(void) {
@@ -1350,6 +1361,7 @@ static void hand_picture_over(Frame *frame) {
 }
 
 static void present(const GxRectangle *from) {
+  record_reads();
   give_up_layer();
   leave_strip();
   Frame *frame = vk.frame;
@@ -1817,27 +1829,40 @@ static void clear(const GxClear *c) {
 
 // Reading back. Each read takes a slot of host memory, in turn, and is copied in by the
 // card in order with everything else; a ticket names the slot and its turn.
-enum { READ_SLOTS = 8 };
+// A copy's read waits to be recorded until the frame's commands end (record_reads), so
+// it never ends a pass or a held-back layer early, which a tile-based chip pays for twice.
+enum { READ_SLOTS = 256 };
 static struct {
   Ring ring;
   unsigned ticket;
   uint32_t serial;
   int frame_index, width, height, on_processor;  // On the processor: worked out here, with no card.
+  GxTexture *waiting;  // A copy's texture, still to be recorded.
+  int smooth, failed;
   uint8_t *processor;
   size_t processor_size;
 } reads[READ_SLOTS];
 static unsigned next_ticket = 1;
+static int reads_waiting;  // Some read is still to be recorded.
 
 static int read_slot(size_t bytes) {
   int slot = (int)(next_ticket % READ_SLOTS);
   Ring *ring = &reads[slot].ring;
-  // Each holds the largest read, the whole picture at the Wii's size, so none is ever replaced.
-  (void)bytes;
-  if (!ring->buffer) *ring = vk_create_read_ring((VkDeviceSize)EFB_WIDTH * EFB_HEIGHT * BYTES_PER_PIXEL);
+  // Each is used again only after every other, by then long finished, so a bigger read
+  // replaces it at once but for the rare case of the card still being on it.
+  if (ring->buffer && ring->size < bytes) {
+    if (reads[slot].serial > finished_batch) vkQueueWaitIdle(vk.queue);
+    vkDestroyBuffer(vk.device, ring->buffer, 0);
+    vkFreeMemory(vk.device, ring->memory, 0);
+    ring->buffer = VK_NULL_HANDLE;
+  }
+  if (!ring->buffer) *ring = vk_create_read_ring(bytes);
   reads[slot].ticket = next_ticket++;
-  reads[slot].serial = frame_serial;
+  reads[slot].serial = batch;
   reads[slot].frame_index = (int)(vk.frame - vk.frames);
   reads[slot].on_processor = 0;
+  reads[slot].waiting = 0;
+  reads[slot].failed = 0;
   return slot;
 }
 
@@ -1889,8 +1914,7 @@ static void shrink(VkCommandBuffer commands, VkImage source, int depth, const Vk
 
 static unsigned read_texture(GxTexture *t, int width, int height, int smooth) {
   if (width <= 0 || height <= 0 || width > EFB_WIDTH || height > EFB_HEIGHT) return 0;
-  if (holds(t)) settle_layer(t == empty_layer.picture ? 2 : 1);
-  if (t->owed) return 0;  // Its copy was left out, as nothing on screen would show it.
+  if (t->owed && !holds(t)) return 0;  // Its copy was left out, as nothing on screen would show it.
   if (t->flat_view) {
     // One value everywhere, known here without the card.
     int bytes = width * height * BYTES_PER_PIXEL, slot = (int)(next_ticket % READ_SLOTS);
@@ -1901,13 +1925,28 @@ static unsigned read_texture(GxTexture *t, int width, int height, int smooth) {
     for (int i = 0; i < bytes; i += BYTES_PER_PIXEL) memcpy(reads[slot].processor + i, value, BYTES_PER_PIXEL);
     reads[slot].ticket = next_ticket++;
     reads[slot].on_processor = 1;
+    reads[slot].waiting = 0;
+    reads[slot].failed = 0;
     reads[slot].width = width, reads[slot].height = height;
     return reads[slot].ticket;
   }
   if (!t->image || !t->written) return 0;
-  if (pass_open || in_strip) {
-    leave_strip();
-    end_pass();
+  int slot = read_slot((size_t)width * (size_t)height * BYTES_PER_PIXEL);
+  reads[slot].width = width, reads[slot].height = height;
+  reads[slot].waiting = t;
+  reads[slot].smooth = smooth;
+  reads_waiting = 1;
+  return reads[slot].ticket;
+}
+
+// Records one waiting read, outside any pass, where the scene's commands are.
+static void record_read(int slot) {
+  GxTexture *t = reads[slot].waiting;
+  int width = reads[slot].width, height = reads[slot].height, smooth = reads[slot].smooth;
+  reads[slot].waiting = 0;
+  if (t->owed || t->flat_view || !t->image || !t->written) {  // Left out after all, or since replaced.
+    reads[slot].failed = 1;
+    return;
   }
   VkCommandBuffer commands = vk.frame->draw;
   VkImageAspectFlags aspect = t->depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
@@ -1918,13 +1957,26 @@ static unsigned read_texture(GxTexture *t, int width, int height, int smooth) {
   shrink(commands, t->image, t->depth, whole, width, height, smooth);
   barrier(commands, t->image, aspect, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
           VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
-  int slot = read_slot((size_t)width * (size_t)height * BYTES_PER_PIXEL);
-  reads[slot].width = width, reads[slot].height = height;
   VkBufferImageCopy region = {.imageSubresource = {aspect, 0, 0, 1}, .imageExtent = {(uint32_t)width, (uint32_t)height, 1}};
   vkCmdCopyImageToBuffer(commands, small_image(t->depth), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, reads[slot].ring.buffer, 1, &region);
   to_host(commands);
   mark("read a copy back", width, height);
-  return reads[slot].ticket;
+}
+
+
+// Every waiting read, just before the commands are sent. A copy a held-back layer still
+// owes is made first.
+static void record_reads(void) {
+  if (!reads_waiting) return;
+  reads_waiting = 0;
+  for (int slot = 0; slot < READ_SLOTS; slot++) {
+    if (reads[slot].waiting && holds(reads[slot].waiting)) settle_layer(reads[slot].waiting == empty_layer.picture ? 2 : 1);
+  }
+  leave_strip();
+  end_pass();
+  for (int slot = 0; slot < READ_SLOTS; slot++) {
+    if (reads[slot].waiting) record_read(slot);
+  }
 }
 
 // The picture at the Wii's own size, through an image of that size the picture is scaled into.
@@ -1952,24 +2004,24 @@ static unsigned read_picture(int depth, const GxRectangle *area) {
 }
 
 static void note_finished(int frame_index) {
-  if (sent_serial[frame_index] > finished_serial) finished_serial = sent_serial[frame_index];
+  if (sent_batch[frame_index] > finished_batch) finished_batch = sent_batch[frame_index];
 }
 
 static int read_ready(unsigned ticket) {
   int slot = (int)(ticket % READ_SLOTS);
   if (reads[slot].ticket != ticket) return 0;
-  if (reads[slot].on_processor || reads[slot].serial <= finished_serial) return 1;
-  if (reads[slot].serial == frame_serial) return 0;  // Not sent yet.
+  if (reads[slot].on_processor || reads[slot].serial <= finished_batch) return 1;
+  if (reads[slot].serial == batch) return 0;  // Not sent yet.
   Frame *frame = &vk.frames[reads[slot].frame_index];
   if (frame->submitted && vkGetFenceStatus(vk.device, frame->fence) == VK_SUCCESS) note_finished(reads[slot].frame_index);
-  return reads[slot].serial <= finished_serial;
+  return reads[slot].serial <= finished_batch;
 }
 
 static const void *read_finish(unsigned ticket, int *width, int *height) {
   int slot = (int)(ticket % READ_SLOTS);
   if (reads[slot].ticket != ticket) return 0;
   if (!read_ready(ticket)) {
-    if (reads[slot].serial == frame_serial) {
+    if (reads[slot].serial == batch) {
       TIMELINE_BEGIN("waiting for a read back");
       finish_commands();  // Sends everything so far and waits for it.
       TIMELINE_END("waiting for a read back");
@@ -1978,6 +2030,7 @@ static const void *read_finish(unsigned ticket, int *width, int *height) {
       note_finished(reads[slot].frame_index);
     }
   }
+  if (reads[slot].failed) return 0;
   *width = reads[slot].width, *height = reads[slot].height;
   return reads[slot].on_processor ? reads[slot].processor : reads[slot].ring.mapped;
 }

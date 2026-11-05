@@ -10,7 +10,8 @@
 // once is read back as soon as it's made from then on, without waiting, and lands in
 // memory as each picture is shown. Copies nothing reads cost nothing more than holding.
 // A touch of something else on a copy's first or last page, which games do every frame,
-// doesn't wait either: the copy's bytes on that page land with the next picture shown.
+// doesn't wait either: the copy's bytes on that page land with the next picture shown,
+// in place of only the bytes nothing has written since, so a late copy never undoes a write.
 // WII_RECOMP_COPIES_ON_CARD=1 leaves memory alone, as before copies reached it.
 #include <stdio.h>
 #include <stdlib.h>
@@ -47,6 +48,10 @@ typedef struct {
   unsigned ticket;           // That read, while it's on its way.
   uint64_t watched, hash;    // Memory once written: the watch's count, or with none, the bytes' hash.
   unsigned checked_frame;    // The frame, plus 1, its memory was last checked in, when unwatched.
+  // Pages let go before its bytes landed, for something beside it: what each held then, so
+  // a byte the game has written there since isn't written over when the copy lands.
+  uint8_t *before, *before_taken;
+  size_t before_size;
 } Copy;
 
 static Copy copies[MAX_COPIES];
@@ -73,6 +78,55 @@ static uint32_t copy_start(const Copy *copy) { return copy->address << ADDRESS_S
 // Its last row ends with the row's own bytes, not the stride.
 static uint32_t copy_end(const Copy *copy) { return copy_start(copy) + (copy->rows - 1) * copy->stride + copy->row_bytes; }
 static uint32_t copy_bytes(const Copy *copy) { return copy_end(copy) - copy_start(copy); }
+static int overlaps(const Copy *copy, uint32_t start, uint32_t end) { return copy_start(copy) < end && start < copy_end(copy); }
+
+static uint32_t page_size(void) {
+  static uint32_t bytes;
+  if (!bytes) bytes = (uint32_t)sysconf(_SC_PAGESIZE);
+  return bytes;
+}
+
+// Notes what every page of the copy that's no longer held holds now, once.
+static void take_before(Copy *copy) {
+  uint32_t page_bytes = page_size(), first = copy_start(copy) & ~(page_bytes - 1), pages = (copy_end(copy) - first + page_bytes - 1) / page_bytes;
+  if (copy->before_size < copy_bytes(copy)) {
+    copy->before = realloc(copy->before, copy->before_size = copy_bytes(copy));
+    copy->before_taken = realloc(copy->before_taken, copy->before_size / page_bytes + 2);
+    memset(copy->before_taken, 0, copy->before_size / page_bytes + 2);
+  }
+  const uint8_t *memory = host(copy_start(copy) | 0x80000000u);
+  for (uint32_t i = 0; i < pages; i++) {
+    uint32_t page = first + i * page_bytes;
+    if (copy->before_taken[i] || watch_held(page, 1)) continue;
+    uint32_t from = page > copy_start(copy) ? page - copy_start(copy) : 0, to = page + page_bytes - copy_start(copy);
+    if (to > copy_bytes(copy)) to = copy_bytes(copy);
+    memcpy(copy->before + from, memory + from, to - from);
+    copy->before_taken[i] = 1;
+  }
+}
+
+// Writes the copy's encoded rows. Pages still held take them whole; on one let go early,
+// only bytes unchanged since then take the copy's.
+static void land(Copy *copy, uint8_t *memory, const uint8_t *encoded, const uint8_t *held) {
+  uint32_t page_bytes = page_size(), first = copy_start(copy) & ~(page_bytes - 1);
+  for (uint32_t row = 0; row < copy->rows; row++) {
+    uint32_t at = row * copy->stride, end = at + copy->row_bytes;
+    const uint8_t *from = encoded + (size_t)row * copy->row_bytes - at;
+    while (at < end) {
+      uint32_t page = (copy_start(copy) + at - first) / page_bytes, page_end = (page + 1) * page_bytes + first - copy_start(copy);
+      uint32_t stop = page_end < end ? page_end : end;
+      if (held[page]) {
+        memcpy(memory + at, from + at, stop - at);
+      } else if (copy->before_taken && copy->before_taken[page]) {
+        for (uint32_t i = at; i < stop; i++) {
+          if (memory[i] == copy->before[i]) memory[i] = from[i];
+        }
+      }
+      at = stop;
+    }
+  }
+}
+
 
 // Eight bytes at a time: every byte counts, as any write must show.
 static uint64_t hash_bytes(const uint8_t *data, uint32_t bytes) {
@@ -108,8 +162,16 @@ static unsigned read_copy(Copy *copy) {
 // it from memory, so the next copy here is read back as it's made: READ_TOUCHED for a
 // touch of its bytes, READ_BY_TEXTURE for a texture read from memory.
 enum { READ_TOUCHED = 1, READ_BY_TEXTURE = 2 };
+static int copy_log(void) {
+  static int log = -1;
+  if (log < 0) log = getenv("WII_RECOMP_COPY_LOG") != 0;
+  return log;
+}
+
 static void write_back(Copy *copy, int learn) {
   if (copy->memory != MEMORY_HELD) return;
+  if (copy_log()) fprintf(stderr, "copies: %08x %ux%u lands, frame %u, %s\n", copy_start(copy), copy->width, copy->height, gx_frame_number(),
+                          learn ? "as it was read" : copy->ticket ? "read back already" : "with nothing reading it");
   copy->memory = MEMORY_WRITTEN;
   unsigned ticket = copy->ticket;
   copy->ticket = 0;
@@ -176,20 +238,33 @@ static void write_back(Copy *copy, int learn) {
   CopySource source = {pixels, (int)copy->width, (int)copy->height, 0, 0};
   if (direct) source.pixels = (const uint32_t *)read;
   gx_encode_copy(&encoding, &source, encoded);
+  static uint8_t *held;
+  static size_t held_size;
+  uint32_t page_bytes = page_size(), first = copy_start(copy) & ~(page_bytes - 1), pages = (copy_end(copy) - first + page_bytes - 1) / page_bytes;
+  if (pages > held_size) held = realloc(held, held_size = pages);
+  // Unwatched memory was never held, and the copy lands as it's made.
+  for (uint32_t i = 0; i < pages; i++) held[i] = (uint8_t)(!watch_enabled() || watch_held(first + i * page_bytes, 1));
   watch_release(start, bytes);
-  for (uint32_t row = 0; row < copy->rows; row++) memcpy(memory + (size_t)row * copy->stride, encoded + (size_t)row * copy->row_bytes, copy->row_bytes);
+  land(copy, memory, encoded, held);
+  if (copy->before_taken) memset(copy->before_taken, 0, copy->before_size / page_bytes + 2);
   copy->watched = watch_range(start, bytes);
   if (copy->watched == WATCH_NONE) copy->hash = hash_bytes(memory, bytes);  // Only needed unwatched.
   copy->checked_frame = gx_frame_number() + 1;
 }
 
-static int overlaps(const Copy *copy, uint32_t start, uint32_t end) { return copy_start(copy) < end && start < copy_end(copy); }
 
 // A held copy whose page is opened for something beside it, not its own bytes: data
 // sharing a page with a copy is touched every frame in some games, and waiting for the
 // card each time would cost a frame. Its read back goes on without waiting, and lands as
 // a picture is shown; until then its bytes on that page are the ones there before.
-static void expose(Copy *copy) {
+static void expose(Copy *copy, const char *why, uint32_t at) {
+  static int told;
+  if (copy_log() && told < 400 && !copy->read_before) {
+    told++;
+    fprintf(stderr, "copies: %08x %ux%u format %u exposed %s %08x, lr %08x, frame %u, learned %d\n", copy_start(copy), copy->width, copy->height,
+            copy->encoding.format, why, at, cpu.lr, gx_frame_number(), copy->read_before);
+  }
+  take_before(copy);
   if (!copy->ticket) copy->ticket = read_copy(copy);
   if (!copy->read_before) {
     gap_note("pixel.copy_to_texture", copy_start(copy));  // Its bytes on a shared page may be late.
@@ -207,7 +282,7 @@ static void settle_pages(void) {
     if (copy->memory != MEMORY_HELD) continue;
     for (uint32_t page = copy_start(copy) & ~(page_bytes - 1); page < copy_end(copy); page += page_bytes) {
       if (!watch_held(page, 1)) {
-        expose(copy);
+        expose(copy, "with its page let go at", page);
         break;
       }
     }
@@ -222,9 +297,13 @@ static void touched_work(void *argument) {
   uint32_t at = *(const uint32_t *)argument & 0x3fffffffu, page = at & ~(page_bytes - 1);
   for (int i = 0; i < copy_count; i++) {
     Copy *copy = &copies[i];
-    if (copy->memory != MEMORY_HELD || !overlaps(copy, page, page + page_bytes)) continue;
-    if (overlaps(copy, at, at + 1)) write_back(copy, READ_TOUCHED);
-    else expose(copy);
+    if (copy->memory == MEMORY_HELD && overlaps(copy, page, page + page_bytes) && overlaps(copy, at, at + 1)) write_back(copy, READ_TOUCHED);
+  }
+  // The page is let go first, so what the others hold on it can be noted.
+  watch_release(page | 0x80000000u, page_bytes);
+  for (int i = 0; i < copy_count; i++) {
+    Copy *copy = &copies[i];
+    if (copy->memory == MEMORY_HELD && overlaps(copy, page, page + page_bytes)) expose(copy, "by a touch at", at);
   }
   settle_pages();
 }
@@ -367,7 +446,11 @@ void gx_copy_to_texture(uint32_t control, int from_depth) {
     Copy *other = &copies[i];
     if (!other->live && other->memory != MEMORY_HELD) continue;
     if (other != copy && !overlaps(other, start, end)) continue;
-    int covered = other->memory == MEMORY_HELD && copy_start(other) >= start && copy_end(other) <= end && shape.stride == shape.row_bytes;
+    // Every byte of it is written again: it lies inside this one, which has no gaps, or
+    // which has the same gaps, as a copy made again in the same place does.
+    uint32_t inside = copy_start(other) - start;
+    int covered = other->memory == MEMORY_HELD && copy_start(other) >= start && copy_end(other) <= end
+               && (shape.stride == shape.row_bytes || (other->stride == shape.stride && inside % shape.stride + other->row_bytes <= shape.row_bytes));
     if (other->memory == MEMORY_HELD && !covered) write_back(other, 0);
     if (covered) {
       other->memory = MEMORY_NONE;
@@ -387,6 +470,7 @@ void gx_copy_to_texture(uint32_t control, int from_depth) {
   else gx_backend->copy_color(copy->texture, &from, width, height, channels_for(control), half);
   copy->live = 1;
   copy->ticket = 0;
+  if (copy->before_taken) memset(copy->before_taken, 0, copy->before_size / page_size() + 2);
   // Leaving memory as it was, for measuring what landing costs.
   static int on_card = -1;
   if (on_card < 0) on_card = getenv("WII_RECOMP_COPIES_ON_CARD") != 0;
