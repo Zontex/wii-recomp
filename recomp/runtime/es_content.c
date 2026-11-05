@@ -2,6 +2,7 @@
 // and close. Contents are read from storage, already decrypted as Dolphin keeps them.
 #include <stdio.h>
 
+#include "memory_watch.h"
 #include "cpu.h"
 #include "es.h"
 #include "title.h"
@@ -65,6 +66,7 @@ static int read_content(const IosVectors *vectors) {
   OpenContent *content = handle_at(vectors);
   uint32_t out = ios_out(vectors, 0), bytes = ios_out_bytes(vectors, 0);
   if (!content || (!out && bytes)) return ES_EINVAL;
+  if (bytes) watch_before_write(host(out), bytes);
   return bytes ? (int)fread(host(out), 1, bytes, content->file) : 0;
 }
 

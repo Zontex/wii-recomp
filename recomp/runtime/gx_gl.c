@@ -307,18 +307,17 @@ static void texture_bind(int map, GxTexture *texture, const GxSampling *sampling
 
 // Vertices go into one large buffer in turn. Only when it fills is a fresh one
 // started, so the driver never has to wait for earlier draws to finish.
-static void *vertices_reserve(int count) {
+// A copy per draw costs the driver far less than mapping the buffer for each.
+static void vertices_send(const void *vertices, int count) {
   size_t bytes = (size_t)count * vertex_bytes;
   if (stream_at + bytes > VERTEX_BUFFER_BYTES) {
     glBufferData(GL_ARRAY_BUFFER, VERTEX_BUFFER_BYTES, 0, GL_STREAM_DRAW);
     stream_at = 0;
   }
-  return glMapBufferRange(GL_ARRAY_BUFFER, (GLintptr)stream_at, (GLsizeiptr)bytes,
-                          GL_MAP_WRITE_BIT | GL_MAP_UNSYNCHRONIZED_BIT | GL_MAP_INVALIDATE_RANGE_BIT);
+  glBufferSubData(GL_ARRAY_BUFFER, (GLintptr)stream_at, (GLsizeiptr)bytes, vertices);
 }
 
 static void draw(int primitive, int count) {
-  glUnmapBuffer(GL_ARRAY_BUFFER);
   GLint first = (GLint)(stream_at / vertex_bytes);
   stream_at += (size_t)count * vertex_bytes;
   if (primitive == PRIM_QUADS || primitive == PRIM_QUADS2) {
@@ -415,7 +414,7 @@ const GxBackend gx_backend_opengl = {
   .texture_create = texture_create,
   .texture_upload = texture_upload,
   .texture_bind = texture_bind,
-  .vertices_reserve = vertices_reserve,
+  .vertices_send = vertices_send,
   .draw = draw,
   .clear = clear,
   .copy_color = copy_color,

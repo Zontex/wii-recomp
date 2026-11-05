@@ -4,6 +4,7 @@
 
 #include "cpu.h"
 #include "gx.h"
+#include "memory_watch.h"
 
 enum {
   FORMAT_I4 = 0, FORMAT_I8 = 1, FORMAT_IA4 = 2, FORMAT_IA8 = 3, FORMAT_RGB565 = 4, FORMAT_RGB5A3 = 5,
@@ -173,7 +174,19 @@ static uint64_t hash_bytes(const uint8_t *data, uint32_t bytes) {
   return value;
 }
 
-DecodedTexture gx_decode_texture(int map, uint64_t *key) {
+// Unwritten memory hashes as it did before, so only a written range is read again.
+static uint64_t hash_texture_bytes(uint32_t address, const uint8_t *source, uint32_t bytes, TextureMemo *memo) {
+  if (!memo) return hash_bytes(source, bytes);
+  if (memo->hashed_address == address && memo->hashed_bytes == bytes && memo->watched != WATCH_NONE && watch_count(address, bytes) == memo->watched) {
+    return memo->bytes_hash;
+  }
+  memo->watched = watch_range(address, bytes);
+  memo->hashed_address = address;
+  memo->hashed_bytes = bytes;
+  return memo->bytes_hash = hash_bytes(source, bytes);
+}
+
+DecodedTexture gx_decode_texture(int map, TextureMemo *memo) {
   DecodedTexture texture = {0, 0, 0};
   uint32_t image = gx.bp[(map < 4 ? BP_IMAGE_LOW + map : BP_IMAGE_HIGH + map - 4)];
   uint32_t address = gx.bp[(map < 4 ? BP_ADDRESS_LOW + map : BP_ADDRESS_HIGH + map - 4)] & 0xffffff;
@@ -193,15 +206,15 @@ DecodedTexture gx_decode_texture(int map, uint64_t *key) {
   }
   if (!source || !bytes) return texture;
   uint32_t palette_offset = (palette & 0x3ff) << PALETTE_SLOT_SHIFT;
-  uint64_t identity = hash_bytes(source, bytes) ^ ((uint64_t)image << 20) ^ ((uint64_t)address << 40) ^ palette_offset ^ ((uint64_t)levels << 60);
+  uint64_t identity = hash_texture_bytes((address << 5) | 0x80000000u, source, bytes, memo) ^ ((uint64_t)image << 20) ^ ((uint64_t)address << 40) ^ palette_offset ^ ((uint64_t)levels << 60);
   // The same image can be drawn with new colors, so the palette is part of what it is.
   if (format == FORMAT_C4 || format == FORMAT_C8 || format == FORMAT_C14X2) {
     uint32_t colors = format == FORMAT_C4 ? 16 : format == FORMAT_C8 ? 256 : PALETTE_INDEX_14 + 1;
     uint32_t palette_bytes = colors * 2 > PALETTE_BYTES - palette_offset ? PALETTE_BYTES - palette_offset : colors * 2;
     identity ^= hash_bytes(palette_memory + palette_offset, palette_bytes) * 3 + (uint64_t)((palette >> 10) & 3);
   }
-  if (key && *key == identity) return texture;
-  if (key) *key = identity;
+  if (memo && memo->key == identity) return texture;
+  if (memo) memo->key = identity;
   if (pixel_count * RGBA_BYTES > pixels_size) {
     pixels_size = pixel_count * RGBA_BYTES;
     pixels = realloc(pixels, pixels_size);

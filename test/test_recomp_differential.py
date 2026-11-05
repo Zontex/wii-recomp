@@ -569,7 +569,7 @@ def run_differential(cases, folder, with_programs=True, translate=emit, states=S
     generated.write_text(source)
     program = Path(folder) / "differential"
     subprocess.run(["clang", str(generated), str(HERE / "c/differential.c"), str(RUNTIME / "interp.c"), str(RUNTIME / "quantized.c"),
-                    str(RUNTIME / "guest_memory.c"), *FLAGS, "-lm", "-o", str(program)], check=True, capture_output=True, text=True)
+                    str(RUNTIME / "guest_memory.c"), str(RUNTIME / "memory_watch.c"), *FLAGS, "-lm", "-o", str(program)], check=True, capture_output=True, text=True)
     result = subprocess.run([str(program), str(states)], capture_output=True, text=True, timeout=120)
     if result.returncode:
         raise RuntimeError(f"the driver failed ({result.returncode}): {result.stdout[-2000:]}{result.stderr[-2000:]}")

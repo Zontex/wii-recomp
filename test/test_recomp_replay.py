@@ -289,6 +289,32 @@ class Replay(unittest.TestCase):
         self.assertEqual(self.pixel(second, 550, 300), YELLOW)
         self.assert_background(second, 550, 100)
 
+    def test_a_called_list_sees_its_arrays_change(self):
+        # A display list keeps the vertices it decoded between calls, which must not
+        # outlive a write to the arrays it reads, nor to the list itself.
+        list_address, position_array, color_array = 0x00200000, 0x00100000, 0x10001000
+        setup = (cp_command(0x50, (2 << 9) | (2 << 13)) + cp_command(0xa0, position_array) + cp_command(0xa2, color_array)
+                 + cp_command(0xb0, 12) + cp_command(0xb2, 4))
+        listed = draw(TRIANGLES, [b"\0\0", b"\1\0", b"\2\0"])
+        listed += bytes(-len(listed) % 32)
+        call = bytes([0x40]) + struct.pack(">II", list_address, len(listed))
+        left, right = positions((20, 20), (200, 20), (20, 200)), positions((400, 250), (600, 250), (600, 440))
+        frames = [
+            (setup + call + show_frame(), [(0, list_address, listed), (0, position_array, left), (0, color_array, bytes(GREEN) + b"\xff")]),
+            (setup + call + show_frame(), []),
+            (setup + call + show_frame(), [(0, position_array, right), (0, color_array, bytes(YELLOW) + b"\xff")]),
+            (setup + call + show_frame(), [(0, list_address, bytes(len(listed)))]),
+        ]
+        out, result = self.play(base_state(), frames)
+        self.assertIn("saved 4 of 4 frames", result.stdout)
+        self.assertIn("frame 2: 0 writes caught watching memory, list draws 1 reused", result.stderr)  # The second call decoded nothing.
+        pictures = [Image.open(out / f"frame-{i:04d}.png") for i in range(4)]
+        for picture in pictures[:2]:
+            self.assertEqual(self.pixel(picture, 60, 60), GREEN)
+        self.assertEqual(self.pixel(pictures[2], 550, 300), YELLOW)
+        self.assert_background(pictures[2], 60, 60)
+        self.assert_background(pictures[3], 550, 300)  # The list now holds nothing to draw.
+
     def test_frame_with_no_copy_repeats_the_last_picture(self):
         nothing = (bytes(8), [])
         out, result = self.play(base_state(), [triangle_frame(), nothing])

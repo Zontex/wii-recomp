@@ -633,7 +633,7 @@ static void set_viewport_and_scissor(VkCommandBuffer commands, const VkViewport 
   }
 }
 
-static void *vertices_reserve(int count) {
+static void vertices_send(const void *vertices, int count) {
   VkDeviceSize bytes = (VkDeviceSize)count * vertex_bytes;
   reserved_at = vk_ring_take(&vk.frame->vertices, bytes, vertex_bytes);
   if (reserved_at == (VkDeviceSize)-1) {
@@ -641,7 +641,7 @@ static void *vertices_reserve(int count) {
     reserved_at = vk_ring_take(&vk.frame->vertices, bytes, vertex_bytes);
   }
   reserved_restarts = restarts;
-  return vk.frame->vertices.mapped + reserved_at;
+  memcpy(vk.frame->vertices.mapped + reserved_at, vertices, (size_t)bytes);
 }
 
 static void early_depth_changed(void);
@@ -1681,7 +1681,7 @@ const GxBackend gx_backend_vulkan = {
   .texture_create = texture_create,
   .texture_upload = upload_pixels,
   .texture_bind = texture_bind,
-  .vertices_reserve = vertices_reserve,
+  .vertices_send = vertices_send,
   .draw = draw,
   .clear = clear,
   .copy_color = copy_color,

@@ -49,7 +49,7 @@ class Runtime(unittest.TestCase):
         self.build_and_run(INTERPRETER)
 
     def test_guest_memory_window(self):
-        self.build_and_run([HERE / "c/test_guest_memory.c", RUNTIME / "guest_memory.c"])
+        self.build_and_run([HERE / "c/test_guest_memory.c", RUNTIME / "guest_memory.c", RUNTIME / "memory_watch.c"])
 
     def test_interpreter_logs_each_address_once(self):
         program = self.compile(INTERPRETER)
@@ -153,7 +153,7 @@ class Runtime(unittest.TestCase):
         disc_ticket = bytearray(ticket(0x0001000053414141))
         struct.pack_into(">I", disc_ticket, 0x1d0, 0x99887766)
         (disc / "ticket.bin").write_bytes(disc_ticket)
-        sources = ["test_es.c", "es.c", "es_titles.c", "es_content.c", "titles.c", "files.c", "drive.c", "title.c"]
+        sources = ["test_es.c", "es.c", "es_titles.c", "es_content.c", "titles.c", "files.c", "drive.c", "memory_watch.c", "title.c"]
         self.build_and_run([HERE / "c" / sources[0]] + [RUNTIME / name for name in sources[1:]], storage, saves, disc / "sys")
 
 
