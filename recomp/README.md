@@ -58,9 +58,8 @@ Controllers are read through SDL3 (`runtime/pads.c`). A controller that connects
 - **Pointer.** The gyro moves it. Turning 20 degrees from the middle reaches the side of the screen, or less with a higher `gyro_speed`. Turning left and right counts about whichever way is up, however the controller is held. `recenter` (the right stick's click by default) brings it back to the middle. `pointer = stick` moves it with the right stick instead.
 - **Motion and drift.** The controller's motion and turn are the remote's. A Joy-Con pair moves as two hands: the right one is the remote and the left one the Nunchuk. The gyro's zero is taken again whenever the controller is still for a second, so the pointer doesn't drift.
 - **Outputs.** The game's rumble rumbles the controller, the remote's lit light shows as its player light, and its battery shows in the game's Home Menu.
-- **Linux setup.** On Linux, run `sudo recomp/tools/remotes_setup.sh pads` once so SDL reads Switch controllers itself, with their gyro and rumble.
+- **Linux setup.** On Linux, run `sudo recomp/tools/remotes_setup.sh` once so SDL reads Switch controllers itself, with their gyro and rumble. The same setup is for real remotes, and both work together.
 - **Switch 2 controllers** work by cable only, as SDL 3.4 starts them over USB.
-- **Linux limitation.** Setting up for real remotes turns off what wireless controllers connect through. So on Linux, until remotes are read another way, play with either real remotes or wireless Switch controllers, or with Switch controllers by cable.
 - **Mac.** Pair controllers in System Settings.
 
 `WII_RECOMP_INPUT_STATS=1` prints, every five seconds for each controller:
@@ -89,7 +88,14 @@ On the same `--virtual-bluetooth` builds, real remotes and a real board pass the
 
 The board always takes the fifth slot, where games look for it. Each remote keeps its player number between runs, by address, in `remotes.txt` beside the program (in the console folder with `--console`). When a game hangs up on a remote, the remote turns off, and any button brings it back, as on a Wii. `WII_RECOMP_SPEAKER=off` keeps speaker sound from the remote and passes only its rumble.
 
-- **Raspberry Pi and other Linux:** run `sudo recomp/tools/remotes_setup.sh` once, and again after each build. It stops bluetoothd taking the remotes' channels and lets the program listen for them. Pair each remote and the board once with `sudo recomp/tools/remotes_setup.sh pair` after pressing its red SYNC button. From then on any button connects it. Without pairing, hold 1 and 2 as the game starts, or while the game searches for remotes. Remotes stay connected when the console hands over from the Wii Menu to a disc. `--undo` puts bluetoothd back.
+- **Raspberry Pi and other Linux:** run `sudo recomp/tools/remotes_setup.sh` once.
+  - bluetoothd takes a remote's connection as it does any controller's, and the console reads the remote through the kernel's HID (`runtime/remote_link_hidraw.c`). The setup keeps the kernel's own Wii Remote driver away, since it would send the remote reports of its own, and lets the console read Nintendo's controllers.
+  - Pair each remote and the board once with `sudo recomp/tools/remotes_setup.sh pair` after pressing its red SYNC button. From then on any button connects it.
+  - Without pairing, hold 1 and 2 as the game starts, or while the game searches for remotes.
+  - Remotes stay connected when the console hands over from the Wii Menu to a disc.
+  - A game hanging up can't turn a remote off this way, so it sleeps until a button is pressed.
+  - `--sockets` is the older way: bluetoothd's input plugin is turned off, the console answers remotes itself over raw sockets, and remotes do turn off. Wireless keyboards and Switch controllers stop working while it's set, and it must be run again after each build.
+  - `--undo` puts everything back.
 - **Mac:** pair the remote once in System Settings > Bluetooth while holding 1 and 2, and allow Input Monitoring if macOS asks. macOS can't turn a remote off, so when a game hangs up, the remote sleeps until a button is pressed.
 
 None of this has been tried with real hardware yet: the link, the Bluetooth chip's side and the Linux sockets are tested with stand-ins (`test/test_recomp_ios_rare.py`), and Wii Fit Plus plays through setup on `loopback`.

@@ -106,9 +106,15 @@ class RareRequests(unittest.TestCase):
 
     @unittest.skipUnless(sys.platform == "linux", "Linux's Bluetooth backend")
     def test_linux_remote_sockets(self):
-        sources = [HERE / "c/test_remote_link_linux.c", RUNTIME / "remote_link_linux.c", RUNTIME / "remote_link.c"]
+        sources = [HERE / "c/test_remote_link_linux.c", RUNTIME / "remote_link_linux.c", RUNTIME / "remote_link_hidraw.c", RUNTIME / "remote_link.c"]
         self.build_and_run(sources, self.folder / "remotes.txt")
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux's HID backend")
+    def test_remotes_through_hidraw(self):
+        sources = [HERE / "c/test_remote_link_hidraw.c", RUNTIME / "remote_link_hidraw.c", RUNTIME / "remote_link.c"]
+        self.build_and_run(sources, self.folder)
 
 
 if __name__ == "__main__":
     unittest.main()
+

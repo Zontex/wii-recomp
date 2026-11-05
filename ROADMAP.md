@@ -150,7 +150,7 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 0 to 2.
 - [x] The keyboard steers the Classic Controller's left stick with the arrow keys
 - [x] Keys for the Classic Controller's L, R, ZL and ZR, for drifting and items (X, C, Z and V by default, any keys in `controllers.ini`)
 - [x] Four players, and a settings file with sensible defaults (`controllers.ini`, written by the console itself)
-- [ ] Real remotes and wireless Switch controllers together on Linux: reading remotes through the kernel's HID instead of raw sockets, so bluetoothd's input plugin can stay on
+- [x] Real remotes and wireless Switch controllers together on Linux: remotes read through the kernel's HID instead of raw sockets, so bluetoothd's input plugin stays on. Tested with stand-ins; real ones wait for the hardware day
 
 ### 9. The Wii Menu (in progress)
 

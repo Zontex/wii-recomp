@@ -46,8 +46,8 @@ TITLE_LINK_FLAGS = {"darwin": "-shared -undefined dynamic_lookup", "linux": "-sh
 # What the console and a title share. A title built against other versions is refused.
 INTERFACE_HEADERS = ["cpu.h", "guest_memory.h", "title.h", "modules.h"]
 AUDIO_SOURCES = {"darwin": "audio_output_mac.c", "linux": "audio_output_linux.c"}
-# Real Wii Remotes: IOKit's HID on the Mac, Bluetooth sockets on Linux (remote_link.h).
-REMOTE_SOURCES = {"darwin": "remote_link_mac.c", "linux": "remote_link_linux.c"}
+# Real Wii Remotes: IOKit's HID on the Mac, Bluetooth sockets and the kernel's HID on Linux (remote_link.h).
+REMOTE_SOURCES = {"darwin": ["remote_link_mac.c"], "linux": ["remote_link_linux.c", "remote_link_hidraw.c"]}
 BACKEND_SOURCES = {"opengl": ["gx_gl.c"], "vulkan": ["gx_vulkan.c", "gx_vulkan_device.c", "gx_vulkan_pipeline.c", "gx_vulkan_window.c", "gx_shot.c"]}
 LIBRARY_FOLDERS = ["/usr/local/lib", "/usr/lib", "/usr/lib/aarch64-linux-gnu"] + ([f"{VULKAN_SDK}/lib"] if VULKAN_SDK else [])
 # SDL3 reads Switch and other controllers (runtime/pads.c). On a Mac it's Homebrew's; on
@@ -100,7 +100,7 @@ def main():
     defines = " ".join(f"-DGX_WITH_{backend.upper()}" for backend in backends) + f" -DGX_FIRST_{backends[0].upper()} " + platform.get("defines", "")
     left_out = {name for backend, names in BACKEND_SOURCES.items() if backend not in backends for name in names}
     left_out |= {name for system, name in AUDIO_SOURCES.items() if system != sys.platform}
-    left_out |= {name for system, name in REMOTE_SOURCES.items() if system != sys.platform}
+    left_out |= {name for system, names in REMOTE_SOURCES.items() if system != sys.platform for name in names}
     lines = [f"cflags = {FLAGS}", "",
              "rule cc", "  command = clang $cflags -c $in -o $out", "  description = $in", "",
              # The runtime's headers change, and files that include them must follow.

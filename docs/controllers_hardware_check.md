@@ -14,8 +14,7 @@ Keep those lines: they're the numbers this stage asks for.
 
 **Setup, once.**
 - Build SDL3 with `recomp/tools/sdl3_setup.sh`; `--prefix ~/.local` needs no root.
-- Run `sudo recomp/tools/remotes_setup.sh pads`, then unplug and replug any controller.
-- Real remotes and wireless Switch controllers don't work together yet. If the machine was set up for real remotes, `sudo recomp/tools/remotes_setup.sh --undo` first.
+- Run `sudo recomp/tools/remotes_setup.sh`, then unplug and replug any controller. It sets up Switch controllers and real remotes together.
 
 **Pair each wireless controller.**
 1. Hold its sync button.
@@ -55,7 +54,9 @@ Pair the same controllers in System Settings > Bluetooth, and allow Input Monito
 ## When they're in the room
 
 - **Real Wii Remotes and a Balance Board on the Pi.**
-  - Set up with `sudo recomp/tools/remotes_setup.sh`, and pair with `... pair` after pressing SYNC.
+  - Pair with `sudo recomp/tools/remotes_setup.sh pair` after pressing SYNC. The log says `remotes: remote <address> is player N` when one connects through HID.
+  - With a Switch controller connected at the same time, both work: a Pro Controller as player 1 and a real remote as player 2, say.
+  - Hanging up from the game puts the remote to sleep; a button wakes it.
   - Check the report rate: about 100 a second, with `WII_RECOMP_BLUETOOTH_LOG=1`.
   - The board takes player 5's slot.
   - Remotes stay connected across the Wii Menu handing over to a disc.
