@@ -11,9 +11,7 @@
 #include "title.h"
 #include "cpu.h"
 #include "gx_inspect.h"
-#ifdef GX_WITH_VULKAN
 #include "gx_shot.h"
-#endif
 #include "input.h"
 #include "hardware.h"
 
@@ -269,13 +267,7 @@ static void run_command(const char *line) {
   } else if (!strncmp(line, "dump", 4)) gx_inspect_dump();
   else if (sscanf(line, "record %d %1023s", &first, path) == 2) gx_record_request(first, path);
   else if (sscanf(line, "skip %d %d", &first, &last) == 2) gx_inspect_skip(first, last);
-  else if (sscanf(line, "shot %1023s", path) == 1) {
-#ifdef GX_WITH_VULKAN
-    gx_shot(path);
-#else
-    fprintf(stderr, "control: shot needs the Vulkan renderer\n");
-#endif
-  }
+  else if (sscanf(line, "shot %1023s", path) == 1) gx_shot(path);
   else fprintf(stderr, "control: unknown command: %s", line);
 }
 
