@@ -56,9 +56,10 @@ static void report_activity(uint64_t second) {
   if (enabled < 0) enabled = getenv("WII_RECOMP_ACTIVITY") != 0;
   if (second == last || !enabled) return;
   last = second;
-  fprintf(stderr, "second %llu: %u draws, %u copies, %u to screen, %u draw done, %u new shaders, slowest %.1f ms, worst frame %.1f ms, passes %u\n",
+  fprintf(stderr, "second %llu: %u draws, %u copies, %u to screen, %u draw done, %u new shaders, slowest %.1f ms, worst frame %.1f ms, passes %u, new pipelines %u\n",
           (unsigned long long)second, gx_stats.draws, gx_stats.copies, gx_stats.to_screen, gx_stats.draw_done,
-          gx_stats.new_shaders, (double)gx_stats.slowest_shader_ms, (double)gx_stats.worst_frame_ms, gx_stats.passes);
+          gx_stats.new_shaders, (double)gx_stats.slowest_shader_ms, (double)gx_stats.worst_frame_ms, gx_stats.passes,
+          gx_stats.new_pipelines);
   gx_stats = (GxStats){0};
 }
 

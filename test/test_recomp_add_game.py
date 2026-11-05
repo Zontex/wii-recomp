@@ -122,6 +122,28 @@ class Profile(Folder):
         self.assertEqual(run("other"), ["# program 0000000000005678", "80004200 3"])
 
 
+@unittest.skipUnless(shutil.which("clang"), "needs clang")
+class Recipes(Folder):
+    def test_recipes_are_kept_built_at_start_and_merged_with_the_disc(self):
+        program = self.folder / "program"
+        subprocess.run(["clang", str(HERE / "c/test_recipes.c"), str(RUNTIME / "gx_recipes.c"), str(RUNTIME / "profile.c"), "-w", "-O1",
+                        f"-I{RUNTIME}", f"-I{HERE}", "-lpthread", "-o", str(program)], check=True, capture_output=True)
+        data = self.folder / "data"
+
+        def run(stage, built_at_start, held_after):
+            result = subprocess.run([str(program), stage, str(built_at_start), str(held_after)], capture_output=True, text=True,
+                                    timeout=20, env={**os.environ, "WII_RECOMP_TITLE_DATA": str(data)})
+            self.assertEqual(result.stdout, "ok\n", stage + ": " + result.stdout + result.stderr)
+
+        run("first", 0, 3)  # Nothing yet; three pipelines drawn with.
+        run("again", 3, 3)
+        run("disc", 4, 4)  # The image carries one more, and one already known.
+        with open(data / "00010004-54455354/shaders.bin", "ab") as torn:
+            torn.write(b"half a record")
+        run("torn", 4, 4)  # Written again without it.
+        run("other-title", 4, 4)  # Recipes for another title are left out.
+
+
 class SwapNative(Folder):
     def pack(self, library):
         disc = self.folder / "disc"
@@ -148,6 +170,23 @@ class SwapNative(Folder):
         self.assertTrue(make_disc.replace_native(image, [("linux-aarch64", first)]))  # Smaller again.
         self.assertEqual(self.native(image), ("linux-aarch64", b"A" * 100))
         self.assertEqual(image.stat().st_size % 32, 0)
+
+    def test_shader_recipes_ride_along_and_are_kept_when_not_replaced(self):
+        library = self.folder / "game.so"
+        library.write_bytes(b"A" * 100)
+        recipes = self.folder / "shaders.bin"
+        recipes.write_bytes(b"R" * 40)
+        disc = self.folder / "disc"
+        made_up_disc(disc)
+        image = self.folder / "game.wrd"
+        make_disc.write_image(disc, image, [("linux-aarch64", library)], recipes)
+        self.assertEqual(make_disc.read_shaders(image), b"R" * 40)
+        self.assertTrue(make_disc.replace_native(image, [("linux-aarch64", library)]))
+        self.assertEqual(make_disc.read_shaders(image), b"R" * 40)
+        recipes.write_bytes(b"S" * 72)
+        self.assertTrue(make_disc.replace_native(image, [("linux-aarch64", library)], recipes))
+        self.assertEqual(make_disc.read_shaders(image), b"S" * 72)
+        self.assertEqual(self.native(image), ("linux-aarch64", b"A" * 100))
 
     def test_an_image_without_native_code_is_left_alone(self):
         image = self.folder / "game.wrd"
@@ -186,6 +225,16 @@ class AddGame(Folder):
         merged = self.folder / "merged.txt"
         self.assertEqual(add_game.merge_profiles([first, second], merged), 2)
         self.assertEqual(emit.read_profile(merged), {0x80004000: 7, 0x80004100: 1})
+
+    def test_recipes_from_every_copy_merge_once_each_newest_version_only(self):
+        def copy(version, *records):
+            return add_game.RECIPE_HEADER.pack(b"WRSR", version, 4, 0x10004, 0x54455354, 0, 0, 0) + b"".join(records)
+        merged = self.folder / "shaders.bin"
+        count = add_game.merge_recipes([copy(1, b"aaaa", b"bbbb"), copy(1, b"bbbb", b"cccc"), copy(0, b"oldd"), b"junk"], merged)
+        self.assertEqual(count, 3)
+        self.assertEqual(merged.read_bytes(), copy(1, b"aaaa", b"bbbb", b"cccc"))
+        self.assertEqual(add_game.merge_recipes([b"junk"], merged), 0)
+        self.assertFalse(merged.exists())
 
     def test_the_drive_holds_one_disc_and_the_other_goes_to_the_shelf(self):
         console = self.folder / "console"

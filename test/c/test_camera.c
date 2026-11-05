@@ -31,9 +31,11 @@ int main(void) {
   camera_dots(1, 1, dots);
   CHECK(dots[0][0] < 512 - 65);
   CHECK(dots[0][1] > 252);
+  camera_dots(0, 1, dots);  // The bottom edge: far enough for every game measured.
+  CHECK_EQ(dots[0][1], 252 + 226);
   camera_set_bar_above(1);  // A bar above the TV is seen below the middle.
   camera_dots(0, 0, dots);
-  CHECK_EQ(dots[0][1], 515);
+  CHECK_EQ(dots[0][1], 516);
   camera_set_bar_above(0);
 
   // Far off the screen, the lights leave the camera's view.

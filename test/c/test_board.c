@@ -23,6 +23,17 @@ int main(void) {
   CHECK_EQ(big16(calibration + 16), 5400);
   CHECK_EQ(big16(calibration + 6), 2000);  // Bottom left, at nothing.
 
+  // The checksum after it, a CRC32 as zlib's of the weights, 0x20-0x21 and 0x60-0x61.
+  uint8_t around[4], checksum[4];
+  board_read(0x20, around, 2);
+  board_read(0x60, around + 2, 2);
+  CHECK_EQ(around[0], 1);
+  CHECK_EQ(around[1], 0x69);
+  CHECK_EQ(around[2], 25);
+  CHECK_EQ(around[3], 1);
+  board_read(0x3c, checksum, 4);
+  CHECK_EQ((uint32_t)checksum[0] << 24 | checksum[1] << 16 | checksum[2] << 8 | checksum[3], 0x1be6eb18);
+
   // The game's start-up writes don't touch the identity or calibration.
   static const uint8_t start_up[] = {0x55};
   board_write(0xf0, start_up, 1);

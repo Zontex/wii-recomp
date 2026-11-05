@@ -14,7 +14,8 @@ Layout, little-endian:
   data, each entry's bytes aligned to 32
   table, 64 bytes an entry: kind (u32), 0 (u32), disc offset (u64), offset (u64), size (u64), name (32 bytes)
 Kinds: 1 partition data at a disc offset, 2 the disc's unencrypted area at a raw offset,
-3 ticket, 4 TMD, 5 certificates, 6 native code (name: platform).
+3 ticket, 4 TMD, 5 certificates, 6 native code (name: platform), 7 shader recipes for
+any platform (recomp/runtime/gx_recipes.c). Native code and recipes come last.
 """
 import argparse
 import os
@@ -25,7 +26,8 @@ from pathlib import Path
 MAGIC, VERSION = b"WIIRDISC", 1
 HEADER = struct.Struct("<8sIIQ40x")
 ENTRY = struct.Struct("<IIQQQ32s")
-PARTITION, RAW, TICKET, TMD, CERTIFICATES, NATIVE = 1, 2, 3, 4, 5, 6
+PARTITION, RAW, TICKET, TMD, CERTIFICATES, NATIVE, SHADERS = 1, 2, 3, 4, 5, 6, 7
+TAIL = {NATIVE, SHADERS}  # Written last, as they change with each build.
 ALIGN = 32
 BOOT_DOL_OFFSET, BOOT_FST_OFFSET = 0x420, 0x424
 BI2_AT, APPLOADER_AT = 0x440, 0x2440
@@ -71,7 +73,7 @@ def check_no_overlap(entries):
         last_end, last_name = offset + path.stat().st_size, path.name
 
 
-def write_image(extracted, output, natives):
+def write_image(extracted, output, natives, shaders=None):
     files = partition_files(extracted)
     check_no_overlap(files)
     disc = extracted / "disc"
@@ -80,6 +82,7 @@ def write_image(extracted, output, natives):
     pieces += [(TICKET, 0, extracted / "ticket.bin", "ticket.bin"), (TMD, 0, extracted / "tmd.bin", "tmd.bin"),
                (CERTIFICATES, 0, extracted / "cert.bin", "cert.bin")]
     pieces += [(NATIVE, 0, Path(library), platform) for platform, library in natives]
+    pieces += [(SHADERS, 0, Path(shaders), "shaders")] if shaders else []
     missing = [str(path) for _, _, path, _ in pieces if not path.is_file()]
     if missing:
         raise SystemExit("missing: " + ", ".join(missing))
@@ -103,29 +106,34 @@ def write_image(extracted, output, natives):
     return len(table)
 
 
-def replace_native(image, natives):
-    """Swaps the image's native code for `natives` without copying the disc again.
+def replace_native(image, natives, shaders=None):
+    """Swaps the image's native code for `natives`, and its shader recipes for the file
+    `shaders` if given, without copying the disc again. Recipes not replaced are kept.
 
-    The native code is written last, so everything from the first library on is cut
-    off and written again: the libraries, then the table, then the header pointing at
-    it. Returns False, changing nothing, if the image isn't laid out that way."""
+    These are written last, so everything from the first of them on is cut off and
+    written again, then the table, then the header pointing at it. Returns False,
+    changing nothing, if the image isn't laid out that way."""
     rows = read_table(image)
-    first = min((at for kind, _, at, _, _ in rows if kind == NATIVE), default=None)
-    if first is None or any(at >= first for kind, _, at, _, _ in rows if kind != NATIVE):
+    first = min((at for kind, _, at, _, _ in rows if kind in TAIL), default=None)
+    if first is None or any(at >= first for kind, _, at, _, _ in rows if kind not in TAIL):
         return False
-    kept = [row for row in rows if row[0] != NATIVE]
+    kept = [row for row in rows if row[0] not in TAIL]
     missing = [library for _, library in natives if not Path(library).is_file()]
+    missing += [shaders] if shaders and not Path(shaders).is_file() else []
     if missing:
         raise SystemExit("missing: " + ", ".join(map(str, missing)))
+    tail = [(NATIVE, platform, Path(library).read_bytes()) for platform, library in natives]
+    recipes = Path(shaders).read_bytes() if shaders else read_shaders(image)
+    tail += [(SHADERS, "shaders", recipes)] if recipes else []
     with open(image, "r+b") as out:
         out.truncate(first)
         out.seek(first)
         table = [ENTRY.pack(kind, 0, disc_offset, at, size, name.encode("utf-8")[:31]) for kind, disc_offset, at, size, name in kept]
-        for platform, library in natives:
+        for kind, name, data in tail:
             out.write(bytes(-out.tell() % ALIGN))
             at = out.tell()
-            out.write(Path(library).read_bytes())
-            table.append(ENTRY.pack(NATIVE, 0, 0, at, out.tell() - at, platform.encode("utf-8")[:31]))
+            out.write(data)
+            table.append(ENTRY.pack(kind, 0, 0, at, out.tell() - at, name.encode("utf-8")[:31]))
         out.write(bytes(-out.tell() % ALIGN))
         table_at = out.tell()
         out.write(b"".join(table))
@@ -134,6 +142,16 @@ def replace_native(image, natives):
         out.seek(0)
         out.write(HEADER.pack(MAGIC, VERSION, len(table), table_at))
     return True
+
+
+def read_shaders(image):
+    """The shader recipes the image carries, or None."""
+    for kind, _, at, size, _ in read_table(image):
+        if kind == SHADERS:
+            with open(image, "rb") as source:
+                source.seek(at)
+                return source.read(size)
+    return None
 
 
 def read_table(path):

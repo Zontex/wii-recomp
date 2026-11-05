@@ -96,7 +96,7 @@ Each stage is **done**, **in progress** or **planned**, and each item is ticked 
 - [x] Vulkan as the default renderer, with OpenGL as a fallback
 - [x] Compiled shaders and pipelines kept between runs, so a scene stutters only the first time it's ever drawn
 - [x] On the Mac, pictures reach the window on a queue of their own, so macOS holding the window's pictures skips pictures instead of freezing the game for up to a second
-- [ ] Shaders compiled ahead of time from the disc, so even a first run doesn't stutter
+- [ ] Shaders compiled ahead of time from the disc alone, so even a game's very first run doesn't stutter. Until then, recipes recorded by earlier runs and carried in the disc image build everything they saw before the first picture, on any computer (stage 10)
 - [ ] Lower cost per draw, aimed at heavy scenes of 150,000 draws a second
 - [ ] **GPU pipe writes compiled to direct calls.** Each store the game makes to the pipe (`0xCC008000`) goes through `hw_write`, its register checks and a byte loop before the commands are read back. In three steps, each measured before the next:
   1. The translator spots stores to the pipe's fixed address and calls a native pipe write directly. Same bytes in the same order, so exact.
@@ -143,6 +143,8 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 0 to 2.
 - [x] Real Wii Remotes and the Balance Board passed straight through to the game's own code: raw Bluetooth sockets on Linux, IOKit's HID on the Mac, the board in its own slot, remotes keeping their player number, waking with a button, and staying connected across the console's hand-over. Tested with stand-ins and with Wii Fit Plus on `WII_RECOMP_REMOTES=loopback`
 - [ ] Real remotes and a real board tried on the Pi and the Mac, with the report rate measured
 - [ ] Switch Pro Controllers and Joy-Cons through SDL2, as a Classic Controller or a Wii Remote and Nunchuk, with motion as tilt and the gyro as the pointer
+- [x] The keyboard steers the Classic Controller's left stick with the arrow keys
+- [ ] Keys for the Classic Controller's L, R, ZL and ZR, for drifting and items
 - [ ] Four players, and a settings file with sensible defaults
 
 ### 9. The Wii Menu (in progress)
@@ -165,8 +167,11 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - [x] Recompiled disc images (`recomp/tools/make_disc.py`): the disc with its native code for each platform, in one file
 - [x] `recomp/tools/add_game.py <image>`: extract, translate with discovery on, find system functions by content, compile, pack a recompiled disc image and put it in a console's drive, in one command. Code the interpreter ran comes back as function starts on the next build
 - [x] Two build tiers. A first build compiles everything about five times faster, and each function counts how often it runs; running `add_game.py` again compiles the functions that did the work for speed, from counts added up over every run. On a Raspberry Pi 5, Wii Fit Plus goes from an extracted disc to a playable image in under a minute and a half instead of over seven minutes, the second build takes about a minute, and its Body Test walk runs as fast as a build compiled entirely for speed
-- [ ] Shaders compiled ahead of time as part of it (4c)
+- [x] Shaders built before the first picture from the recipes every earlier run of the game recorded, which the disc image carries (4c)
 - [ ] A first run of a new disc starts under the interpreter while compiling continues behind it
+- [x] The files the Wii Menu makes on a new Wii's first start (WiiConnect24's settings, lists and mailboxes, and an empty Mii database), made in the save folder when missing
+- [ ] REL modules, the format most games load the bulk of their code in through the SDK's `OSLink`, translated ahead of time like the Wii Menu's RSO modules. Mario Kart Wii runs nearly all of its game from one, `StaticR.rel`, under the interpreter today
+- [ ] Module code in both build tiers, its counts kept by module name and offset so they hold wherever the module is loaded
 
 ### 11. Frame rate (in progress)
 
@@ -177,10 +182,12 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - [x] The Wii's memory as one window at a fixed address: a load or store is a few instructions with no pointer to load, and the stack skips the hardware check. Wii Fit Plus's translated code shrank by about 40%
 - [ ] Every Wii Fit Plus scene at 60 fps on the Pi: the step-off screen and the Body Test hold 60, and a step-on transition drops to about 32
 - [ ] A 60 fps option for 30 fps games, kept per title only where movement, animation and cutscene timing match at both rates
+- [ ] Mario Kart Wii at a steady 60 fps through the menus and a race on an Intel Mac. The menus hold 60 already; the Single Player screen runs at about 28 while its code is interpreted
 
 ### 12. Compatibility (planned)
 
 - [ ] A list of titles, homebrew and SDK demos
+- [ ] Mario Kart Wii from a fresh console: Grand Prix, Time Trials with ghosts, VS and Battle, saving and reloading, sound in time, and back to the Wii Menu. Online play stays out of scope; the game should say it can't connect
 - [x] Automatic play for any title (`recomp/tools/autoplay/`): scripted sessions per game that read the screen and act, with Wii Fit Plus's first-time setup as the first
 - [ ] An automatic script for each: boots, reaches gameplay, sound, picture comparison and frame rate
 - [ ] Run on every change to shared code
@@ -198,6 +205,7 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - On the Mac, the game no longer freezes for a second when macOS holds on to the window's pictures.
 - Real Wii Remotes and the Balance Board can drive a game's own Bluetooth code, and the Wii's memory became one window at a fixed address, making each load or store a few instructions.
 - One command turns a disc into a playable image. Code that has barely run compiles quickly and counts its runs, and the next build compiles what did the work for speed: Wii Fit Plus builds in under a minute and a half on a Raspberry Pi 5.
+- Mario Kart Wii, from the user's own disc, reaches its menus on a console that has never run the Wii Menu, once the files a new Wii makes on first start are there.
 
 ## Out of scope
 

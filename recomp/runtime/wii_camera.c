@@ -12,12 +12,16 @@ enum {
 };
 
 // How far the dots move across the camera as the pointer goes from the middle to an
-// edge of the screen, and how far apart the two lights look. Measured on the Wii Menu,
-// whose cursor then reaches each edge of the screen as the pointer does.
-static const float REACH_X = 250, REACH_Y = 190, LIGHTS_APART = 130;
+// edge of the screen, and how far apart the two lights look. Games turn the dots into a
+// cursor at their own scale: the Wii Menu's cursor reaches the side edges at 250 and the
+// top and bottom at 190, Wii Fit Plus's at 225 and 226. Each axis takes the larger, so
+// every edge is in reach in both, and at worst the cursor gets there a little early.
+// (Dolphin's defaults, chosen to reach the edges in most games, come to about 300 and 240.)
+static const float REACH_X = 250, REACH_Y = 226, LIGHTS_APART = 130;
 // The sensor bar sits beyond the screen's top or bottom edge, so pointing at the middle
-// sees it off centre. In pointer units, measured on the Wii Menu with the bar below.
-static const float BAR_OFFSET = 0.694f;
+// sees it off centre, by this many of the camera's rows. Measured on the Wii Menu with
+// the bar below; Wii Fit Plus puts its cursor at the middle of the screen with it too.
+static const float BAR_OFFSET = 132;
 
 static uint8_t registers[REGISTERS];
 static int bar_above;  // The console setting BT.BAR: 1 above the TV, 0 below.
@@ -38,7 +42,7 @@ int camera_mode(void) { return registers[TRACKING] == TRACKING_ON ? registers[MO
 // them down, as the Wii Menu reads them.
 void camera_dots(float pointer_x, float pointer_y, int dots[4][2]) {
   float centre_x = WIDTH / 2.0f - pointer_x * REACH_X;
-  float centre_y = HEIGHT / 2.0f + (pointer_y + (bar_above ? BAR_OFFSET : -BAR_OFFSET)) * REACH_Y;
+  float centre_y = HEIGHT / 2.0f + pointer_y * REACH_Y + (bar_above ? BAR_OFFSET : -BAR_OFFSET);
   for (int i = 0; i < 4; i++) dots[i][0] = dots[i][1] = NO_DOT;
   for (int i = 0; i < 2; i++) {
     int x = (int)(centre_x + (i ? LIGHTS_APART : -LIGHTS_APART) / 2), y = (int)centre_y;

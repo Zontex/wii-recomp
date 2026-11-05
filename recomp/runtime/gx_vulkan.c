@@ -46,6 +46,10 @@ struct GxTexture {
   VkFramebuffer framebuffer;
   int owed;  // Its copy was skipped: 1 the picture, 2 an empty layer, 3 depth. 4 adds: given up late, 8: drawn apart.
   uint32_t owed_frame;
+  // Its copy came out one value everywhere, and draws sample a 1 by 1 image of it instead
+  // (flat_view). The rest says how to make the whole image, should it be needed after all.
+  VkImageView flat_view;
+  struct { int depth, width, height; GxChannels channels; float value[4]; } flat;
 };
 static uint32_t frame_serial;
 // Whether the picture's depth is one value everywhere, as after a whole clear with
@@ -538,6 +542,7 @@ static void upload_pixels(GxTexture *texture, uint32_t width, uint32_t height, u
   // commands, and must still see the old picture, as may a frame on the card.
   if (texture->image) vk_retire(texture->image, texture->view, texture->memory);
   retire_attachment(texture);
+  texture->flat_view = VK_NULL_HANDLE;
   vk_create_image(COLOR_FORMAT, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, width, height, levels, &texture->image, &texture->memory);
   VkComponentMapping plain = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
   texture->view = vk_create_view(texture->image, COLOR_FORMAT, VK_IMAGE_ASPECT_COLOR_BIT, levels, plain);
@@ -569,9 +574,9 @@ static void bind_maps(VkCommandBuffer commands) {
   VkDescriptorImageInfo maps[MAX_TEXTURE_MAPS];
   memset(maps, 0, sizeof maps);
   for (int map = 0; map < MAX_TEXTURE_MAPS; map++) {
-    const GxTexture *texture = bindings[map].texture && bindings[map].texture->written ? bindings[map].texture : blank_texture;
-    maps[map].sampler = vk_sampler_find(&bindings[map].sampling, texture->depth);
-    maps[map].imageView = texture->view;
+    const GxTexture *texture = bindings[map].texture && (bindings[map].texture->written || bindings[map].texture->flat_view) ? bindings[map].texture : blank_texture;
+    maps[map].sampler = vk_sampler_find(&bindings[map].sampling, texture->flat_view ? texture->flat.depth : texture->depth);
+    maps[map].imageView = texture->flat_view ? texture->flat_view : texture->view;
     maps[map].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
   }
   if (!memcmp(maps, maps_set, sizeof maps)) return;
@@ -927,9 +932,106 @@ static VkComponentSwizzle swizzle(uint8_t channel) {
   return names[channel];
 }
 
+// A copy that comes out one value everywhere, as a copy of a clear does, samples the same
+// from a 1 by 1 image of that value as from the whole picture, with any coordinates and
+// filter. Clearing a whole 1600 by 1140 image costs the Pi about half a millisecond, and
+// often means ending the pass around it, so such copies take one of these instead. Each
+// value's image is made once, in the commands that run before the frame's own, and kept.
+enum { FLAT_IMAGES = 64, FLAT_VIEWS = 8 };
+static struct {
+  int depth;
+  float value[4];
+  VkImage image;
+  VkDeviceMemory memory;
+  int view_count;
+  struct { GxChannels channels; VkImageView view; } views[FLAT_VIEWS];
+} flat_images[FLAT_IMAGES];
+static int flat_count;
+
+static VkImageView flat_image(int depth, const float value[4], GxChannels channels) {
+  static int off = -1;
+  if (off < 0) off = getenv("WII_RECOMP_NO_FLAT_COPIES") != 0;
+  if (off) return VK_NULL_HANDLE;
+  int found = -1;
+  for (int i = 0; i < flat_count && found < 0; i++) {
+    if (flat_images[i].depth == depth && !memcmp(flat_images[i].value, value, sizeof flat_images[i].value)) found = i;
+  }
+  // A new one needs the commands before the frame's, which the strip below the picture is
+  // recorded into, so it waits for a copy outside the strip.
+  if (found < 0) {
+    if (in_strip || flat_count == FLAT_IMAGES) return VK_NULL_HANDLE;
+    found = flat_count++;
+    flat_images[found].depth = depth;
+    memcpy(flat_images[found].value, value, sizeof flat_images[found].value);
+    VkFormat format = depth ? DEPTH_FORMAT : COLOR_FORMAT;
+    VkImageAspectFlags aspect = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+    vk_create_image(format, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, 1, 1, 1, &flat_images[found].image, &flat_images[found].memory);
+    VkCommandBuffer commands = vk_upload_commands();
+    barrier(commands, flat_images[found].image, aspect, 0, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+            VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+    VkImageSubresourceRange whole = {aspect, 0, 1, 0, 1};
+    if (depth) {
+      VkClearDepthStencilValue clear = {value[0], 0};
+      vkCmdClearDepthStencilImage(commands, flat_images[found].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &whole);
+    } else {
+      VkClearColorValue clear;
+      memcpy(clear.float32, value, sizeof clear.float32);
+      vkCmdClearColorImage(commands, flat_images[found].image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &clear, 1, &whole);
+    }
+    barrier(commands, flat_images[found].image, aspect, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+            VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+  }
+  for (int i = 0; i < flat_images[found].view_count; i++) {
+    if (!memcmp(&flat_images[found].views[i].channels, &channels, sizeof channels)) return flat_images[found].views[i].view;
+  }
+  if (flat_images[found].view_count == FLAT_VIEWS) return VK_NULL_HANDLE;
+  VkComponentMapping mapping = {swizzle(channels.red), swizzle(channels.green), swizzle(channels.blue), swizzle(channels.alpha)};
+  VkImageView view = vk_create_view(flat_images[found].image, depth ? DEPTH_FORMAT : COLOR_FORMAT,
+                                    depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT, 1, mapping);
+  flat_images[found].views[flat_images[found].view_count].channels = channels;
+  flat_images[found].views[flat_images[found].view_count++].view = view;
+  return view;
+}
+
+// Says if `to` could take the flat value instead of the whole image.
+static int make_flat(GxTexture *to, int depth, int width, int height, GxChannels channels, const float value[4]) {
+  VkImageView view = flat_image(depth, value, channels);
+  if (!view) return 0;
+  to->flat_view = view;
+  to->flat.depth = depth;
+  to->flat.width = width;
+  to->flat.height = height;
+  to->flat.channels = channels;
+  memcpy(to->flat.value, value, sizeof to->flat.value);
+  to->owed = 0;
+  return 1;
+}
+
+static void prepare_copy(GxTexture *to, int width, int height, VkFormat format, VkImageAspectFlags aspect, GxChannels channels);
+static void finish_copy(GxTexture *to, VkImageAspectFlags aspect);
+
+// The whole image after all, for something that reads it as a picture rather than sampling it.
+static void materialize(GxTexture *t) {
+  if (!t->flat_view) return;
+  if (pass_open) end_pass();
+  VkImageAspectFlags aspect = t->flat.depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+  prepare_copy(t, t->flat.width, t->flat.height, t->flat.depth ? DEPTH_FORMAT : COLOR_FORMAT, aspect, t->flat.channels);
+  VkImageSubresourceRange whole = {aspect, 0, 1, 0, 1};
+  if (t->flat.depth) {
+    VkClearDepthStencilValue value = {t->flat.value[0], 0};
+    vkCmdClearDepthStencilImage(vk.frame->draw, t->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &value, 1, &whole);
+  } else {
+    VkClearColorValue value;
+    memcpy(value.float32, t->flat.value, sizeof value.float32);
+    vkCmdClearColorImage(vk.frame->draw, t->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &value, 1, &whole);
+  }
+  finish_copy(t, aspect);
+}
+
 // Gets `to` ready as a copy's target. A new size means a new image; channels are part
 // of the view, so new channels mean a new view of the same image.
 static void prepare_copy(GxTexture *to, int width, int height, VkFormat format, VkImageAspectFlags aspect, GxChannels channels) {
+  to->flat_view = VK_NULL_HANDLE;  // What's copied now replaces it.
   VkComponentMapping mapping = {swizzle(channels.red), swizzle(channels.green), swizzle(channels.blue), swizzle(channels.alpha)};
   if (!to->image || to->width != width || to->height != height) {
     if (to->image) vk_retire(to->image, to->view, to->memory);
@@ -968,6 +1070,7 @@ static void copy_color_now(GxTexture *to, const GxRectangle *from, int width, in
   VkRect2D source = clip_to_efb(from);
   if (!pass_open && (waiting_clear.kind & CLEARS_COLOR) && rectangle_holds(&waiting_clear.area, &source)
       && source.extent.width == (uint32_t)(from->width * EFB_SCALE) && source.extent.height == (uint32_t)(from->height * EFB_SCALE)) {
+    if (make_flat(to, 0, width, height, channels, waiting_clear.values[0].color.float32)) return;
     prepare_copy(to, width, height, COLOR_FORMAT, VK_IMAGE_ASPECT_COLOR_BIT, channels);
     VkImageSubresourceRange whole = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
     vkCmdClearColorImage(vk.frame->draw, to->image, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, &waiting_clear.values[0].color, 1, &whole);
@@ -1003,6 +1106,8 @@ static void copy_depth_now(GxTexture *to, const GxRectangle *from, int width, in
   if (!off && flat_depth.known && from->x >= 0 && from->y >= 0 && from->x + from->width <= EFB_WIDTH && from->y + from->height <= VISIBLE_HEIGHT) {
     // Every pixel copied holds the same value, which a clear of the copy gives exactly.
     // A clear still waiting can go on waiting, but an open pass must end first.
+    const float flat_value[4] = {flat_depth.value, 0, 0, 0};
+    if (make_flat(to, 1, width, height, channels, flat_value)) return;
     if (pass_open) end_pass();
     prepare_copy(to, width, height, DEPTH_FORMAT, VK_IMAGE_ASPECT_DEPTH_BIT, channels);
     VkClearDepthStencilValue value = {flat_depth.value, 0};
@@ -1161,6 +1266,7 @@ static void fill_copy(GxTexture *to, int width, int height, GxChannels channels,
   if (!in_strip) { to->copied_frame = frame_serial; cover.recorded_anything_lasting = 1; }
   to->strip_frame = frame_serial;
   // Nothing of the picture is read, so a clear still waiting can go on waiting.
+  if (make_flat(to, 0, width, height, channels, color)) return;
   if (pass_open) end_pass();
   prepare_copy(to, width, height, COLOR_FORMAT, VK_IMAGE_ASPECT_COLOR_BIT, channels);
   VkClearColorValue value;
@@ -1252,6 +1358,7 @@ static void copy_from_side(GxTexture *to, const GxRectangle *from, int width, in
   if (swap_off < 0) swap_off = getenv("WII_RECOMP_NO_SWAP") != 0;
   // The whole picture at its own size: the texture can take the side picture's image as
   // it is, and give its own for the next layer. Only an image made for drawing into will do.
+  materialize(to);  // Its image is handed on, so it must hold what it says.
   if (!swap_off && width == EFB_PIXEL_WIDTH && height == VISIBLE_HEIGHT * EFB_SCALE && !to->depth) {
     static const VkComponentMapping plain = {VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY, VK_COMPONENT_SWIZZLE_IDENTITY};
     VkComponentMapping mapping = {swizzle(channels.red), swizzle(channels.green), swizzle(channels.blue), swizzle(channels.alpha)};
@@ -1307,6 +1414,7 @@ static void copy_from_side(GxTexture *to, const GxRectangle *from, int width, in
 // from the side picture, or once copied, from the layer, which may have taken its image.
 static void side_to_picture(GxTexture *copied) {
   leave_side();
+  if (copied) materialize(copied);
   VkCommandBuffer commands = vk.frame->draw;
   VkImage source = copied ? copied->image : side.image;
   if (copied) {
@@ -1563,6 +1671,8 @@ const GxBackend gx_backend_vulkan = {
   .start = start,
   .stage_compile = vk_stage_compile,
   .shader_link = vk_shader_link,
+  .stages_prepare = vk_stages_prepare,
+  .pipeline_prepare = vk_pipeline_prepare,
   .shader_use = shader_use,
   .constants_send = constants_send,
   .render_state = render_state,

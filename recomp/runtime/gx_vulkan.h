@@ -128,4 +128,6 @@ void vk_pipelines_start(const GxAttribute *attributes, int attribute_count, size
 GxStage vk_stage_compile(int kind, const char *text);
 GxShader vk_shader_link(GxStage vertex, GxStage fragment);
 VkPipeline vk_pipeline_find(GxShader shader, const GxRenderState *state);
+void vk_stages_prepare(int count, const int *kinds, const char *const *texts);  // On every core.
+void vk_pipeline_prepare(GxShader shader, const GxRenderState *state);
 VkSampler vk_sampler_find(const GxSampling *sampling, int depth);

@@ -10,10 +10,10 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 T0, END = float(sys.argv[1]), time.time() + float(sys.argv[2]) - 1
 BOX = (60, 186, 560, 240)
 # Screens where A only works on a button: where to point first.
-CLICKS = {'clothing': (0.575, 0.2)}
+CLICKS = {'clothing': (0.52, 0.33)}
 # Where buttons usually sit, tried in turn when a screen nobody knows stops changing:
 # Next and OK at the bottom right, the middle, then the bottom left.
-TRY = [(0.33, 0.68), (0.6, 0.76), (0.34, 0.78), (0, 0.6), (-0.33, 0.68), (0, 0.2)]
+TRY = [(0.3, 0.81), (0.54, 0.89), (0.31, 0.91), (0, 0.73), (-0.3, 0.81), (0, 0.33)]
 STILL = 15
 refs = {}
 for f in sorted(os.listdir(os.path.join(HERE, 'ref'))):
@@ -22,6 +22,11 @@ for f in sorted(os.listdir(os.path.join(HERE, 'ref'))):
 log = open(os.path.join(HERE, 'react.log'), 'w', buffering=1)
 
 def send(line):
+    # Positions are for the game's own Wii Remote code reading the simulated camera; a
+    # build handed the pointer directly puts it elsewhere (README.md).
+    if line.startswith('pointer ') and os.environ.get('WALK_POINTER') == 'direct':
+        x, y = map(float, line.split()[1:])
+        line = 'pointer %g %g' % (x * 1.11, y - 0.127)
     with open(os.path.join(HERE, 'control'), 'w') as pipe:
         pipe.write(line + '\n')
     log.write('%5.0f   -> %s\n' % (time.time() - T0, line))
@@ -50,7 +55,7 @@ while time.time() < END:
     stamp = None
     if 0.1 < yellow.mean() < 0.35:
         ys, xs = np.nonzero(yellow)
-        stamp = ((xs.mean() / 160 - 0.5) * 2, (ys.mean() / 90 - 0.5) / 0.55)
+        stamp = ((xs.mean() / 160 - 0.5) * 2 / 1.11, (ys.mean() / 90 - 0.5) / 0.55 + 0.127)
     if name != last_name:
         log.write('%5.0f %s (%.1f)\n' % (now - T0, name, scores[best]))
         last_name = name
@@ -65,7 +70,7 @@ while time.time() < END:
     elif name in CLICKS:
         if now - last_a >= 4:
             x, y = CLICKS[name]
-            send('pointer %g %g' % (x, y)); time.sleep(0.5); send('press a'); time.sleep(0.5); send('pointer 0 0.6')
+            send('pointer %g %g' % (x, y)); time.sleep(0.5); send('press a'); time.sleep(0.5); send('pointer 0 0.73')
             last_a = time.time()
     elif name == 'unknown' and stamp is not None:
         # The calendar: the stamp follows the pointer and lags it, so it's held over
@@ -77,7 +82,7 @@ while time.time() < END:
             last_a = time.time()
     elif name == 'unknown' and now - still_since >= STILL and now - last_a >= 4:
         x, y = TRY[tries % len(TRY)]; tries += 1
-        send('pointer %g %g' % (x, y)); time.sleep(0.5); send('press a'); time.sleep(0.5); send('pointer 0 0.6')
+        send('pointer %g %g' % (x, y)); time.sleep(0.5); send('press a'); time.sleep(0.5); send('pointer 0 0.73')
         last_a = time.time()
     elif now - last_a >= 6:
         send('press a'); last_a = now

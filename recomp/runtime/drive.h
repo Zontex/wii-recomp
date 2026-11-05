@@ -29,5 +29,8 @@ size_t drive_tmd(uint8_t *out, size_t limit);
 // none for this platform, or isn't an image.
 int drive_native(const char *folder, char *path, size_t limit);
 
+// The shader recipes the image carries (gx_recipes.c), in a buffer the caller frees, or 0.
+void *drive_shaders(size_t *bytes);
+
 // This platform's name in an image, such as darwin-x86_64.
 const char *drive_platform(void);

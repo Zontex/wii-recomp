@@ -35,6 +35,7 @@ static struct {
   uint32_t pulsed;
   uint64_t pulse_until;
   float pointer_x, pointer_y;
+  float stick_x, stick_y;
   int standing;
   float kilograms, lean_x, lean_y;
 } state = {.kilograms = 60};
@@ -106,8 +107,21 @@ static uint32_t current_buttons(void) {
   return state.held | state.pulsed;
 }
 
-// No source moves the sticks yet, so they sit centred.
-void input_sticks(float out[4]) { memset(out, 0, sizeof(float) * 4); }
+void input_stick(float x, float y) {
+  pthread_mutex_lock(&lock);
+  state.stick_x = x;
+  state.stick_y = y;
+  pthread_mutex_unlock(&lock);
+}
+
+// The left stick, then the right, which nothing moves yet.
+void input_sticks(float out[4]) {
+  pthread_mutex_lock(&lock);
+  out[0] = state.stick_x;
+  out[1] = state.stick_y;
+  out[2] = out[3] = 0;
+  pthread_mutex_unlock(&lock);
+}
 
 uint32_t input_buttons(void) {
   pthread_mutex_lock(&lock);
@@ -246,6 +260,7 @@ static void run_command(const char *line) {
   else if (sscanf(line, "hold %15s", name) == 1) input_hold(button_named(name), 1);
   else if (sscanf(line, "release %15s", name) == 1) input_hold(button_named(name), 0);
   else if (sscanf(line, "pointer %f %f", &x, &y) == 2) input_pointer(x, y);
+  else if (sscanf(line, "stick %f %f", &x, &y) == 2) input_stick(x, y);
   else if (!strncmp(line, "reset", 5)) reset_button_press();
   else if (sscanf(line, "board %15s %f %f %f", word, &kilograms, &x, &y) >= 1) {
     input_board(!strcmp(word, "on"), kilograms, x, y);
