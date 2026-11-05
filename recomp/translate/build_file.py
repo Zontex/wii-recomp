@@ -33,11 +33,11 @@ VULKAN_LINK_FLAGS = (f"-L{VULKAN_SDK}/lib -Wl,-rpath,{VULKAN_SDK}/lib " if VULKA
 SHADERC = "shaderc" if sys.platform == "linux" else "shaderc_shared"  # Debian's name for it.
 VULKAN_LINK_FLAGS += f" -l{SHADERC}"
 
-# For each platform, what it always links, and what each backend adds. The Pi draws at
-# 5/2, which puts the game's 456 lines above a full 1080p picture.
+# For each platform, what it always links, and what each backend adds. Every platform
+# draws at twice the Wii's size unless WII_RECOMP_SCALE asks otherwise (gx.h).
 PLATFORMS = {
     "darwin": {"system": "-framework AudioToolbox -framework IOKit -framework CoreFoundation -lobjc", "opengl": "-framework OpenGL", "vulkan": VULKAN_LINK_FLAGS, "default": ["vulkan", "opengl"]},
-    "linux": {"defines": "-DEFB_SCALE=5/2", "system": "-lasound", "opengl": "-lGL", "vulkan": VULKAN_LINK_FLAGS, "default": ["vulkan"]},
+    "linux": {"system": "-lasound", "opengl": "-lGL", "vulkan": VULKAN_LINK_FLAGS, "default": ["vulkan"]},
 }
 LIBRARY_SUFFIX = "dylib" if sys.platform == "darwin" else "so"
 # The console must export what translated code calls, and the title must be able to call it.
@@ -48,7 +48,7 @@ INTERFACE_HEADERS = ["cpu.h", "guest_memory.h", "title.h", "modules.h"]
 AUDIO_SOURCES = {"darwin": "audio_output_mac.c", "linux": "audio_output_linux.c"}
 # Real Wii Remotes: IOKit's HID on the Mac, Bluetooth sockets on Linux (remote_link.h).
 REMOTE_SOURCES = {"darwin": "remote_link_mac.c", "linux": "remote_link_linux.c"}
-BACKEND_SOURCES = {"opengl": ["gx_gl.c"], "vulkan": ["gx_vulkan.c", "gx_vulkan_device.c", "gx_vulkan_pipeline.c", "gx_vulkan_window.c", "gx_shot.c"]}
+BACKEND_SOURCES = {"opengl": ["gx_gl.c"], "vulkan": ["gx_vulkan.c", "gx_vulkan_device.c", "gx_vulkan_pipeline.c", "gx_vulkan_window.c"]}
 LIBRARY_FOLDERS = ["/usr/local/lib", "/usr/lib", "/usr/lib/aarch64-linux-gnu"] + ([f"{VULKAN_SDK}/lib"] if VULKAN_SDK else [])
 VULKAN_LIBRARIES = ["vulkan", SHADERC]
 

@@ -10,6 +10,7 @@
 
 #include "debug.h"
 #include "gx_backend.h"
+#include "gx_shot.h"
 
 enum {
   VERTEX_BUFFER_BYTES = 64 * 1024 * 1024, CONSTANT_BUFFER_BYTES = 32 * 1024 * 1024, LOG_BYTES = 1024,
@@ -386,6 +387,24 @@ static void copy_depth(GxTexture *to, const GxRectangle *from, int width, int he
   glBindFramebuffer(GL_FRAMEBUFFER, efb);
 }
 
+// The picture being shown, read back for gx_shot.c, top row first as Vulkan gives it.
+static void shot(const GxRectangle *from) {
+  int width = from->width * EFB_SCALE, height = from->height * EFB_SCALE;
+  uint8_t *rgba = malloc((size_t)width * height * 4), *row = malloc((size_t)width * 4);
+  if (!rgba || !row) { free(rgba); free(row); return; }
+  glPixelStorei(GL_PACK_ALIGNMENT, 1);
+  glReadPixels(from->x * EFB_SCALE, (EFB_HEIGHT - from->y - from->height) * EFB_SCALE, width, height, GL_RGBA, GL_UNSIGNED_BYTE, rgba);
+  for (int y = 0; y < height / 2; y++) {
+    uint8_t *top = rgba + (size_t)y * width * 4, *bottom = rgba + (size_t)(height - 1 - y) * width * 4;
+    memcpy(row, top, (size_t)width * 4);
+    memcpy(top, bottom, (size_t)width * 4);
+    memcpy(bottom, row, (size_t)width * 4);
+  }
+  gx_shot_write(rgba, width, height);
+  free(rgba);
+  free(row);
+}
+
 static void present(const GxRectangle *from) {
   int window_width, window_height;
   window_size(&window_width, &window_height);
@@ -394,6 +413,7 @@ static void present(const GxRectangle *from) {
   glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
   glBlitFramebuffer(from->x * EFB_SCALE, (EFB_HEIGHT - from->y - from->height) * EFB_SCALE, (from->x + from->width) * EFB_SCALE,
                     (EFB_HEIGHT - from->y) * EFB_SCALE, 0, 0, window_width, window_height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+  if (gx_shot_wanted()) shot(from);
   glfwSwapBuffers(window_handle());
   window_refresh_size();
   glBindFramebuffer(GL_FRAMEBUFFER, efb);

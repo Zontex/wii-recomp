@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 
+#include "timeline.h"
 #include "audio.h"
 #include "cpu.h"
 #include "dsp.h"
@@ -134,12 +135,18 @@ void hardware_start(void) {
   put(AI_CONTROL, AI_DMA_32KHZ, 4);  // Audio DMA at 32 kHz, as Dolphin starts it.
 }
 
-void raise_irq(int bit) { cause |= 1u << bit; }
+void raise_irq(int bit) {
+  static const char *const names[32] = {[IRQ_SI] = "irq serial", [IRQ_EXI] = "irq exi", [IRQ_AI] = "irq audio", [IRQ_DSP] = "irq dsp", [IRQ_VI] = "irq retrace",
+                                        [IRQ_PE_TOKEN] = "irq token", [IRQ_PE_FINISH] = "irq draw done", [IRQ_CP] = "irq fifo", [IRQ_IPC] = "irq ipc"};
+  if (timeline_on && !(cause & (1u << bit))) timeline_mark(names[bit & 31] ? names[bit & 31] : "irq other", 'i');
+  cause |= 1u << bit;
+}
 void clear_irq(int bit) { cause &= ~(1u << bit); }
 int irq_pending(void) { return (cause & get(PI_MASK, 4)) != 0; }
 
 // The screen finished a frame: flag each enabled display interrupt.
 void video_retrace(void) {
+  TIMELINE_MOMENT("retrace");
   graphics_retrace();
   for (int i = 0; i < VI_INTERRUPT_COUNT; i++) {
     uint32_t address = VI_DISPLAY_INTERRUPT + (uint32_t)i * 4;

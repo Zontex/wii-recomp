@@ -191,6 +191,7 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - [ ] A list of titles, homebrew and SDK demos
 - [ ] Mario Kart Wii from a fresh console: Grand Prix, Time Trials with ghosts, VS and Battle, saving and reloading, sound in time, and back to the Wii Menu. Online play stays out of scope; the game should say it can't connect
 - [x] Automatic play for any title (`recomp/tools/autoplay/`): scripted sessions per game that read the screen and act, with Wii Fit Plus's first-time setup as the first
+- [x] Compatibility runs (`recomp/tools/compat_run.py`): every game played unattended by the generic explorer, given a tier from measured signals, with the gaps ranked across all of them
 - [ ] An automatic script for each: boots, reaches gameplay, sound, picture comparison and frame rate
 - [ ] Run on every change to shared code
 

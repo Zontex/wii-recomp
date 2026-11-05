@@ -100,6 +100,8 @@ static void load_registers(const Dff *dff) {
   memcpy(gx.cp, dff->cp, sizeof gx.cp);
   memcpy(gx.xf, dff->xf, sizeof dff->xf);
   memcpy(&gx.xf[XF_REGISTERS_START], dff->xf_registers, sizeof dff->xf_registers);
+  gx_xf_note(0, XF_SIZE);
+  gx_cp_written++;
   gx_restore_palettes(dff->texture_memory);
 }
 

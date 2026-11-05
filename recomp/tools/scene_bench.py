@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Times and checks recorded scenes: every .dff in a folder, played through recomp/tools/replay.
 
-Usage: recomp/tools/scene_bench.py <folder of recordings> [--repeat <n>] [--reference <folder>] [--save-reference <folder>]
+Usage: recomp/tools/scene_bench.py <folder of recordings> [--scale <n/d>] [--repeat <n>] [--reference <folder>] [--save-reference <folder>]
 
 Record scenes in any game with the control pipe's "record <frames> <file>" (gx_record.c),
 or WII_RECOMP_RECORD=<frame>:<frames>:<file>. Recordings hold the game's memory, so keep
@@ -12,8 +12,8 @@ them out of the repository. For each one this prints:
   gpu ms     the graphics chip's time for one frame, and its three costliest steps
   pictures   with --reference, the largest difference from the pictures saved there
 
-The player draws at the same scale as this computer's console build (5/2 on Linux, 2 on
-the Mac). With --save-reference the pictures are kept as the reference for later runs.
+The player draws at the console's own scale, 2 unless --scale or WII_RECOMP_SCALE says
+otherwise. With --save-reference the pictures are kept as the reference for later runs.
 Exits with 1 if a recording fails to play or a picture differs from its reference.
 """
 import argparse
@@ -29,16 +29,14 @@ from pathlib import Path
 HERE = Path(__file__).resolve().parent
 REPLAY = HERE / "replay"
 FRAME_COUNT_AT = 68
-SCALE = "5/2" if sys.platform.startswith("linux") else "2"
 
 
 def player():
-    build = "build-" + SCALE.replace("/", "-")
-    make = ["make", "-C", str(REPLAY), f"EFB_SCALE={SCALE}", f"BUILD={build}"]
+    make = ["make", "-C", str(REPLAY)]
     if os.environ.get("VULKAN_SDK"):
         make.append(f"VULKAN_SDK={os.environ['VULKAN_SDK']}")
     subprocess.run(make, check=True, capture_output=True, text=True)
-    return REPLAY / build / "replay"
+    return REPLAY / "build" / "replay"
 
 
 def gpu_frames(log):
@@ -77,6 +75,7 @@ def compare(a, b):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("folder")
+    parser.add_argument("--scale", help="the picture's size against the Wii's, such as 2 or 5/2, as WII_RECOMP_SCALE takes it")
     parser.add_argument("--repeat", type=int, default=10, help="times to play each recording, the first left out of the timing")
     parser.add_argument("--reference", help="folder of pictures from an earlier run to compare with")
     parser.add_argument("--save-reference", help="folder to keep this run's pictures in")
@@ -85,6 +84,8 @@ def main():
     if not recordings:
         sys.exit(f"no .dff recordings in {args.folder}")
     program = player()
+    if args.scale:
+        os.environ["WII_RECOMP_SCALE"] = args.scale
     failed = False
     print(f"{'scene':<28} {'cpu ms':>7} {'wall ms':>7} {'gpu ms':>7}  costliest graphics steps")
     with tempfile.TemporaryDirectory() as temporary:
