@@ -274,7 +274,29 @@ static void test_gamecube(void) {
   CHECK_EQ(sent[0], DSP_MAIL_YIELD);
 }
 
+// Where we differ from Dolphin, as the real program does (measured on Mario Kart Wii and
+// Wii Fit Plus): a playing voice clears the depop value of every channel it isn't mixed
+// into, main, aux and Wii Remote, and keeps the last sample in those it is.
+static void test_unmixed_depop_cleared(void) {
+  start(0x4cc52064u);
+  wii_voice(NEWEST, 1000, 200, SRC_NEAREST);
+  put16(PB + W_MIXER_LO * 2, 1);                    // Main left only.
+  put16(PB + 45 * 2, 5);                            // dpop main right, left from an earlier use.
+  put16(PB + 49 * 2, 7);                            // dpop main surround.
+  put16(PB + wii_word(NEWEST, 113) * 2, 1);         // A remote channel asked for,
+  put16(PB + wii_word(NEWEST, 130) * 2, 0xfffd);    // with -3 left in its depop,
+  put16(PB + wii_word(NEWEST, 112) * 2, 0);         // but the voice isn't sent to the remotes.
+  run_list(newest_list, sizeof newest_list / 2);
+  CHECK_EQ((int16_t)rd16(PB + 41 * 2), 1000);       // Main left: the last sample.
+  CHECK_EQ(rd16(PB + 45 * 2), 0);
+  CHECK_EQ(rd16(PB + 49 * 2), 0);
+  CHECK_EQ(rd16(PB + wii_word(NEWEST, 130) * 2), 0);
+  CHECK_EQ(sample_at(OUTPUT), 0);                   // Right isn't mixed.
+  CHECK_EQ(sample_at(OUTPUT + 2), 1000);
+}
+
 int main(void) {
+  test_unmixed_depop_cleared();
   test_polyphase();
   test_linear();
   test_biquad_and_low_pass();

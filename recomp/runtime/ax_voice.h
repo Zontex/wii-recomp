@@ -167,31 +167,35 @@ static void VOICE(process_voice)(DspAccelerator *accelerator, PB_TYPE *pb, const
   if (pb->initial_time_delay.on) gap_hit("audio.ax_initial_time_delay", pb->initial_time_delay.on);
 
 #ifdef AX_WII
-  // The Wii Remote speakers' mix, at a sixth of the rate.
+  // The Wii Remote speakers' mix, at a sixth of the rate. As with the main channels, the
+  // real program clears the depop value of a remote channel the voice isn't mixed into,
+  // which Dolphin leaves: measured on Wii Fit Plus (4cc52064), where a voice not sent to
+  // the remotes still carried -3 from its last use, and the program wrote 0.
+  int16_t remote_samples[18];
+  uint16_t remote_count = count == 96 ? 18 : 6;  // Older programs go a millisecond at a time.
   if (pb->remote) {
     if (new_filter && pb->remote_iir.on) {
       if (pb->remote_iir.on == 2) ax_biquad(samples, count, &pb->remote_iir.biquad);
       else ax_low_pass(samples, count, &pb->remote_iir.lpf);
     }
-    uint16_t remote_count = count == 96 ? 18 : 6;  // Older programs go a millisecond at a time.
-    int16_t remote_samples[18];
     uint32_t position = ax_resample(ax_array_sample, samples, remote_samples, remote_count, pb->remote_src.last_samples,
                                     pb->remote_src.cur_addr_frac, 0x55555, SRC_POLYPHASE, coefficients);
     pb->remote_src.cur_addr_frac = (uint16_t)position;
-#define REMOTE(n, bus, field)                                                                                    \
-  if ((pb->remote_mixer_control >> (2 * n)) & 3)                                                                \
-    ax_mix_add(buffers->bus, remote_samples, remote_count, &pb->remote_mixer.field, &pb->remote_dpop.field,     \
-               ((pb->remote_mixer_control >> (2 * n)) & 2) != 0)
-    REMOTE(0, remote_main0, main0);
-    REMOTE(1, remote_aux0, aux0);
-    REMOTE(2, remote_main1, main1);
-    REMOTE(3, remote_aux1, aux1);
-    REMOTE(4, remote_main2, main2);
-    REMOTE(5, remote_aux2, aux2);
-    REMOTE(6, remote_main3, main3);
-    REMOTE(7, remote_aux3, aux3);
-#undef REMOTE
   }
+#define REMOTE(n, bus, field)                                                                                     \
+  if (pb->remote && (pb->remote_mixer_control >> (2 * n)) & 3)                                                   \
+    ax_mix_add(buffers->bus, remote_samples, remote_count, &pb->remote_mixer.field, &pb->remote_dpop.field,      \
+               ((pb->remote_mixer_control >> (2 * n)) & 2) != 0);                                                \
+  else pb->remote_dpop.field = 0
+  REMOTE(0, remote_main0, main0);
+  REMOTE(1, remote_aux0, aux0);
+  REMOTE(2, remote_main1, main1);
+  REMOTE(3, remote_aux1, aux1);
+  REMOTE(4, remote_main2, main2);
+  REMOTE(5, remote_aux2, aux2);
+  REMOTE(6, remote_main3, main3);
+  REMOTE(7, remote_aux3, aux3);
+#undef REMOTE
 #endif
 }
 
