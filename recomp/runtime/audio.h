@@ -15,9 +15,6 @@ int audio_dma_read(uint32_t address, int bytes, uint32_t *value);
 int audio_dma_write(uint32_t address, uint32_t value, int bytes);
 void audio_dma_reset(void);
 
-// ax.c: runs one frame's command list. Its output goes to memory, for the DMA to play.
-void ax_run_list(uint32_t list);
-
 // audio_output_*.c: one per platform. Called once, from audio_start. The output
 // thread asks for samples through audio_pull, which never waits.
 int audio_output_open(void);

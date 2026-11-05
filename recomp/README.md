@@ -117,7 +117,8 @@ Each frame of the recording gives one PNG, of its last copy to the screen. A fra
   - `hardware.c`: hardware registers.
   - `input.c`: keyboard, mouse and control pipe input for the simulated Wii Remote and Balance Board.
   - `bluetooth.c`, `bluetooth_channels.c`, `wii_remote.c`: the virtual Bluetooth chip and each slot's device. `remote_link.c` links real devices into the slots, through `remote_link_linux.c` or `remote_link_mac.c`, or `remote_link_loopback.c` for testing.
-  - `audio.c`, `ax.c`, `audio_output_mac.c`: sound. `ax.c` does the audio processor's mixing from the game's own voices and command lists, `audio.c` paces it and hands samples to the output thread, and the output file is the only per-platform part.
+  - `dsp.c`, `ax.c`, `ax_voice.h`, `zelda.c`, `dsp_lle*.c`, `dsp_accelerator.c`, `dsp_record.c`: the audio processor. `dsp.c` has its mailboxes and identifies the game's program by a checksum; `ax.c` (GameCube and Wii AX) and `zelda.c` are C versions of the known programs, and the interpreter in `dsp_lle*.c` runs any other. `dsp_record.c` records the interpreter's work for `tools/sound_bench.py`, which checks the C versions against it.
+  - `audio.c`, `audio_output_mac.c`: sound. The audio DMA reads what the program wrote to memory, `audio.c` hands it to the output thread, and the output file is the only per-platform part.
   - `ios.c`, `devices.c`, `es.c`, `files.c`, `fs.c`: stand-ins for the Wii's system services and storage.
   - `gx_fifo.c`, `gx_vertex.c`, `gx_transform.c`, `gx_light.c`, `gx_texture.c`, `gx_tev.c`, `gx_shader.c`, `gx_copy.c`, `gx_draw.c`, `window.c`: graphics, from command stream to window. The vertex and color stages become small shaders written for each setup the game uses, cached by key in `gx_shader.c`.
   - `dff.c`: reads Dolphin's FIFO recordings, for `tools/replay`.

@@ -178,6 +178,14 @@ void dsp_lle_observe_memory(DspMemoryObserver on_read, DspMemoryObserver on_writ
   observe_write = on_write;
 }
 
+static void (*observe_mail)(uint32_t mail);
+static void (*observe_interrupt)(void);
+
+void dsp_lle_observe_mail(void (*on_mail)(uint32_t mail), void (*on_interrupt)(void)) {
+  observe_mail = on_mail;
+  observe_interrupt = on_interrupt;
+}
+
 static uint8_t accelerator_read(DspAccelerator *a, uint32_t address) {
   uint8_t value = dsp_accelerator_wii_read(a, address);
   if (observe_read) observe_read(dsp_accelerator_wii_physical(address, 0), &value, 1);
@@ -332,11 +340,17 @@ static void write_ifx(uint16_t address, uint16_t value) {
   uint16_t low = address & 0xff;
   switch (low) {
   case DSP_DIRQ:
-    if (value & 1) dsp_interrupt();
+    if (value & 1) {
+      if (observe_interrupt) observe_interrupt();
+      dsp_interrupt();
+    }
     else if (value) gap_hit("limit.dsp_unknown_register", (uint32_t)low << 16 | value);  // 0 clears; libasnd writes it.
     break;
   case DSP_DMBH: mailbox_write_high(MAILBOX_DSP, value); break;
-  case DSP_DMBL: mailbox_write_low(MAILBOX_DSP, value); break;
+  case DSP_DMBL:
+    mailbox_write_low(MAILBOX_DSP, value);
+    if (observe_mail) observe_mail(dsp_lle.mailbox[MAILBOX_DSP]);  // As the game reads it, full.
+    break;
   case DSP_CMBH: mailbox_write_high(MAILBOX_CPU, value); break;
   case DSP_CMBL: mailbox_write_low(MAILBOX_CPU, value); break;
   case DSP_DSBL:  // Starts the transfer.
@@ -510,6 +524,20 @@ void dsp_lle_boot(uint32_t iram_address, uint32_t iram_bytes, uint16_t iram_dsp_
 }
 
 uint32_t dsp_lle_iram_crc(void) { return dsp_lle.iram_crc; }
+
+// The whole state is the one structure, but the accelerator's hooks are this program's own
+// addresses, so they're put back rather than taken from the copy.
+void dsp_lle_restore(const DspLle *state) {
+  dsp_lle = *state;
+  DspAccelerator *a = &dsp_lle.accelerator;
+  a->read_memory = accelerator_read;
+  a->write_memory = accelerator_write;
+  a->raw_read_end = raw_read_end;
+  a->raw_write_end = raw_write_end;
+  a->sample_read_end = sample_read_end;
+  a->user = 0;
+  dsp_lle_tables_start();
+}
 
 void dsp_lle_step(void) {
   dsp_lle_check_exceptions();

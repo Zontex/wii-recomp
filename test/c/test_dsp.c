@@ -25,6 +25,15 @@ void dsp_lle_mailbox_write_high(int cpu, uint16_t v) {}
 void dsp_lle_mailbox_write_low(int cpu, uint16_t v) {}
 uint16_t dsp_lle_control_write(uint16_t v) { return 0; }
 uint16_t dsp_lle_control_read(void) { return 0; }
+uint32_t dsp_lle_mailbox_peek(int cpu) { return 0; }
+// And the sound recorder, which only records the interpreter.
+int dsp_recording;
+void dsp_record_start(void) {}
+void dsp_record_update(uint64_t now) {}
+void dsp_record_run(uint32_t cycles) {}
+void dsp_record_cpu_write(int high, uint16_t value) {}
+void dsp_record_read_low(int cpu, uint32_t mail) {}
+void dsp_record_control(uint16_t value) {}
 
 // A stand-in for the AX program, which only remembers what it was told.
 static int ax_starts;
@@ -35,13 +44,13 @@ static void fake_mail(uint32_t mail) {
   if (mail == TASK_NEW_PROGRAM) dsp_expect_new_program();
 }
 static void fake_update(void) {}
-const DspProgram ax_wii_program = {"fake AX", fake_start, fake_mail, fake_update};
+const DspProgram ax_program = {"fake AX", fake_start, fake_mail, fake_update};
 static int zelda_starts;
 static void fake_zelda_start(void) { zelda_starts++; }
 const DspProgram zelda_program = {"fake Zelda", fake_zelda_start, fake_mail, fake_update};
 
 enum { MAILBOX = 0xcc005000u, FROM = 0xcc005004u };
-#define AX_CRC 0x2ea36ce6u
+#define AX_CRC 0x347112bau
 #define CARD_CRC 0x65d6cc6fu
 #define CODE_BYTES 16u
 

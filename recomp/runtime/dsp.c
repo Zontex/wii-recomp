@@ -12,6 +12,7 @@
 #include "cpu.h"
 #include "dsp.h"
 #include "dsp_lle.h"
+#include "dsp_record.h"
 #include "gaps.h"
 #include "zelda.h"
 
@@ -232,8 +233,7 @@ static const DspProgram card_program = {"memory card", card_start, card_mail, ca
   static void variable##_start(void) { gap_hit(row, current.crc); }       \
   static const DspProgram variable = {title, variable##_start, ignore_mail, nothing};
 static const char *missing_row(const DspProgram *program);
-MISSING(ax_gamecube_missing, "GameCube AX", "audio.ax_gamecube_metroid_prime_trilogy")
-MISSING(ax_wii_old_missing, "AXWii, older commands", "audio.axwii_older_command_format_old")
+MISSING(ax_wii_layout_missing, "AXWii, unknown block layout", "audio.axwii_unknown_block_layout")
 MISSING(gba_missing, "Game Boy Advance link", "audio.card_gba")
 MISSING(homebrew_missing, "homebrew mixer", "audio.asnd_aesnd_homebrew")
 MISSING(unknown_missing, "unknown", "audio.unknown_program")
@@ -242,15 +242,16 @@ MISSING(unknown_missing, "unknown", "audio.unknown_program")
 static const struct { uint32_t crc; const DspProgram *program; } known[] = {
   {0x65d6cc6fu, &card_program},
   {0xdd7e72d5u, &gba_missing},
-  {0x3ad3b7acu, &ax_gamecube_missing}, {0x3daf59b9u, &ax_gamecube_missing}, {0x4e8a8b21u, &ax_gamecube_missing},
-  {0x07f88145u, &ax_gamecube_missing}, {0xe2136399u, &ax_gamecube_missing}, {0x3389a79eu, &ax_gamecube_missing},
+  {0x3ad3b7acu, &ax_program}, {0x3daf59b9u, &ax_program}, {0x4e8a8b21u, &ax_program},
+  {0x07f88145u, &ax_program}, {0xe2136399u, &ax_program}, {0x3389a79eu, &ax_program},
   {0x86840740u, &zelda_program}, {0x6ca33a6du, &zelda_program}, {0xd643001fu, &zelda_program}, {0x6ba3b3eau, &zelda_program},
   {0x24b22038u, &zelda_program}, {0x2fcdf1ecu, &zelda_program}, {0xdf059f68u, &zelda_program}, {0x4be6a5cbu, &zelda_program},
   {0x267fd05au, &zelda_program}, {0x42f64ac4u, &zelda_program}, {0x56d36052u, &zelda_program}, {0x6c3f6f94u, &zelda_program},
   {0xb7eb9a9cu, &zelda_program}, {0xeaeb38ccu, &zelda_program},
-  {0x2ea36ce6u, &ax_wii_program}, {0x5ef56da3u, &ax_wii_program}, {0x347112bau, &ax_wii_program},
-  {0xadbc06bdu, &ax_wii_program}, {0x4cc52064u, &ax_wii_program}, {0xd9c4bf34u, &ax_wii_program},
-  {0xfa450138u, &ax_wii_old_missing}, {0x7699af32u, &ax_wii_old_missing},
+  // Two Wii versions whose block layout neither Dolphin nor we know: the interpreter runs them.
+  {0x2ea36ce6u, &ax_wii_layout_missing}, {0x5ef56da3u, &ax_wii_layout_missing}, {0x347112bau, &ax_program},
+  {0xadbc06bdu, &ax_program}, {0x4cc52064u, &ax_program}, {0xd9c4bf34u, &ax_program},
+  {0xfa450138u, &ax_program}, {0x7699af32u, &ax_program},
   {0x8d69a19bu, &homebrew_missing}, {0xcc2fd441u, &homebrew_missing}, {0xa81582e2u, &homebrew_missing},
   {0xdbbeeb61u, &homebrew_missing}, {0xbad876efu, &homebrew_missing}, {0xfa9c576fu, &homebrew_missing},
   {0x614dd145u, &homebrew_missing}, {0x5dbf8bf1u, &homebrew_missing}, {0x373a950eu, &homebrew_missing},
@@ -270,12 +271,15 @@ static const DspProgram *program_for(uint32_t crc) {
 }
 
 static const char *missing_row(const DspProgram *program) {
-  if (program == &ax_gamecube_missing) return "audio.ax_gamecube_metroid_prime_trilogy";
-  if (program == &ax_wii_old_missing) return "audio.axwii_older_command_format_old";
+  if (program == &ax_wii_layout_missing) return "audio.axwii_unknown_block_layout";
   if (program == &gba_missing) return "audio.card_gba";
   if (program == &homebrew_missing) return "audio.asnd_aesnd_homebrew";
   if (program == &unknown_missing) return "audio.unknown_program";
   return 0;
+}
+
+const char *dsp_c_version(void) {
+  return current.program && !missing_row(current.program) ? current.program->name : 0;
 }
 
 static int interpreter_ready(void) {
@@ -311,6 +315,7 @@ void dsp_start(void) {
       fprintf(stderr, "audio: the interpreter runs every program, from the boot ROM\n");
       interpreting = 1;
       interpreted_until = time_base();
+      dsp_record_start();
       return;
     }
   } else if (engine) {
@@ -319,6 +324,7 @@ void dsp_start(void) {
   dsp_set_program(PROGRAM_ROM);
   control = DSP_CONTROL_HALT | DSP_CONTROL_INIT;
   halted = 1;
+  dsp_record_start();  // Waits for the interpreter, for a program that has no C version.
 }
 
 // The interpreter keeps time with the game: its share of the cycles since it last ran.
@@ -331,8 +337,12 @@ static void interpret(uint64_t now, uint32_t most) {
   uint32_t cycles = cycles_owed < most ? cycles_owed : most;
   if (!cycles) return;
   cycles_owed -= cycles;
-  if (!dsp_lle_halted()) dsp_lle_run((int)cycles);
+  if (dsp_lle_halted()) return;
+  dsp_lle_run((int)cycles);
+  if (dsp_recording) dsp_record_run(cycles);
 }
+
+int dsp_interpreting(void) { return interpreting; }
 
 uint32_t dsp_control_read(void) {
   if (interpreting) return dsp_lle_control_read();
@@ -343,7 +353,11 @@ uint32_t dsp_control_read(void) {
 // Reset starts the boot ROM again. Clearing the init bit runs the start-up program, and
 // the init code bit stays set a moment after.
 uint32_t dsp_control_write(uint32_t value) {
-  if (interpreting) return dsp_lle_control_write((uint16_t)value);
+  if (interpreting) {
+    uint32_t now = dsp_lle_control_write((uint16_t)value);
+    if (dsp_recording) dsp_record_control((uint16_t)value);  // After what it caused, such as a DMA.
+    return now;
+  }
   uint32_t next = value & DSP_CONTROL_OWN;
   halted = (next & DSP_CONTROL_HALT) != 0;
   if (next & DSP_CONTROL_RESET) {
@@ -364,6 +378,7 @@ int dsp_read(uint32_t address, int bytes, uint32_t *value) {
   if (interpreting) {
     int cpu = address < MAILBOX_FROM_DSP, high = (address & 2) == 0;
     if (high) interpret(time_base(), MAIL_SLICE);
+    if (dsp_recording && (bytes == 4 || !high)) dsp_record_read_low(cpu, dsp_lle_mailbox_peek(cpu));
     if (bytes == 4) *value = (uint32_t)dsp_lle_mailbox_read_high(cpu) << 16 | dsp_lle_mailbox_read_low(cpu);
     else *value = high ? dsp_lle_mailbox_read_high(cpu) : dsp_lle_mailbox_read_low(cpu);
     return 1;
@@ -388,6 +403,10 @@ int dsp_write(uint32_t address, uint32_t value, int bytes) {
     return 1;
   }
   if (interpreting) {
+    if (dsp_recording) {
+      if (bytes == 4 || address == MAILBOX_TO_DSP) dsp_record_cpu_write(1, (uint16_t)(bytes == 4 ? value >> 16 : value));
+      if (bytes == 4 || address != MAILBOX_TO_DSP) dsp_record_cpu_write(0, (uint16_t)value);
+    }
     if (bytes == 4) {
       dsp_lle_mailbox_write_high(1, (uint16_t)(value >> 16));
       dsp_lle_mailbox_write_low(1, (uint16_t)value);
@@ -412,6 +431,7 @@ int dsp_write(uint32_t address, uint32_t value, int bytes) {
 }
 
 void dsp_update(uint64_t now) {
+  dsp_record_update(now);
   for (uint32_t i = 0; i < TIMERS; i++) {
     if (timers[i] && now >= timers[i]) {
       timers[i] = 0;

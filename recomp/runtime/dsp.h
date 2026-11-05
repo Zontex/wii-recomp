@@ -63,8 +63,13 @@ void dsp_expect_new_program(void);               // After TASK_NEW_PROGRAM.
 int dsp_needs_resume_mail(void);                 // Once, for a program swapped back in.
 uint32_t dsp_hash(const uint8_t *data, uint32_t length);  // Dolphin's HashEctor.
 
+// For sound recordings: the C version now behind the mailbox (0 if none), and whether the
+// interpreter has the mailboxes.
+const char *dsp_c_version(void);
+int dsp_interpreting(void);
+
 // hardware.c: sets the processor's interrupt flag.
 void dsp_interrupt(void);
 
 // Programs with a C version.
-extern const DspProgram ax_wii_program;
+extern const DspProgram ax_program;  // GameCube and Wii.
