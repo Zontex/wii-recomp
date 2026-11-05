@@ -25,9 +25,21 @@ python3 recomp/tools/prepare_console.py wii/nand console --menu recomp/build-men
 cp game.wrd console/drive/ && recomp/build/wii-recomp --console console
 ```
 
-Keys: arrows for the D-pad, Enter for A, Backspace for B, `1`, `2`, `=` for plus, `-` for minus, `H` for Home. The arrows also tilt the Classic Controller's left stick and the Nunchuk's stick, X, C, Z and V are the Classic Controller's L, R, ZL and ZR (in Mario Kart Wii, L uses an item and R drifts), and C and Z are the Nunchuk's C and Z. Q shakes the remote. F2 plugs the next attachment into the remote: none, a Nunchuk, a Classic Controller. The remote tells the game, as when one is plugged in by hand. The mouse is the pointer. Space steps on or off the board, and W, A, S, D lean. A control pipe takes the same buttons by name, `l`, `r`, `zl`, `zr`, `c` and `z` among them, and `stick x y`.
+A game built with `emit.py --virtual-bluetooth` reads the simulated Wii Remotes and Balance Board through its own Bluetooth code. Each remote has a Nunchuk plugged in unless the settings say otherwise. A game that sees a Classic Controller, such as Wii Fit Plus, may turn its pointer off and wait for Classic Controller buttons, so plug one in only for games played with it.
 
-A game built with `emit.py --virtual-bluetooth` reads the simulated Wii Remote and Balance Board through its own Bluetooth code. That remote has a Classic Controller plugged in; set `WII_RECOMP_ATTACHMENT=nunchuk` for a Nunchuk, or `none` to unplug it, as a game such as Wii Fit Plus expects, since with one plugged in it turns its pointer off and its Home Menu waits for Classic Controller buttons.
+### Controller settings
+
+The console keeps its controller settings in `controllers.ini`, in the console folder with `--console` and beside the program otherwise, or wherever `WII_RECOMP_CONTROLLERS` says. The first run writes it with every setting at its default, after a `#`. To change one, take the `#` away and edit it. A line with a mistake stops the console and names the line. It has these sections:
+
+- **`[remotes]`**: `mode`, as `WII_RECOMP_REMOTES` below. The environment variable wins when set.
+- **`[player1]` to `[player4]`**:
+  - `source`: what drives the player. It's a list of `keyboard`, `mouse`, `pad` (the next controller to connect), `pad:<serial number>` or `none`. Only one player can have the keyboard, or the mouse. Players with a keyboard or mouse are there from the start; the others join when their controller does.
+  - `attachment`: `none`, `nunchuk` or `classic`. `WII_RECOMP_ATTACHMENT` wins for player 1.
+  - `sideways`, `pointer`, `gyro_speed` and `recenter`: how a controller stands in for the remote.
+- **`[board]`**: `source = keyboard` or `none`, for the simulated Balance Board in games made for one.
+- **`[keys]`**: each keyboard control and up to four keys for it. The defaults are below.
+
+With no changes, player 1 is the keyboard and mouse, and the remote has a Nunchuk. Default keys: arrows for the D-pad, Enter for A, Backspace for B, `1`, `2`, `=` for plus, `-` for minus, `H` for Home. The arrows also tilt the Classic Controller's left stick and the Nunchuk's stick, X, C, Z and V are the Classic Controller's L, R, ZL and ZR (in Mario Kart Wii, L uses an item and R drifts), and C and Z are the Nunchuk's C and Z. Q shakes the remote. F2 plugs the next attachment into the remote: none, a Nunchuk, a Classic Controller. The remote tells the game, as when one is plugged in by hand. The mouse is the pointer. Space steps on or off the board, and W, A, S, D lean. A control pipe takes the same buttons by name, `l`, `r`, `zl`, `zr`, `c` and `z` among them, and `stick x y`.
 
 ### Real Wii Remotes and the Balance Board
 
@@ -98,7 +110,7 @@ Each frame of the recording gives one PNG, of its last copy to the screen. A fra
   - `guest_memory.h`, `guest_memory.c`: the Wii's memory, one window at a fixed host address. A load or store is a mask, one compare that sends the hardware block to `hardware.c`, and the access, and an access through the stack pointer skips the compare. Where a Wii has no memory, the first touch opens a zero page and is named in `gaps.txt` as `cpu.dsi_isi`. A real crash prints the faulting address and function first.
   - `threads.c`, `interrupts.c`: the game's threads, interrupts and clocks.
   - `hardware.c`: hardware registers.
-  - `input.c`: the four players' controls and the board's weight, set by the keyboard, mouse and control pipe. `control_pipe.c` reads the pipe, and `input_direct.c` stands in for the game's own remote functions in builds without `--virtual-bluetooth`.
+  - `input.c`: the four players' controls and the board's weight, set by the keyboard, mouse and control pipe. `control_pipe.c` reads the pipe, and `input_direct.c` stands in for the game's own remote functions in builds without `--virtual-bluetooth`. `controllers.c` reads `controllers.ini` with `settings_file.c`, a small INI reader.
   - `bluetooth.c`, `bluetooth_channels.c`, `wii_remote.c`: the virtual Bluetooth chip and each slot's device. `remote_link.c` links real devices into the slots, through `remote_link_linux.c` or `remote_link_mac.c`, or `remote_link_loopback.c` for testing.
   - `audio.c`, `ax.c`, `audio_output_mac.c`: sound. `ax.c` does the audio processor's mixing from the game's own voices and command lists, `audio.c` paces it and hands samples to the output thread, and the output file is the only per-platform part.
   - `ios.c`, `devices.c`, `es.c`, `files.c`, `fs.c`: stand-ins for the Wii's system services and storage.

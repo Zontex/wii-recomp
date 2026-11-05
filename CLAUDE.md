@@ -29,7 +29,7 @@ python3 -m ruff check                    # Python lint, bug rules only (ruff.tom
 - Output is `wii-recomp` (same for every game) + `title.dylib`/`title.so` (the game). Headers in `INTERFACE_HEADERS` (`cpu.h guest_memory.h title.h modules.h`) are hashed; a title built against different versions is refused, so rebuild both after touching them.
 - Builds compile with `-w`; warnings won't surface. `-fsigned-char -ffp-contract=off` keep Arm matching the Mac — don't drop them.
 - Tests use made-up data. C tests need clang, graphics replay tests need `VULKAN_SDK`, game-dependent tests skip without `extracted/`.
-- Wii Fit Plus needs `WII_RECOMP_ATTACHMENT=none` (otherwise the simulated Classic Controller hides the pointer).
+- Controllers are set in `controllers.ini` beside the console (written on first run, every default commented). Remotes get a Nunchuk by default; `WII_RECOMP_ATTACHMENT=classic` puts a Classic Controller in, which makes Wii Fit Plus hide its pointer.
 - On Linux, rerun `sudo recomp/tools/remotes_setup.sh` after every build. Delete `shader-cache/` beside the binary to reset shaders.
 
 ## Rules (from ROADMAP.md)

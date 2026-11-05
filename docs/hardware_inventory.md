@@ -777,7 +777,7 @@ The AX work is rewritten in C. There's no DSP interpreter, so each program needs
 | `ctl.kpadread_replacement` | `KPADRead` replacement | partial | `runtime/input_direct.c` | Player n's remote on channel n, the board on channel 3 in games with one. Fixed motion. An older SDK layout reports no samples (`system_functions.json`). |
 | `ctl.wpadprobe_replacement` | `WPADProbe` replacement | done | `runtime/input_direct.c` | A channel is connected while its player is. |
 | `ctl.balance_board` | Balance Board | done | `runtime/input.c`, `runtime/input_direct.c` | Through signature-matched functions. Only for games with the board library. |
-| `ctl.host_input` | Host input | partial | `runtime/input.c`, `runtime/control_pipe.c`, `runtime/window.c` | Four players' controls. The keyboard and mouse drive player 1, with the arrows on the left stick; the control pipe drives any player (`p2 press a`). No host controllers yet. |
+| `ctl.host_input` | Host input | partial | `runtime/input.c`, `runtime/controllers.c`, `runtime/control_pipe.c`, `runtime/window.c` | Four players' controls, set up from `controllers.ini`. The keyboard (with keys from the settings) and mouse drive one player each; the control pipe drives any player (`p2 press a`). No host controllers yet. |
 
 ### Bluetooth stack
 

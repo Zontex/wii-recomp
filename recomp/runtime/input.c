@@ -34,9 +34,9 @@ static Player players[PLAYERS] = {
   {.accel = AT_REST, .nunchuk_accel = AT_REST, .battery = 1},
 };
 static struct {
-  int standing;
+  int enabled, standing;
   float kilograms, lean_x, lean_y;
-} board = {.kilograms = 60};
+} board = {.enabled = 1, .kilograms = 60};
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
 static int valid(int player) { return player >= 0 && player < PLAYERS; }
@@ -110,21 +110,9 @@ int input_attachment_named(const char *name, Attachment *out) {
   return 0;
 }
 
-// Until something plugs one in, a remote has what WII_RECOMP_ATTACHMENT names: a Classic
-// Controller unless it says otherwise. Called with the lock held.
-static Attachment attachment_of(Player *p) {
-  static int chosen = -1;
-  if (chosen < 0) {
-    const char *name = getenv("WII_RECOMP_ATTACHMENT");
-    Attachment named = ATTACHMENT_CLASSIC;
-    if (name && !input_attachment_named(name, &named)) {
-      fprintf(stderr, "stop: WII_RECOMP_ATTACHMENT is none, nunchuk or classic, not %s\n", name);
-      exit(1);
-    }
-    chosen = (int)named;
-  }
-  return p->attachment_chosen ? p->attachment : (Attachment)chosen;
-}
+// Until the settings (controllers.c) or the player plug one in, a remote has a Classic
+// Controller. Called with the lock held.
+static Attachment attachment_of(Player *p) { return p->attachment_chosen ? p->attachment : ATTACHMENT_CLASSIC; }
 
 void input_snapshot(int player, PlayerState *out) {
   memset(out, 0, sizeof *out);
@@ -253,6 +241,19 @@ uint32_t input_buttons(int player) {
   uint32_t buttons = current_buttons(&players[player]);
   pthread_mutex_unlock(&lock);
   return buttons;
+}
+
+void input_board_enable(int enabled) {
+  pthread_mutex_lock(&lock);
+  board.enabled = enabled;
+  pthread_mutex_unlock(&lock);
+}
+
+int input_board_enabled(void) {
+  pthread_mutex_lock(&lock);
+  int enabled = board.enabled;
+  pthread_mutex_unlock(&lock);
+  return enabled;
 }
 
 void input_board(int standing, float kilograms, float lean_x, float lean_y) {

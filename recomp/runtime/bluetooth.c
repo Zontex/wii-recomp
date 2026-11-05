@@ -77,7 +77,7 @@ static const char *name_of(int device) { return device == BLUETOOTH_BOARD ? boar
 // the simulated board likewise, in games built to use one: the ones with the board's
 // calibration flag. With WII_RECOMP_REMOTES=real or loopback only linked devices are there.
 static int simulated_here(int device) {
-  int mode = link_mode(), wanted = device == BLUETOOTH_BOARD ? title->calibration_flag != 0 : input_connected(device);
+  int mode = link_mode(), wanted = device == BLUETOOTH_BOARD ? title->calibration_flag != 0 && input_board_enabled() : input_connected(device);
   if (mode == LINK_SIMULATED) return wanted;
   return mode == LINK_AUTO && wanted && !link_linked(device);
 }

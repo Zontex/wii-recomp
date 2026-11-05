@@ -12,6 +12,7 @@
 
 #include "audio.h"
 #include "console.h"
+#include "controllers.h"
 #include "input.h"
 #include "cpu.h"
 #include "dispatch.h"
@@ -106,7 +107,8 @@ static void use_folders_beside(const char *program) {
   const char *folder = dirname(full);  // Linux's changes `full`, so it's called once.
   const char *names[][2] = {{"WII_RECOMP_SAVES", "saves"}, {"WII_RECOMP_SHADER_CACHE", "shader-cache"},
                             {"WII_RECOMP_TITLE_DATA", "title-data"}, {"WII_RECOMP_CACHE", "native-cache"},
-                            {"WII_RECOMP_GAPS", "gaps.txt"}, {"WII_RECOMP_REMOTE_SLOTS", "remotes.txt"}};
+                            {"WII_RECOMP_GAPS", "gaps.txt"}, {"WII_RECOMP_REMOTE_SLOTS", "remotes.txt"},
+                            {"WII_RECOMP_CONTROLLERS", "controllers.ini"}};
   for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
     snprintf(path, sizeof path, "%s/%s", folder, names[i][1]);
     setenv(names[i][0], path, 0);
@@ -166,6 +168,7 @@ int main(int count, char **arguments) {
   pthread_attr_t attributes;
   pthread_attr_init(&attributes);
   pthread_attr_setstacksize(&attributes, STACK_BYTES);
+  controllers_start();
   window_create();
   if (getenv("WII_RECOMP_CONTROL")) input_start_control_pipe(getenv("WII_RECOMP_CONTROL"));
   pthread_t thread;

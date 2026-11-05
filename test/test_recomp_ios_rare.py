@@ -8,7 +8,7 @@ from pathlib import Path
 
 HERE = Path(__file__).parent
 RUNTIME = HERE.parent / "recomp/runtime"
-FLAGS = ["-w", "-O1", "-fwrapv", f"-I{RUNTIME}", f"-I{HERE}", "-lm"]
+FLAGS = ["-w", "-O1", "-fwrapv", f"-I{RUNTIME}", f"-I{HERE}", "-I/usr/local/include", "-lm"]
 
 
 @unittest.skipUnless(shutil.which("clang"), "needs clang")
@@ -58,6 +58,11 @@ class RareRequests(unittest.TestCase):
 
     def test_players_controls_and_commands(self):
         self.build_and_run([HERE / "c/test_players.c", RUNTIME / "input.c"])
+
+    def test_controller_settings(self):
+        sources = [HERE / "c/test_controllers.c"] + [RUNTIME / name for name in ("controllers.c", "settings_file.c", "input.c")]
+        result = self.build_and_run(sources, self.folder)
+        self.assertIn("controllers: wrote", result.stderr)
 
     @unittest.skipUnless(sys.platform == "linux", "Linux's Bluetooth backend")
     def test_linux_remote_sockets(self):

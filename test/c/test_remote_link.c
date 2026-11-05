@@ -21,6 +21,7 @@ void input_snapshot(int player, PlayerState *out) { memset(out, 0, sizeof *out);
 Attachment input_attachment(int player) { return ATTACHMENT_CLASSIC; }
 const char *input_attachment_name(Attachment attachment) { return "classic"; }
 float input_battery_level(int player) { return 1; }
+int input_board_enabled(void) { return 1; }
 void input_set_outputs(int player, int rumble, uint8_t lights) {}
 void attachment_plug(int device, Attachment kind) {}
 void attachment_read(int device, uint32_t address, uint8_t *out, uint32_t bytes) { memset(out, 0, bytes); }

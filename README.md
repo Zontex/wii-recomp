@@ -100,7 +100,7 @@ python3 recomp/tools/add_game.py "path/to/game.rvz"
 recomp/build/wii-recomp games/RFPE01.wrd
 ```
 
-`add_game.py` extracts the disc, translates all of its code, builds the console if it isn't built yet, compiles the game and packs it as `games/<game ID>.wrd`. It also takes an extracted disc folder. The game's own Wii Remote code runs, against a simulated remote with a Classic Controller plugged in; Wii Fit Plus hides its pointer when it sees one, so play it with `WII_RECOMP_ATTACHMENT=none`. On a Raspberry Pi 5, Wii Fit Plus goes from an extracted disc to a playable image in under a minute and a half, where compiling it all for speed takes over seven minutes.
+`add_game.py` extracts the disc, translates all of its code, builds the console if it isn't built yet, compiles the game and packs it as `games/<game ID>.wrd`. It also takes an extracted disc folder. The game's own Wii Remote code runs, against a simulated remote with a Nunchuk plugged in, which every game that uses the pointer accepts. F2 swaps it for a Classic Controller, or nothing, while playing, and `controllers.ini` beside the console sets each player's controls. On a Raspberry Pi 5, Wii Fit Plus goes from an extracted disc to a playable image in under a minute and a half, where compiling it all for speed takes over seven minutes.
 
 The first build compiles everything quickly, and the game counts how often each part of it runs while you play. Run the same command again, or `add_game.py RFPE01` with the game's ID, and the parts that did the work are compiled for speed. Only those files are compiled again, and the image's native code is swapped without copying the disc. Counts from every run add up, so the build keeps up with what you play. Each game builds in `recomp/build-<game ID>/`, and any code that had to run on the interpreter is translated by the next build.
 
@@ -148,7 +148,7 @@ recomp/build/wii-recomp --console console
 
 A **`.wrd` disc image** is a game prepared for the console: the disc's files, unencrypted, plus the game's translated code for each computer it was built for (`darwin-x86_64` on an Intel Mac, `linux-aarch64` on a Pi). The console reads it like a disc in its drive. It holds the game, so it's yours alone: don't share it.
 
-The menu shows the game's banner in the Disc Channel, and Start runs it. The simulated Wii Remote has a Classic Controller plugged in, and a game that sees one may hide its pointer. Wii Fit Plus is one, so start the console with `WII_RECOMP_ATTACHMENT=none` for it. The console stays a single program: when you start a game, it restarts itself with the game's code, as a Wii does.
+The menu shows the game's banner in the Disc Channel, and Start runs it. The simulated Wii Remote has a Nunchuk plugged in. A game that sees a Classic Controller may hide its pointer, so plug one in (F2) only for games played with it. The console stays a single program: when you start a game, it restarts itself with the game's code, as a Wii does.
 
 ### What doesn't work yet
 

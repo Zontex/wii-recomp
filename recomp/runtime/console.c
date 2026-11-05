@@ -69,6 +69,7 @@ void console_start(const char *program, const char *folder, int boot_disc, Boot 
   set_default("WII_RECOMP_TITLE_DATA", "cache/titles");
   set_default("WII_RECOMP_GAPS", "cache/gaps.txt");
   set_default("WII_RECOMP_REMOTE_SLOTS", "remotes.txt");
+  set_default("WII_RECOMP_CONTROLLERS", "controllers.ini");
   char path[PATH_MAX * 2];
   snprintf(path, sizeof path, "%s/cache", console_folder);
   mkdir(path, 0755);

@@ -70,7 +70,7 @@ static void fill_board(uint32_t out) {
 
 // Only a game built for the Balance Board has this flag. Others scan every channel
 // and shouldn't find a device they know nothing about.
-static int has_board(void) { return title->calibration_flag != 0; }
+static int has_board(void) { return title->calibration_flag != 0 && input_board_enabled(); }
 static int is_board(int channel) { return channel == CHANNEL_BOARD && has_board(); }
 static int is_connected(int channel) {
   return channel >= 0 && channel < CHANNELS && (is_board(channel) || input_connected(channel));

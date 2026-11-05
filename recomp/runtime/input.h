@@ -69,6 +69,9 @@ PlayerOutputs input_outputs(int player);
 void input_battery(int player, float level);
 float input_battery_level(int player);
 
+// Whether the simulated board is there, in games made for one. It is unless settings say not.
+void input_board_enable(int enabled);
+int input_board_enabled(void);
 void input_board(int standing, float kilograms, float lean_x, float lean_y);
 void input_board_nudge(float lean_x, float lean_y);
 void input_board_toggle(void);
