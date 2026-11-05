@@ -23,7 +23,7 @@ python3 -m unittest discover test        # unittest, not pytest
 python3 -m ruff check                    # Python lint, bug rules only (ruff.toml); no C linter
 ```
 
-- Two build tiers with `emit.py --profile`: `part*.c` compile at `-O2`, `cold*.c` at `-O0` (~5x faster to compile) and count their runs via `POLL_COUNTED`. The console saves counts to `<title data>/<title ID>/profile.txt` (`title-data/` beside the console, `cache/titles/` in a console folder), with `discovered.txt` beside it; rerunning `add_game.py` promotes what ran. Nothing in the quick tier should matter for frame rate, so check a walk before changing `HOT_SHARE`.
+- Two build tiers with `emit.py --profile`: `part*.c` compile at `-O2`, `cold*.c` at `-O0` (~5x faster to compile) and count their runs via `POLL_COUNTED`. The console saves counts to `<title data>/<title ID>/profile.txt` (`title-data/` beside the console, `cache/titles/` in a console folder), with `discovered.txt` and `shaders.bin` (shader recipes, `gx_recipes.c`, packed into the `.wrd`) beside it; rerunning `add_game.py` promotes what ran. Nothing in the quick tier should matter for frame rate, so check a walk before changing `HOT_SHARE`.
 - No CMake/top-level Makefile: `build_file.py` generates the ninja file. Pi vs Mac flags (cortex-a76, `EFB_SCALE=5/2`, Vulkan-only on Pi) all live there.
 - Output is `wii-recomp` (same for every game) + `title.dylib`/`title.so` (the game). Headers in `INTERFACE_HEADERS` (`cpu.h guest_memory.h title.h modules.h`) are hashed; a title built against different versions is refused, so rebuild both after touching them.
 - Builds compile with `-w`; warnings won't surface. `-fsigned-char -ffp-contract=off` keep Arm matching the Mac — don't drop them.

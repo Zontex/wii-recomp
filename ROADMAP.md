@@ -96,7 +96,7 @@ Each stage is **done**, **in progress** or **planned**, and each item is ticked 
 - [x] Vulkan as the default renderer, with OpenGL as a fallback
 - [x] Compiled shaders and pipelines kept between runs, so a scene stutters only the first time it's ever drawn
 - [x] On the Mac, pictures reach the window on a queue of their own, so macOS holding the window's pictures skips pictures instead of freezing the game for up to a second
-- [ ] Shaders compiled ahead of time from the disc, so even a first run doesn't stutter
+- [ ] Shaders compiled ahead of time from the disc alone, so even a game's very first run doesn't stutter. Until then, recipes recorded by earlier runs and carried in the disc image build everything they saw before the first picture, on any computer (stage 10)
 - [ ] Lower cost per draw, aimed at heavy scenes of 150,000 draws a second
 - [ ] **GPU pipe writes compiled to direct calls.** Each store the game makes to the pipe (`0xCC008000`) goes through `hw_write`, its register checks and a byte loop before the commands are read back. In three steps, each measured before the next:
   1. The translator spots stores to the pipe's fixed address and calls a native pipe write directly. Same bytes in the same order, so exact.
@@ -165,7 +165,7 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - [x] Recompiled disc images (`recomp/tools/make_disc.py`): the disc with its native code for each platform, in one file
 - [x] `recomp/tools/add_game.py <image>`: extract, translate with discovery on, find system functions by content, compile, pack a recompiled disc image and put it in a console's drive, in one command. Code the interpreter ran comes back as function starts on the next build
 - [x] Two build tiers. A first build compiles everything about five times faster, and each function counts how often it runs; running `add_game.py` again compiles the functions that did the work for speed, from counts added up over every run. On a Raspberry Pi 5, Wii Fit Plus goes from an extracted disc to a playable image in under a minute and a half instead of over seven minutes, the second build takes about a minute, and its Body Test walk runs as fast as a build compiled entirely for speed
-- [ ] Shaders compiled ahead of time as part of it (4c)
+- [x] Shaders built before the first picture from the recipes every earlier run of the game recorded, which the disc image carries (4c)
 - [ ] A first run of a new disc starts under the interpreter while compiling continues behind it
 
 ### 11. Frame rate (in progress)

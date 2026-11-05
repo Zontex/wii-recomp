@@ -50,6 +50,7 @@ static void start(void) {
   for (int i = 0; i < ATTRIBUTE_MATRIX_GROUPS; i++) attributes[count++] = (GxAttribute){ATTRIBUTE_MATRICES + i, 4, GX_ATTRIBUTE_BYTE, offsetof(Vertex, matrix) + (size_t)i * 4};
   gx_backend->start(attributes, count, sizeof(Vertex));
   started = 1;
+  gx_recipes_start();
 }
 
 // Finds a texture's slot by what identifies it, and starts using a free one if new.

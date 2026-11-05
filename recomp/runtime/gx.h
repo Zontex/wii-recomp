@@ -18,7 +18,7 @@ typedef struct {
 extern GxState gx;
 
 // Counters for the once-a-second report in debug.c.
-typedef struct { unsigned draws, copies, to_screen, draw_done, new_shaders, passes; float slowest_shader_ms, worst_frame_ms; } GxStats;
+typedef struct { unsigned draws, copies, to_screen, draw_done, new_shaders, new_pipelines, passes; float slowest_shader_ms, worst_frame_ms; } GxStats;
 extern GxStats gx_stats;
 
 enum { VERTEX_MATRIX_POSITION = 0, VERTEX_MATRIX_COORDINATE = 1, VERTEX_MATRICES = 1 + MAX_TEXTURE_MAPS, VERTEX_MATRIX_SLOTS = 12, VERTEX_NORMALS_UV = 5 };

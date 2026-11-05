@@ -82,6 +82,11 @@ typedef struct {
   // Text as in the note below. Compiling can take many milliseconds, so callers keep the result.
   GxStage (*stage_compile)(int kind, const char *text);
   GxShader (*shader_link)(GxStage vertex, GxStage fragment);
+  // Optional, for building ahead of the first draw (gx_recipes.c): compiles many stages'
+  // texts at once, kept so stage_compile finds them, and builds what a draw with this
+  // shader and state will need.
+  void (*stages_prepare)(int count, const int *kinds, const char *const *texts);
+  void (*pipeline_prepare)(GxShader shader, const GxRenderState *state);
   void (*shader_use)(GxShader shader);
   void (*constants_send)(int block, const void *data, size_t bytes);
 
@@ -117,6 +122,25 @@ typedef struct {
 //   GX_DEPTH(z, w)  the clip space depth for the chip's z, which runs from -w to 0.
 //   GX_NO_DUAL_SOURCE  defined where a shader can't have a second color output.
 // Blocks use std140, so the C structs must match that layout.
+
+// Everything that decides what's built for a draw: its shaders' keys and the state
+// around them. Zeroed before filling, so it can be compared and kept in a file.
+typedef struct {
+  TevKey tev;
+  VertexKey vertex;
+  GxRenderState state;
+} GxRecipe;
+
+// gx_shader.c: names a program and state by their recipe, or returns 0 for a program
+// it didn't build; and builds each recipe's program, and its pipeline if the backend has
+// them, so drawing with it later finds everything ready.
+int gx_shader_recipe(GxShader program, const GxRenderState *state, GxRecipe *recipe);
+void gx_shader_prepare(const GxRecipe *recipes, unsigned count);
+
+// gx_recipes.c: what a title has drawn with, kept between runs. The backend tells it of
+// each pipeline it builds; once the backend has started, everything kept is built.
+void gx_recipe_note(GxShader shader, const GxRenderState *state);
+void gx_recipes_start(void);
 
 extern const GxBackend *gx_backend;
 extern const GxBackend gx_backend_opengl, gx_backend_vulkan;

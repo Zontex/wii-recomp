@@ -48,6 +48,7 @@ typedef struct {
 typedef struct {
   PipelineKey key;
   VkPipeline pipeline;
+  int noted;  // Drawn with in this run, and so told to gx_recipes.c.
 } PipelineSlot;
 
 static shaderc_compiler_t compiler;
@@ -328,23 +329,31 @@ void vk_pipelines_start(const GxAttribute *attributes, int attribute_count, size
 
 // A stage already compiled, in this run or an earlier one, is found by its text's hash.
 // The hash covers the prefix too, so a change to it or to the device's features is a new stage.
-GxStage vk_stage_compile(int kind, const char *text) {
-  static char source[TEXT_BYTES];
-  size_t bytes = (size_t)snprintf(source, sizeof source, "%s%s%s", prefix, vk.dual_source ? "" : "#define GX_NO_DUAL_SOURCE\n", text);
-  if (bytes >= sizeof source) {
+static size_t full_text(char *source, size_t size, const char *text) {
+  size_t bytes = (size_t)snprintf(source, size, "%s%s%s", prefix, vk.dual_source ? "" : "#define GX_NO_DUAL_SOURCE\n", text);
+  if (bytes >= size) {
     fprintf(stderr, "shader: text too long\n");
     exit(9);
   }
+  return bytes;
+}
+
+static uint64_t text_hash(int kind, const char *source, size_t bytes) {
   uint64_t hash = hash_text(source, bytes) ^ (uint64_t)(kind + 1);
-  if (!hash) hash = 1;
-  uint32_t found = stage_find(hash);
-  if (found) return found;
+  return hash ? hash : 1;
+}
+
+static shaderc_compilation_result_t compile_text(shaderc_compiler_t with, int kind, const char *source, size_t bytes) {
   shaderc_shader_kind shaderc_kind = kind == GX_STAGE_VERTEX ? shaderc_vertex_shader : shaderc_fragment_shader;
-  shaderc_compilation_result_t result = shaderc_compile_into_spv(compiler, source, bytes, shaderc_kind, "wii-recomp", "main", options);
+  shaderc_compilation_result_t result = shaderc_compile_into_spv(with, source, bytes, shaderc_kind, "wii-recomp", "main", options);
   if (shaderc_result_get_compilation_status(result) != shaderc_compilation_status_success) {
     fprintf(stderr, "shader: %s\n", shaderc_result_get_error_message(result));
     exit(9);
   }
+  return result;
+}
+
+static uint32_t keep_compiled(uint64_t hash, shaderc_compilation_result_t result) {
   const uint32_t *code = (const uint32_t *)shaderc_result_get_bytes(result);
   uint32_t code_bytes = (uint32_t)shaderc_result_get_length(result);
   uint32_t stage = stage_keep(hash, code, code_bytes);
@@ -356,6 +365,70 @@ GxStage vk_stage_compile(int kind, const char *text) {
   }
   shaderc_result_release(result);
   return stage;
+}
+
+GxStage vk_stage_compile(int kind, const char *text) {
+  static char source[TEXT_BYTES];
+  size_t bytes = full_text(source, sizeof source, text);
+  uint64_t hash = text_hash(kind, source, bytes);
+  uint32_t found = stage_find(hash);
+  if (found) return found;
+  return keep_compiled(hash, compile_text(compiler, kind, source, bytes));
+}
+
+// Many stages at once, such as everything a title drew with last time, compiled on every
+// core. Each worker has its own compiler and takes the next job until none are left.
+typedef struct {
+  int kind;
+  char *source;
+  size_t bytes;
+  uint64_t hash;
+  shaderc_compilation_result_t result;
+} StageJob;
+
+static StageJob *jobs;
+static int job_count, next_job;
+static pthread_mutex_t job_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static void *compile_jobs(void *unused) {
+  (void)unused;
+  shaderc_compiler_t own = shaderc_compiler_initialize();
+  for (;;) {
+    pthread_mutex_lock(&job_lock);
+    int job = next_job < job_count ? next_job++ : -1;
+    pthread_mutex_unlock(&job_lock);
+    if (job < 0) break;
+    jobs[job].result = compile_text(own, jobs[job].kind, jobs[job].source, jobs[job].bytes);
+  }
+  shaderc_compiler_release(own);
+  return 0;
+}
+
+void vk_stages_prepare(int count, const int *kinds, const char *const *texts) {
+  enum { MOST_WORKERS = 8 };
+  jobs = calloc((size_t)count + 1, sizeof *jobs);
+  job_count = next_job = 0;
+  for (int i = 0; i < count; i++) {
+    char *source = malloc(TEXT_BYTES);
+    size_t bytes = full_text(source, TEXT_BYTES, texts[i]);
+    uint64_t hash = text_hash(kinds[i], source, bytes);
+    int repeated = stage_find(hash) != 0;
+    for (int j = 0; j < job_count && !repeated; j++) repeated = jobs[j].hash == hash;
+    if (repeated) { free(source); continue; }
+    jobs[job_count++] = (StageJob){kinds[i], source, bytes, hash, 0};
+  }
+  long cores = sysconf(_SC_NPROCESSORS_ONLN);
+  int workers = cores < 1 ? 1 : cores > MOST_WORKERS ? MOST_WORKERS : (int)cores;
+  if (workers > job_count) workers = job_count;
+  pthread_t threads[MOST_WORKERS];
+  for (int i = 0; i < workers; i++) pthread_create(&threads[i], 0, compile_jobs, 0);
+  for (int i = 0; i < workers; i++) pthread_join(threads[i], 0);
+  for (int i = 0; i < job_count; i++) {
+    keep_compiled(jobs[i].hash, jobs[i].result);
+    free(jobs[i].source);
+  }
+  free(jobs);
+  jobs = 0;
 }
 
 // Nothing is built until a pipeline needs it, as only then is the rest of the state known.
@@ -463,16 +536,29 @@ VkPipeline vk_pipeline_find(GxShader shader, const GxRenderState *state) {
   if ((pipeline_count + 1) * 2 > pipeline_slots) grow_pipelines();
   PipelineSlot *slot = find_slot(&key);
   if (!slot->pipeline) {
+    double start = seconds_now();
     slot->key = key;
     slot->pipeline = build_pipeline(&key);
     pipeline_count++;
+    // A new pipeline holds up the draw as a new shader does, so it counts as one.
+    float milliseconds = (float)((seconds_now() - start) * 1000);
+    gx_stats.new_pipelines++;
+    if (milliseconds > gx_stats.slowest_shader_ms) gx_stats.slowest_shader_ms = milliseconds;
     if (pipelines_file) {
       fwrite(&key, sizeof key, 1, pipelines_file);
       fflush(pipelines_file);
     }
   }
+  // Noted on first use rather than when built, as the cache may have built it before the
+  // title's recipes knew of it.
+  if (!slot->noted) {
+    slot->noted = 1;
+    gx_recipe_note(shader, state);
+  }
   return slot->pipeline;
 }
+
+void vk_pipeline_prepare(GxShader shader, const GxRenderState *state) { vk_pipeline_find(shader, state); }
 
 // Bias stays out of samplers, as Vulkan on Metal has none. See read_map_biases in gx_tev.c.
 static VkSampler create_sampler(const GxSampling *sampling, int nearest_only) {

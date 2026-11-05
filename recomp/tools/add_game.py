@@ -14,7 +14,9 @@ The first build compiles everything quickly, and the code counts how often it ru
 Run add_game.py again after playing (with the game ID, the disc or the folder) and the
 code that did the work is compiled for speed, using what every run so far recorded:
 the profile and any code the interpreter had to run. Only what changed is rebuilt, and
-the image's native code is swapped without copying the disc again.
+the image's native code is swapped without copying the disc again. The image also
+carries the shaders every run drew with, as recipes any computer builds before the
+first picture, so they don't hold up frames during play.
 
 Each game builds in recomp/build-<game ID>/, which keeps its settings in settings.json.
 --fifo-breakpoints is remembered there, for games that keep several frames in the FIFO.
@@ -24,6 +26,7 @@ import json
 import os
 import platform
 import shutil
+import struct
 import subprocess
 import sys
 import time
@@ -143,17 +146,47 @@ def merge_profiles(paths, into):
     return len(counts)
 
 
-def pack(disc, image, library):
+RECIPE_HEADER = struct.Struct("<4s7I")  # As gx_recipes.c writes it: magic, version, record size, title ID, then room.
+
+
+def merge_recipes(sources, into):
+    """Every shader recipe from each copy (files the consoles wrote, and what the image
+    already carries), once each and in the order first seen, into one file. Only copies
+    of the newest version are used. Returns how many, or 0 with no file written."""
+    copies = []
+    for data in sources:
+        if len(data) >= RECIPE_HEADER.size:
+            magic, version, record_bytes, *_ = RECIPE_HEADER.unpack_from(data)
+            if magic == b"WRSR" and record_bytes:
+                copies.append((version, data[:RECIPE_HEADER.size], record_bytes, data))
+    if not copies:
+        into.unlink(missing_ok=True)
+        return 0
+    newest = max(copies)[1]
+    seen, records = set(), []
+    for _, header, record_bytes, data in copies:
+        if header != newest:
+            continue
+        for at in range(RECIPE_HEADER.size, len(data) - record_bytes + 1, record_bytes):
+            record = data[at:at + record_bytes]
+            if record not in seen:
+                seen.add(record)
+                records.append(record)
+    into.write_bytes(newest + b"".join(records))
+    return len(records)
+
+
+def pack(disc, image, library, shaders):
     natives = [(native_platform(), library)]
     GAMES.mkdir(exist_ok=True)
     started = time.monotonic()
     print("\n== pack the recompiled disc image", flush=True)
     try:
-        swapped = image.is_file() and make_disc.replace_native(image, natives)
+        swapped = image.is_file() and make_disc.replace_native(image, natives, shaders)
     except SystemExit:
         swapped = False  # Not a readable image; pack it whole below.
     if not swapped:
-        make_disc.write_image(disc, image, natives)
+        make_disc.write_image(disc, image, natives, shaders)
     print(f"   {'swapped the native code in' if swapped else 'packed'} {image}: {time.monotonic() - started:.0f} s", flush=True)
 
 
@@ -207,6 +240,7 @@ def main():
         print("nothing has run yet, so everything compiles quickly and counts its runs")
     discovered = recorded(key, "discovered.txt", settings["consoles"])
 
+    (CONSOLE_BUILD / "obj").mkdir(parents=True, exist_ok=True)
     run("build the console", [sys.executable, str(RECOMP / "translate/build_file.py"), str(CONSOLE_BUILD)])
     run("compile the console", ["ninja", "-j", str(options.jobs), "wii-recomp"], cwd=CONSOLE_BUILD)
     emit = [sys.executable, str(RECOMP / "translate/emit.py"), str(disc / "sys/main.dol"), str(build / "generated"),
@@ -223,7 +257,17 @@ def main():
         print(f"\n{code} is built in {build / LIBRARY}: {time.monotonic() - started:.0f} s in all")
         return
     image = GAMES / f"{code}.wrd"
-    pack(disc, image, build / LIBRARY)
+    shaders = build / "shaders.bin"
+    carried = []
+    try:
+        carried = [make_disc.read_shaders(image)] if image.is_file() else []
+    except SystemExit:
+        pass  # Not a readable image: it's packed again whole.
+    sources = [path.read_bytes() for path in recorded(key, "shaders.bin", settings["consoles"])] + [data for data in carried if data]
+    count = merge_recipes(sources, shaders)
+    if count:
+        print(f"carrying {count} shader recipes, so the first picture waits for them rather than play")
+    pack(disc, image, build / LIBRARY, shaders if count else None)
     for console in settings["consoles"]:
         insert(image, console)
     print(f"\n{code} is ready in {time.monotonic() - started:.0f} s. Play it with:\n"

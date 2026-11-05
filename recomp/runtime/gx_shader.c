@@ -23,6 +23,11 @@ typedef struct {
   VertexKey vertex;
 } ProgramKey;
 
+// Each program built, with what it was built from, so a pipeline the backend builds can be
+// named by its keys (gx_recipes.c). Only searched when something new is built.
+static struct { unsigned program; ProgramKey key; } *built;
+static unsigned built_count, built_capacity;
+
 static Cache fragment_shaders = {.key_bytes = sizeof(TevKey)}, vertex_shaders = {.key_bytes = sizeof(VertexKey)};
 static Cache programs = {.key_bytes = sizeof(ProgramKey)};
 
@@ -105,7 +110,65 @@ static unsigned build_program(const ProgramKey *key) {
   float milliseconds = (float)((glfwGetTime() - start) * 1000);
   gx_stats.new_shaders++;
   if (milliseconds > gx_stats.slowest_shader_ms) gx_stats.slowest_shader_ms = milliseconds;
+  if (built_count == built_capacity) {
+    built_capacity = built_capacity ? built_capacity * 2 : FIRST_SLOTS;
+    built = realloc(built, built_capacity * sizeof *built);
+  }
+  built[built_count].program = program;
+  built[built_count++].key = *key;
   return program;
+}
+
+static unsigned program_for(const ProgramKey *key) {
+  unsigned program = find(&programs, key);
+  if (!program) {
+    program = build_program(key);
+    store(&programs, key, program);
+  }
+  return program;
+}
+
+int gx_shader_recipe(GxShader program, const GxRenderState *state, GxRecipe *recipe) {
+  for (unsigned i = built_count; i-- > 0;) {
+    if (built[i].program != program) continue;
+    memset(recipe, 0, sizeof *recipe);
+    recipe->tev = built[i].key.tev;
+    recipe->vertex = built[i].key.vertex;
+    recipe->state = *state;
+    return 1;
+  }
+  return 0;  // One of the backend's own, such as for clearing.
+}
+
+// Every stage's text first, so a backend can compile them side by side, then each
+// program and what's built around it, all found again in the caches when drawing.
+void gx_shader_prepare(const GxRecipe *recipes, unsigned count) {
+  if (gx_backend->stages_prepare) {
+    int *kinds = malloc(2 * count * sizeof *kinds);
+    char **texts = malloc(2 * count * sizeof *texts);
+    unsigned texts_count = 0;
+    for (unsigned i = 0; i < count; i++) {
+      ProgramKey whole = {recipes[i].tev, recipes[i].vertex}, *key = &whole;
+      if (find(&programs, key)) continue;
+      for (int kind = 0; kind < 2; kind++) {
+        if (kind == GX_STAGE_VERTEX ? find(&vertex_shaders, &key->vertex) != 0 : find(&fragment_shaders, &key->tev) != 0) continue;
+        ShaderText text = {malloc(SHADER_TEXT_BYTES), 0, SHADER_TEXT_BYTES};
+        if (kind == GX_STAGE_VERTEX) gx_transform_write_shader(&key->vertex, &text);
+        else gx_tev_write_shader(&key->tev, &text);
+        kinds[texts_count] = kind;
+        texts[texts_count++] = text.characters;
+      }
+    }
+    gx_backend->stages_prepare((int)texts_count, kinds, (const char *const *)texts);
+    for (unsigned i = 0; i < texts_count; i++) free(texts[i]);
+    free(kinds);
+    free(texts);
+  }
+  for (unsigned i = 0; i < count; i++) {
+    ProgramKey key = {recipes[i].tev, recipes[i].vertex};
+    unsigned program = program_for(&key);
+    if (gx_backend->pipeline_prepare) gx_backend->pipeline_prepare(program, &recipes[i].state);
+  }
 }
 
 void gx_shader_use(const TevKey *tev, const VertexKey *vertex) {
@@ -115,11 +178,7 @@ void gx_shader_use(const TevKey *tev, const VertexKey *vertex) {
   if (anything_used && !memcmp(&in_use.tev, tev, sizeof *tev) && !memcmp(&in_use.vertex, vertex, sizeof *vertex)) return;
   key.tev = *tev;
   key.vertex = *vertex;
-  unsigned program = find(&programs, &key);
-  if (!program) {
-    program = build_program(&key);
-    store(&programs, &key, program);
-  }
+  unsigned program = program_for(&key);
   gx_backend->shader_use(program);
   in_use = key;
   anything_used = 1;

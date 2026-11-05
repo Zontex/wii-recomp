@@ -15,7 +15,7 @@ enum {
   BOOT_DOL_OFFSET = 0x420, BOOT_FST_OFFSET = 0x424, BI2_AT = 0x440, APPLOADER_AT = 0x2440,
   // A recompiled disc image: see make_disc.py.
   IMAGE_HEADER_BYTES = 64, IMAGE_ENTRY_BYTES = 64, IMAGE_VERSION = 1, IMAGE_NAME_BYTES = 32,
-  PARTITION = 1, RAW = 2, TICKET = 3, TMD = 4, CERTIFICATES = 5, NATIVE = 6,
+  PARTITION = 1, RAW = 2, TICKET = 3, TMD = 4, CERTIFICATES = 5, NATIVE = 6, SHADERS = 7,
   // The unencrypted area at the start of a disc, as a real one lays it out: the header,
   // a table of partition groups, and the region. The data partition goes where Nintendo's
   // discs put it. Only this much can be read unencrypted, as on a real drive.
@@ -42,7 +42,7 @@ static char *sources[MAX_PIECES];
 static int source_count;
 static int has_disc;
 static int is_image;
-static Part ticket, tmd, native;  // In the image, or from the folder's own files.
+static Part ticket, tmd, native, shaders;  // In the image, or from the folder's own files.
 static char folder_ticket[NAME_LIMIT], folder_tmd[NAME_LIMIT];
 static uint8_t raw[RAW_BYTES];
 static FILE *open_file;  // The last source read, kept open, as reads come in runs.
@@ -78,7 +78,7 @@ void drive_eject(void) {
   open_source = -1;
   for (int i = 0; i < source_count; i++) free(sources[i]);
   piece_count = source_count = has_disc = is_image = 0;
-  ticket = tmd = native = (Part){0, 0};
+  ticket = tmd = native = shaders = (Part){0, 0};
   memset(raw, 0, sizeof raw);
   folder_ticket[0] = folder_tmd[0] = 0;
 }
@@ -229,6 +229,7 @@ static int insert_image(const char *path) {
     else if (kind == TICKET) ticket = (Part){at, size};
     else if (kind == TMD) tmd = (Part){at, size};
     else if (kind == NATIVE && !strcmp(name, drive_platform())) native = (Part){at, size};
+    else if (kind == SHADERS) shaders = (Part){at, size};
   }
   fclose(file);
   for (int i = 0; ok && i < raw_count; i++) {  // Small, so read once.
@@ -320,6 +321,16 @@ static size_t read_part(Part part, const char *folder_path, uint8_t *out, size_t
 
 size_t drive_ticket(uint8_t *out, size_t limit) { return read_part(ticket, folder_ticket, out, limit); }
 size_t drive_tmd(uint8_t *out, size_t limit) { return read_part(tmd, folder_tmd, out, limit); }
+
+void *drive_shaders(size_t *bytes) {
+  enum { MOST_BYTES = 64 << 20 };
+  *bytes = 0;
+  if (!has_disc || !is_image || !shaders.size || shaders.size > MOST_BYTES) return 0;
+  uint8_t *data = malloc((size_t)shaders.size);
+  if (!data || !read_source(0, shaders.at, shaders.size, data)) { free(data); return 0; }
+  *bytes = (size_t)shaders.size;
+  return data;
+}
 
 int drive_native(const char *folder, char *path, size_t limit) {
   if (!has_disc || !is_image || !native.size) return 0;
