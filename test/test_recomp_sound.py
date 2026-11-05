@@ -44,9 +44,10 @@ class Recording:
     def memory(self, kind, address, data):
         self.event(kind, struct.pack("<II", address, len(data)) + bytes(data))
 
-    def answer(self, mail):
+    def answer(self, mail, interrupt=True):
         self.event(MAIL, struct.pack("<I", mail))
-        self.event(INTERRUPT)
+        if interrupt:
+            self.event(INTERRUPT)
         self.event(READ_LOW, b"\0" + struct.pack("<I", mail))
 
     def save(self, path, start, end):
@@ -107,6 +108,34 @@ def ax_recording(frames, altered=None):
         ticks += 1000
         recording.time(ticks)
         recording.send(0xcdd10003)  # Carry on.
+    return recording, ticks
+
+
+GALAXY = 0xd643001f  # A Zelda-family checksum.
+
+
+def zelda_recording(wrong_ack=False):
+    """The Zelda family's mail protocol, as Dolphin's Zelda.cpp answers it: a header with
+    the command's word count, its words, then a sync and F355 with the command's top half.
+    Command 01 also reads its tables from memory. wrong_ack makes the real program's
+    second answer differ."""
+    recording = Recording(GALAXY)
+    ticks = 1000
+    recording.time(ticks)
+    table, afc = 0x10000, 0x11000
+    commands = [[0x80000000, 0x00000005], [0x81000003, 0x20000, table, afc, 0], [0x8f120000]]
+    for number, words_of in enumerate(commands):
+        recording.send(len(words_of))
+        for i, word in enumerate(words_of):
+            recording.send(word)
+            if number == 1 and i == 0:
+                recording.memory(MEMORY_READ, table, words(range(3, 3 + 0x280)))
+                recording.memory(MEMORY_READ, afc, words(range(0x20)))
+        ticks += 500
+        recording.time(ticks)
+        ack = 0xf3550000 | words_of[0] >> 16
+        recording.answer(0xdcd10004)
+        recording.answer(ack + (1 if wrong_ack and number == 1 else 0), interrupt=False)
     return recording, ticks
 
 
@@ -191,6 +220,20 @@ class SoundRecordings(unittest.TestCase):
         strict = subprocess.run([*bench, "--strict"], capture_output=True, text=True, timeout=120)
         self.assertEqual(strict.returncode, 1, strict.stdout)
         self.assertTrue(re.search(r"real -?\d+, C -?\d+", strict.stdout), strict.stdout)
+
+    def test_zelda_protocol(self):
+        """A made-up recording of the Zelda family's mail, until one of Super Mario Galaxy 2
+        can be made (see recomp/tools/sound_bench.py)."""
+        recording, end = zelda_recording()
+        path = Path(self.folder.name) / "zelda.wsr"
+        recording.save(path, 1000, end)
+        result = self.play(path)
+        self.assertEqual((result["program"], result["first_mails"], result["mail_steps_differ"]), ("Zelda-family", "same", "0"))
+        self.assertEqual(result["in_step_from"], "3")  # The first command's last word.
+        recording, end = zelda_recording(wrong_ack=True)
+        recording.save(path, 1000, end)
+        result = self.play(path)
+        self.assertEqual((result["first_mails"], result["mail_steps_differ"]), ("differ", "1"))
 
 
 if __name__ == "__main__":

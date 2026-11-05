@@ -512,12 +512,14 @@ int main(int argc, char **argv) {
     first_mail_step = 0;
     snprintf(first_mail_text, sizeof first_mail_text, "never alike");
   }
-  const char *program = dsp_c_version();
+  char program[64] = "";  // One word, for the summary line.
+  if (dsp_c_version()) snprintf(program, sizeof program, "%s", dsp_c_version());
+  for (char *c = program; *c; c++) *c = *c == ' ' ? '-' : *c;
   double recorded = (double)(header.end_time - header.start_time) / 60750000.0;
   size_t per = frames ? frames : 1;
   double rms = words_compared ? __builtin_sqrt(error_squares / (double)words_compared) : 0;
   if (verbose) {
-    fprintf(stderr, "program %08x, %s; %zu mails, %zu frames, %.2f s of sound\n", header.end_crc, program ? program : "no C version",
+    fprintf(stderr, "program %08x, %s; %zu mails, %zu frames, %.2f s of sound\n", header.end_crc, *program ? program : "no C version",
             step_count - 1, frames, recorded);
     fprintf(stderr, "interpreter %.3f ms a frame, %s\n", interpreter_seconds * 1e3 / per,
             interpreter_differs < 0 ? "replays as recorded" : "doesn't replay as recorded");
@@ -535,7 +537,7 @@ int main(int argc, char **argv) {
   printf("summary program=%s crc=%08x mails=%zu frames=%zu seconds=%.3f interpreter_ms=%.4f c_ms=%.4f replays=%s "
          "in_step_from=%ld words=%llu differ=%llu steps_differ=%llu peak=%d rms=%.3f mail_steps_differ=%llu "
          "interrupts=%d/%d first_step=%ld first_address=%08x first_mail=%08x first_values=%d/%d first_mails=%s\n",
-         compared && program ? program : "none", header.end_crc, step_count - 1, frames, recorded, interpreter_seconds * 1e3 / per,
+         compared && *program ? program : "none", header.end_crc, step_count - 1, frames, recorded, interpreter_seconds * 1e3 / per,
          c_seconds * 1e3 / per, !interpreted ? "skipped" : interpreter_differs < 0 ? "yes" : "no", in_step_from, (unsigned long long)words_compared,
          (unsigned long long)words_differ, (unsigned long long)steps_differ, peak_error, rms,
          (unsigned long long)mail_steps_differ, interpreter_interrupts, c_interrupts, first_step, first_address, first_mail,

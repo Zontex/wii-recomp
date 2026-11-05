@@ -27,6 +27,15 @@ With --save-reference the C version's writes are kept (as one hash a mail), and
 --reference compares a later run with them. Exits with 1 if a recording fails to play,
 the interpreter doesn't replay it as recorded, or the C version's writes differ from the
 reference; --strict also fails on any difference from the real program.
+
+Still to do: the Zelda family's C version (zelda.c) has only been checked on made-up
+mail, not against its real program. To check it, record Super Mario Galaxy 2 (or any
+game whose program is d643001f, 6c3f6f94, b7eb9a9c or eaeb38cc) with the interpreter:
+  WII_RECOMP_DSP=lle WII_RECOMP_SOUND_RECORD=0:1800:galaxy-boot.wsr recomp/build/wii-recomp games/SB4E01.wrd
+then a few seconds each of the title, a menu and play with music and effects, through
+the control pipe's "record-sound 300 <file>", and run this on the folder. The first
+difference it prints is the place to start; Galaxy 2 logs audio.zelda_unknown_buffer
+for four buffer numbers, and its sound going flat after about 3 seconds may be one.
 """
 import argparse
 import shutil
@@ -75,7 +84,7 @@ def main():
     failed = False
     with tempfile.TemporaryDirectory() as temporary:
         program = player(temporary)
-        print(f"{'recording':<24} {'program':<8} {'frames':>6} {'real ms':>7} {'C ms':>6} {'mails':<6} "
+        print(f"{'recording':<24} {'program':<12} {'frames':>6} {'real ms':>7} {'C ms':>6} {'mails':<6} "
               f"{'differ':>15} {'peak':>6} {'rms':>8}  first")
         for recording in recordings:
             hashes = Path(temporary) / f"{recording.stem}.hashes"
@@ -93,7 +102,7 @@ def main():
                 print(run.stderr.rstrip())
             mails = "same" if result["first_mails"] == "same" else "differ"
             differ = f"{result['differ']}/{result['words']}"
-            print(f"{recording.stem:<24} {result['program']:<8} {result['frames']:>6} {float(result['interpreter_ms']):>7.3f} "
+            print(f"{recording.stem:<24} {result['program']:<12} {result['frames']:>6} {float(result['interpreter_ms']):>7.3f} "
                   f"{float(result['c_ms']):>6.3f} {mails:<6} {differ:>15} {result['peak']:>6} {float(result['rms']):>8.3f}  "
                   f"{first_difference(result)}")
             if result["replays"] == "no":
