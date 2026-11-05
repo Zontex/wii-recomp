@@ -154,7 +154,7 @@ The menu shows the game's banner in the Disc Channel, and Start runs it. The sim
 
 - **A plain ISO in the drive.** Each game goes through `add_game.py` first.
 - **Going back to the Wii Menu.** Home, then Wii Menu, freezes. Close the window instead.
-- **The simulated pointer's reach.** The simulated Wii Remote's camera is tuned to the Wii Menu. Wii Fit Plus turns the same movement into about three quarters of the pointer's height, so its bottom buttons sit near the edge of the mouse's reach.
+- **The simulated board in a game's own setup.** With the game's own Wii Remote code, as `add_game.py` builds it, Wii Fit Plus's first-time setup gets to the Balance Board and then drops the simulated board, asking for its power button again. A build without `--virtual-bluetooth` gets through.
 - **Real Wii Remotes and the Balance Board** are built but haven't been tried with real hardware. Until then the keyboard and mouse drive a simulated remote and board. See [Real Wii Remotes](recomp/README.md#real-wii-remotes-and-the-balance-board).
 - **Playing from the Wii Menu** has been tested on an Intel Mac only. On a Raspberry Pi 5, games have been played directly.
 

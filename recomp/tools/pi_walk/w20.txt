@@ -1,163 +1,163 @@
 20 board on 60 0 0
-24 pointer 0.34 0.78
+24 pointer 0.31 0.91
 25 press a
-27 pointer -0.63 -0.3
+27 pointer -0.57 -0.17
 28 press a
-30 pointer 0.34 0.78
+30 pointer 0.31 0.91
 31 press a
-33 pointer 0 0.6
+33 pointer 0 0.73
 34 press a
-36 pointer 0.6 0.76
+36 pointer 0.54 0.89
 37 press a
-39 pointer 0.34 0.3
+39 pointer 0.31 0.43
 40 press a
-42 pointer 0.6 0.76
+42 pointer 0.54 0.89
 43 press a
-45 pointer 0 0
+45 pointer 0 0.13
 46 press a
-48 pointer 0.34 0.78
+48 pointer 0.31 0.91
 49 press a
-51 pointer -0.63 -0.3
+51 pointer -0.57 -0.17
 52 press a
-54 pointer 0.34 0.78
+54 pointer 0.31 0.91
 55 press a
-57 pointer 0 0.6
+57 pointer 0 0.73
 58 press a
-60 pointer 0.6 0.76
+60 pointer 0.54 0.89
 61 press a
-63 pointer 0.34 0.3
+63 pointer 0.31 0.43
 64 press a
-66 pointer 0.6 0.76
+66 pointer 0.54 0.89
 67 press a
-69 pointer 0 0
+69 pointer 0 0.13
 70 press a
-72 pointer 0.34 0.78
+72 pointer 0.31 0.91
 73 press a
-75 pointer -0.63 -0.3
+75 pointer -0.57 -0.17
 76 press a
-78 pointer 0.34 0.78
+78 pointer 0.31 0.91
 79 press a
-81 pointer 0 0.6
+81 pointer 0 0.73
 82 press a
-84 pointer 0.6 0.76
+84 pointer 0.54 0.89
 85 press a
-87 pointer 0.34 0.3
+87 pointer 0.31 0.43
 88 press a
-90 pointer 0.6 0.76
+90 pointer 0.54 0.89
 91 press a
-93 pointer 0 0
+93 pointer 0 0.13
 94 press a
-96 pointer 0.34 0.78
+96 pointer 0.31 0.91
 97 press a
-99 pointer -0.63 -0.3
+99 pointer -0.57 -0.17
 100 press a
-102 pointer 0.34 0.78
+102 pointer 0.31 0.91
 103 press a
-105 pointer 0 0.6
+105 pointer 0 0.73
 106 press a
-108 pointer 0.6 0.76
+108 pointer 0.54 0.89
 109 press a
-111 pointer 0.34 0.3
+111 pointer 0.31 0.43
 112 press a
-114 pointer 0.6 0.76
+114 pointer 0.54 0.89
 115 press a
-117 pointer 0 0
+117 pointer 0 0.13
 118 press a
-120 pointer 0.34 0.78
+120 pointer 0.31 0.91
 121 press a
-123 pointer -0.63 -0.3
+123 pointer -0.57 -0.17
 124 press a
-126 pointer 0.34 0.78
+126 pointer 0.31 0.91
 127 press a
-129 pointer 0 0.6
+129 pointer 0 0.73
 130 press a
-132 pointer 0.6 0.76
+132 pointer 0.54 0.89
 133 press a
-135 pointer 0.34 0.3
+135 pointer 0.31 0.43
 136 press a
-138 pointer 0.6 0.76
+138 pointer 0.54 0.89
 139 press a
-141 pointer 0 0
+141 pointer 0 0.13
 142 press a
-144 pointer 0.34 0.78
+144 pointer 0.31 0.91
 145 press a
-147 pointer -0.63 -0.3
+147 pointer -0.57 -0.17
 148 press a
-150 pointer 0.34 0.78
+150 pointer 0.31 0.91
 151 press a
-153 pointer 0 0.6
+153 pointer 0 0.73
 154 press a
-156 pointer 0.6 0.76
+156 pointer 0.54 0.89
 157 press a
-159 pointer 0.34 0.3
+159 pointer 0.31 0.43
 160 press a
-162 pointer 0.6 0.76
+162 pointer 0.54 0.89
 163 press a
-165 pointer 0 0
+165 pointer 0 0.13
 166 press a
-168 pointer 0.34 0.78
+168 pointer 0.31 0.91
 169 press a
-171 pointer -0.63 -0.3
+171 pointer -0.57 -0.17
 172 press a
-174 pointer 0.34 0.78
+174 pointer 0.31 0.91
 175 press a
-177 pointer 0 0.6
+177 pointer 0 0.73
 178 press a
-180 pointer 0.6 0.76
+180 pointer 0.54 0.89
 181 press a
-183 pointer 0.34 0.3
+183 pointer 0.31 0.43
 184 press a
-186 pointer 0.6 0.76
+186 pointer 0.54 0.89
 187 press a
-189 pointer 0 0
+189 pointer 0 0.13
 190 press a
-192 pointer 0.34 0.78
+192 pointer 0.31 0.91
 193 press a
-195 pointer -0.63 -0.3
+195 pointer -0.57 -0.17
 196 press a
-198 pointer 0.34 0.78
+198 pointer 0.31 0.91
 199 press a
-201 pointer 0 0.6
+201 pointer 0 0.73
 202 press a
-204 pointer 0.6 0.76
+204 pointer 0.54 0.89
 205 press a
-207 pointer 0.34 0.3
+207 pointer 0.31 0.43
 208 press a
-210 pointer 0.6 0.76
+210 pointer 0.54 0.89
 211 press a
-213 pointer 0 0
+213 pointer 0 0.13
 214 press a
-216 pointer 0.34 0.78
+216 pointer 0.31 0.91
 217 press a
-219 pointer -0.63 -0.3
+219 pointer -0.57 -0.17
 220 press a
-222 pointer 0.34 0.78
+222 pointer 0.31 0.91
 223 press a
-225 pointer 0 0.6
+225 pointer 0 0.73
 226 press a
-228 pointer 0.6 0.76
+228 pointer 0.54 0.89
 229 press a
-231 pointer 0.34 0.3
+231 pointer 0.31 0.43
 232 press a
-234 pointer 0.6 0.76
+234 pointer 0.54 0.89
 235 press a
-237 pointer 0 0
+237 pointer 0 0.13
 238 press a
-240 pointer 0.34 0.78
+240 pointer 0.31 0.91
 241 press a
-243 pointer -0.63 -0.3
+243 pointer -0.57 -0.17
 244 press a
-246 pointer 0.34 0.78
+246 pointer 0.31 0.91
 247 press a
-249 pointer 0 0.6
+249 pointer 0 0.73
 250 press a
-252 pointer 0.6 0.76
+252 pointer 0.54 0.89
 253 press a
-255 pointer 0.34 0.3
+255 pointer 0.31 0.43
 256 press a
-258 pointer 0.6 0.76
+258 pointer 0.54 0.89
 259 press a
-261 pointer 0 0
+261 pointer 0 0.13
 262 press a
-262 pointer 0 0.6
+262 pointer 0 0.73
 263 react
