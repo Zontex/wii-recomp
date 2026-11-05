@@ -525,9 +525,18 @@ def address_text(address):
     """An address as C. A module's own addresses depend on where it was loaded."""
     if MODULE and MODULE["base"] <= address < MODULE["base"] + MODULE["size"]:
         return f"({MODULE['prefix']}_code + 0x{address - MODULE['base']:x}u)"
+    if MODULE and address in MODULE.get("fixed", {}):
+        return f"0x{MODULE['fixed'][address]:x}u"
     if MODULE and MODULE["imports"] <= address < MODULE["imports"] + 4 * MODULE["import_count"]:
         return f"{MODULE['prefix']}_import[{(address - MODULE['imports']) // 4}]"
     return f"0x{address:x}u"
+
+
+def program_function(destination):
+    """The program function a REL module's branch goes to through its stand-in, or None."""
+    if MODULE and MODULE.get("fixed", {}).get(destination) in MODULE.get("program", ()):
+        return MODULE["fixed"][destination]
+    return None
 
 
 def emit_field(address, word, name):
@@ -536,7 +545,7 @@ def emit_field(address, word, name):
     prefix = MODULE["prefix"]
     target = f"{prefix}_section[{section}]" if symbol is None else f"{prefix}_import[{symbol}]"
     target = f"({target} + 0x{addend:x}u)"
-    value = f"({target} & 0xffffu)" if kind == "lo" else f"((({target}) + 0x8000u) >> 16)"
+    value = {"lo": f"({target} & 0xffffu)", "hi": f"(({target}) >> 16)", "ha": f"((({target}) + 0x8000u) >> 16)"}[kind]
     text = emit(address, (word & 0xffff0000) | FIELD_STAND_IN, name)
     forms = [(f"0x{FIELD_STAND_IN << 16:x}u", f"({value} << 16)"), (f"0x{FIELD_STAND_IN:x}u", value),
              (str(FIELD_STAND_IN), f"(int32_t)(int16_t){value}")]
@@ -641,6 +650,8 @@ def emit_function(program, start, body, starts):
 
 def tail_text(destination, starts):
     """A jump to other code. It must not grow the stack, as loops can span functions."""
+    if (program_target := program_function(destination)) is not None:
+        return f"__attribute__((musttail)) return {function_name(program_target)}();"
     if destination in starts:
         return f"__attribute__((musttail)) return {function_name(destination)}();"
     return f"dispatch({address_text(destination)}); return;"
@@ -663,6 +674,8 @@ def constant_link(program, address, body):
 
 
 def call_text(destination, starts):
+    if (program_target := program_function(destination)) is not None:
+        return f"{function_name(program_target)}();"
     return f"{function_name(destination)}();" if destination in starts else f"dispatch({address_text(destination)});"
 
 
@@ -787,24 +800,51 @@ def export_addresses(system, functions):
     return found
 
 
-def module_imports(system):
-    """Names each module calls in the program, which must be native functions."""
-    names = set()
-    for path in sorted((system / "modules").glob("*.rso")):
-        module = modules.parse_rso(path.stem, path.read_bytes())
-        names |= {module.imports[r.symbol] for r in module.external if r.kind == modules.REL24}
-    return names
+def title_modules(system):
+    """Every module the title loads at run time, as (source name, parsed module): the Wii
+    Menu's RSOs in sys/modules, then any REL in the disc's files. A disc keeps hundreds of
+    compressed archives, so only files named as modules are opened."""
+    found = [(path.name, modules.parse_rso(path.stem, path.read_bytes()))
+             for path in sorted((system / "modules").glob("*.rso"))]
+    files = system.parent / "files"
+    if files.is_dir():
+        for path in sorted(files.rglob("*")):
+            if path.is_file() and MODULE_FILE.search(path.name):
+                found += [(str(path.relative_to(files)), module) for module in modules.find_modules([(path.name, path.read_bytes())])
+                          if module.kind == "rel"]
+    return [(name, module) for name, module in found if module]
 
 
-def emit_module(path, number, out, exports):
+# A file that holds modules: a .rel or .rso, or an archive of them (RELS.arc and the like).
+MODULE_FILE = re.compile(r"\.(rel|rso)(\.[a-z0-9]+)?$|^rels?\b.*\.(arc|szs)$", re.IGNORECASE)
+
+
+def module_imports(found):
+    """Names each RSO module calls in the program, which must be native functions."""
+    return {module.imports[r.symbol] for _, module in found if module.kind == "rso"
+            for r in module.external if r.kind == modules.REL24}
+
+
+def module_program_calls(found):
+    """Program addresses each REL module branches to, which must be native functions."""
+    return {r.addend for _, module in found if module.kind == "rel" for r in module.fixed if r.kind == modules.REL24}
+
+
+def emit_module(module, number, out, exports, program_starts, counts):
     """Translates a run-time-loaded module's code into native functions, wherever it is
-    loaded. Writes mod<number>_*.c and returns the C for its entry in the module table."""
+    loaded. Writes m<number>_*.c and returns the C for its entry in the module table, or
+    None if the module can't be prepared, which leaves it to the interpreter.
+
+    `counts` is None to compile every function for speed, or {offset: runs} from earlier
+    runs: functions that did the work compile for speed, the rest quickly, counting runs
+    into m<number>_counts."""
     global MODULE
-    module = modules.parse_rso(path.stem, path.read_bytes())
-    if not module:
-        raise SystemExit(f"{path} isn't an RSO module")
     base, imports = MODULE_BASE + number * MODULE_SPACING, MODULE_IMPORTS + number * MODULE_SPACING
-    prepared = modules.prepare(module, base, imports)
+    try:
+        prepared = modules.prepare(module, base, imports)
+    except modules.Unsupported as reason:
+        print(f"{module.name}: left to the interpreter, {reason}")
+        return None
     header = bytearray(0x100)
     struct.pack_into(">I", header, 0, 0x100)
     struct.pack_into(">I", header, 0x48, base)
@@ -814,42 +854,42 @@ def emit_module(path, number, out, exports):
     functions = {}
     add_starts(program, functions, prepared.starts)
     prefix = f"m{number}"
+    import_count = len(module.imports) + len(prepared.fixed_calls)
+    fixed = {imports + 4 * n: address for n, address in prepared.fixed_calls.items()}
     MODULE = {"prefix": prefix, "base": base, "size": len(prepared.code), "imports": imports,
-              "import_count": len(module.imports), "fields": prepared.fields}
+              "import_count": import_count, "fields": prepared.fields, "fixed": fixed, "program": program_starts}
+    counting = counts is not None
     try:
         addresses = sorted(functions)
-        starts = set(addresses)
-        declarations = "\n".join(f"void {function_name(a)}(void);" for a in addresses)
+        fast = choose_fast({base + offset: runs for offset, runs in counts.items()}) if counting else set(addresses)
+        called = sorted({address for address in fixed.values() if address in program_starts})
+        declarations = "\n".join(f"void {function_name(a)}(void);" for a in addresses + called)
+        counter = (f"extern uint32_t {prefix}_counts[];\n"
+                   f"#define POLL_COUNTED(i) do {{ {prefix}_counts[i]++; POLL(); }} while (0)\n")
         write_if_changed(out / f"{prefix}_functions.h",
                          f'#include "../../runtime/cpu.h"\nextern uint32_t {prefix}_code, {prefix}_section[], {prefix}_import[];\n'
-                         f"{declarations}\n")
-        unknown, files = Counter(), 0
-        for first in range(0, len(addresses), FUNCTIONS_PER_FILE):
-            parts = [f'#include "{prefix}_functions.h"']
-            for start in addresses[first:first + FUNCTIONS_PER_FILE]:
-                text, _, missing = emit_function(program, start, functions[start], starts)
-                unknown += missing
-                parts.append(text)
-            write_if_changed(out / f"{prefix}_part{files:04}.c", "\n".join(parts) + "\n")
-            files += 1
+                         f"{counter}{declarations}\n")
+        written, unknown = write_groups(program, functions, addresses, fast, out, prefix=prefix)
     finally:
         MODULE = None
-    for stale in out.glob(f"{prefix}_part*.c"):  # Left from a translation with more files.
-        if int(stale.stem.rsplit("part", 1)[1]) >= files:
-            stale.unlink()
     code_start = module.sections[prepared.section][0]
-    export_offsets = sorted(offset for _, section, offset in module.exports if section == prepared.section)
+    export_offsets = [offset for _, section, offset in module.exports if section == prepared.section]
     sites = []
-    for index in range(len(module.imports)):
+    for index in range(import_count):
         site = prepared.import_sites.get(index)
         if site is None:
             sites.append("{0, 0, 0, 0, 0}")
         elif site[0] == "branch":
             sites.append(f"{{1, 0x{site[1]:x}u, 0, 0, 0x{exports.get(module.imports[index], 0):x}u}}")
+        elif site[0] == "fixed":
+            sites.append(f"{{3, 0x{site[1]:x}u, 0, 0, 0x{site[2]:x}u}}")
         else:
             sites.append(f"{{2, 0x{site[1]:x}u, 0x{site[2]:x}u, 0x{site[3]:x}u, 0x{exports.get(module.imports[index], 0):x}u}}")
+    layout = REL_LAYOUT if module.kind == "rel" else RSO_LAYOUT
+    table_at = modules.REL_HEADER_BYTES[modules.big32(module.data, 0x1c)] if module.kind == "rel" else modules.HEADER_BYTES
     lines = [f'#include "{prefix}_functions.h"', '#include "../../runtime/modules.h"',
-             f"uint32_t {prefix}_code, {prefix}_section[{len(module.sections)}], {prefix}_import[{max(1, len(module.imports))}];",
+             f"uint32_t {prefix}_code, {prefix}_section[{len(module.sections)}], {prefix}_import[{max(1, import_count)}];",
+             f"uint32_t {prefix}_counts[{max(1, len(addresses))}];",
              f"static const ModuleFunction {prefix}_functions[] = {{" + ",".join(
                  f"{{0x{a - base:x}u,{function_name(a)}}}" for a in addresses) + "};",
              f"static const uint32_t {prefix}_exports[] = {{" + ",".join(f"0x{e:x}u" for e in export_offsets or [0]) + "};",
@@ -857,21 +897,40 @@ def emit_module(path, number, out, exports):
                  f"0x{r:x}u" for r in sorted(prepared.relocated_words)) + "};",
              f"static const ImportSite {prefix}_sites[] = {{" + ",".join(sites or ["{0, 0, 0, 0, 0}"]) + "};"]
     entry = (f'{{"{module.name}", 0x{code_start:x}u, 0x{len(prepared.code):x}u, {len(module.sections)}, {prepared.section}, '
+             f"{layout[0]}, {layout[1]}, 0x{table_at:x}u, {module.module_id}u, "
              f"{prefix}_functions, {len(addresses)}, {prefix}_exports, {len(export_offsets)}, "
              f"{prefix}_relocated, {len(prepared.relocated_words)}, 0x{prepared.check:x}ull, "
-             f"{prefix}_sites, {len(module.imports)}, &{prefix}_code, {prefix}_section, {prefix}_import}}")
+             f"{prefix}_sites, {import_count}, &{prefix}_code, {prefix}_section, {prefix}_import, "
+             f"{prefix + '_counts' if counting else '0'}}}")
     lines.append(f"const Module {prefix}_module = {entry};")
     write_if_changed(out / f"{prefix}_table.c", "\n".join(lines) + "\n")
-    print(f"{module.name}: {len(addresses)} functions in {files} files")
+    fast_count = len(fast & set(addresses))
+    print(f"{module.name}: {len(addresses)} functions in {len(written)} files, {len(called)} program functions called directly"
+          + (f", {fast_count} compiled for speed and {len(addresses) - fast_count} quickly" if counting else ""))
     if unknown:
         print(f"{module.name} not yet translated:", unknown.most_common(20))
     return prefix
 
 
-def write_modules(system, out, exports):
-    """Every module the title loads at run time, from sys/modules, as native code."""
-    prefixes = [emit_module(path, number, out, exports)
-                for number, path in enumerate(sorted((system / "modules").glob("*.rso")))]
+# Where a linked module's header gives its section count and section table.
+RSO_LAYOUT, REL_LAYOUT = (0x08, 0x0c), (0x0c, 0x10)
+
+
+def write_modules(found, out, exports, program_starts, module_counts=None):
+    """Every module the title loads at run time as native code, where it can be prepared.
+    `module_counts` is {module name: {offset: runs}} when building in two tiers."""
+    prefixes = []
+    for number, (_, module) in enumerate(found):
+        counts = None if module_counts is None else module_counts.get(module.name, {})
+        prefix = emit_module(module, number, out, exports, program_starts, counts)
+        if prefix is None:
+            for stale in out.glob(f"m{number}_*"):
+                stale.unlink()
+        else:
+            prefixes.append(prefix)
+    for stale in out.glob("m*_*.[ch]"):  # From a build with more modules.
+        if re.fullmatch(r"m(\d+)_.*", stale.name) and f"m{stale.name[1:].split('_')[0]}" not in prefixes:
+            stale.unlink()
     write_if_changed(out / "modules.c", '#include "../../runtime/modules.h"\n'
                      + "".join(f"extern const Module {prefix}_module;\n" for prefix in prefixes)
                      + f"const Module *const title_modules[] = {{{', '.join(f'&{p}_module' for p in prefixes) or '0'}}};\n")
@@ -898,12 +957,13 @@ def group_texts(group_number):
     return tiers, unknown
 
 
-def write_groups(program, functions, addresses, fast, out, jobs=None):
+def write_groups(program, functions, addresses, fast, out, jobs=None, prefix=""):
     """Writes the functions, FUNCTIONS_PER_FILE to a group by address: those in `fast` to
     part<group>.c and the rest, counting their runs, to cold<group>.c. Groups don't move
     when tiers change, so a function changing tier rewrites only its own group's files.
-    Groups are written on every core where processes can fork. Returns the file names
-    written and the instructions not yet translated."""
+    Groups are written on every core where processes can fork. A module's groups are
+    m<n>_part<group>.c and so on, with `prefix` m<n>. Returns the file names written and
+    the instructions not yet translated."""
     global _GROUP_INPUT
     _GROUP_INPUT = (program, functions, addresses, fast, set(addresses))
     groups = range((len(addresses) + FUNCTIONS_PER_FILE - 1) // FUNCTIONS_PER_FILE)
@@ -915,15 +975,17 @@ def write_groups(program, functions, addresses, fast, out, jobs=None):
         results = map(group_texts, groups)
     unknown = Counter()
     written = set()
+    lead, header = (f"{prefix}_", f"{prefix}_functions.h") if prefix else ("", "functions.h")
     for group_number, (tiers, missing) in zip(groups, results):
         unknown += missing
         for tier, texts in tiers.items():
             if texts:
-                name = f"{tier}{group_number:04}.c"
-                write_if_changed(out / name, "\n".join(['#include "functions.h"'] + texts) + "\n")
+                name = f"{lead}{tier}{group_number:04}.c"
+                write_if_changed(out / name, "\n".join([f'#include "{header}"'] + texts) + "\n")
                 written.add(name)
+    pattern = re.compile(re.escape(lead) + GROUP_FILE.pattern)
     for stale in out.glob("*.c"):  # Groups from an earlier build with other tiers or fewer functions.
-        if GROUP_FILE.fullmatch(stale.name) and stale.name not in written:
+        if pattern.fullmatch(stale.name) and stale.name not in written:
             stale.unlink()
     return written, unknown
 
@@ -939,15 +1001,28 @@ def option_values(name):
 
 
 def read_profile(path):
-    """{address: count} from a console's profile.txt. A missing file gives none."""
+    """{address: count} for the program's functions from a console's profile.txt. A missing
+    file gives none."""
+    return read_counts(path)[0]
+
+
+def read_counts(path):
+    """The program's counts, {address: count}, and its modules', {module name: {offset:
+    count}}, from a console's profile.txt. Module functions are kept as <name>+<offset>,
+    as a module can be loaded anywhere."""
+    counts, module_counts = {}, {}
     if not path.exists():
-        return {}
-    counts = {}
+        return counts, module_counts
     for line in path.read_text().splitlines():
         if line and not line.startswith("#"):
-            address, count = line.split()
-            counts[int(address, 16)] = counts.get(int(address, 16), 0) + int(count)
-    return counts
+            place, count = line.split()
+            if "+" in place:
+                name, offset = place.rsplit("+", 1)
+                own = module_counts.setdefault(name, {})
+                own[int(offset, 16)] = own.get(int(offset, 16), 0) + int(count)
+            else:
+                counts[int(place, 16)] = counts.get(int(place, 16), 0) + int(count)
+    return counts, module_counts
 
 
 def choose_fast(counts, share=HOT_SHARE):
@@ -986,9 +1061,13 @@ def main():
     # After resolving, as finding a function can depend on counting its neighbours.
     if "--all-code" in sys.argv:
         add_unreached_code(program, functions)
-    # Program functions only its run-time modules call, by name from its export list.
+    # Program functions only its run-time modules call: by name from its export list for
+    # RSOs, by address for RELs.
+    found = title_modules(dol.parent)
     exports = export_addresses(dol.parent, functions) if (dol.parent / "modules").is_dir() else {}
-    called = module_imports(dol.parent) if exports else set()
+    called = module_imports(found) if exports else set()
+    program_calls = {a for a in module_program_calls(found) if program.is_code(a)}
+    add_starts(program, functions, program_calls)
     unplaced = sorted(name for name in called if name not in exports)
     if unplaced:  # The runtime checks each has native code once a module is linked.
         print("module calls placed only at run time:", ", ".join(unplaced))
@@ -1001,7 +1080,8 @@ def main():
 
     profile = option_values("--profile")
     counting = bool(profile)
-    fast = choose_fast(read_profile(Path(profile[-1]))) if counting else set(addresses)
+    program_counts, module_counts = read_counts(Path(profile[-1])) if counting else ({}, None)
+    fast = choose_fast(program_counts) if counting else set(addresses)
     written, unknown = write_groups(program, functions, addresses, fast, out)
 
     table = ",\n".join(f"{{0x{a:x}u, {function_name(a)}}}" for a in addresses)
@@ -1015,7 +1095,7 @@ def main():
     print(f"{len(addresses)} functions in {len(written)} files" +
           (f", {fast_count} compiled for speed and {len(addresses) - fast_count} quickly" if counting else ""))
     print("not yet translated:", unknown.most_common(40))
-    module_count = write_modules(dol.parent, out, exports)
+    module_count = write_modules(found, out, exports, starts, module_counts)
     apploader = emit_apploader(dol.parent, out, program)
     write_if_changed(out / "title.c", title_description(dol.read_bytes(), (dol.parent.parent / "tmd.bin").read_bytes(), values,
                                                         len(addresses), module_count, apploader, counting))
