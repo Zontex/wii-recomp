@@ -207,6 +207,7 @@ def main():
         print("nothing has run yet, so everything compiles quickly and counts its runs")
     discovered = recorded(key, "discovered.txt", settings["consoles"])
 
+    (CONSOLE_BUILD / "obj").mkdir(parents=True, exist_ok=True)
     run("build the console", [sys.executable, str(RECOMP / "translate/build_file.py"), str(CONSOLE_BUILD)])
     run("compile the console", ["ninja", "-j", str(options.jobs), "wii-recomp"], cwd=CONSOLE_BUILD)
     emit = [sys.executable, str(RECOMP / "translate/emit.py"), str(disc / "sys/main.dol"), str(build / "generated"),

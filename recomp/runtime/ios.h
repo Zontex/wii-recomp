@@ -46,6 +46,7 @@ void files_save_path(const char *path, char *out, unsigned long size);
 int files_storage_path(const char *path, char *out, unsigned long size);
 void files_make_parents(const char *full);
 int files_find(const char *path, char *out, unsigned long size);
+void system_files_make(void);  // What the Wii Menu makes on a new Wii, where storage lacks it.
 int fs_request(uint32_t command, uint32_t request);
 int files_open(const char *path, uint32_t mode);  // A handle, or an FS error such as FS_ENOENT.
 void files_save_all(void);

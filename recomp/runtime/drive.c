@@ -279,6 +279,9 @@ static int read_source(int source, uint64_t at, uint64_t bytes, uint8_t *out) {
 
 int drive_read(uint64_t offset, uint32_t bytes, uint8_t *out) {
   if (!has_disc) return 0;
+  static int logged = -1;  // WII_RECOMP_DISC_LOG: each read's place in the data partition and size.
+  if (logged < 0) logged = getenv("WII_RECOMP_DISC_LOG") != 0;
+  if (logged) fprintf(stderr, "disc read %llx %x\n", (unsigned long long)offset, bytes);
   int index = piece_from(offset);
   while (bytes) {
     const Piece *piece = index < piece_count ? &pieces[index] : 0;

@@ -5,6 +5,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "debug.h"
 #include "debug.h"
@@ -439,6 +440,24 @@ void gx_clear(void) {
   gx_backend->clear(&clear);
 }
 
+// With WII_RECOMP_FPS_LOG set, the frames shown in each second of real time.
+static void log_frame_rate(void) {
+  static int wanted = -1;
+  static struct timespec second_began;
+  static unsigned shown;
+  if (wanted < 0) wanted = getenv("WII_RECOMP_FPS_LOG") != 0;
+  if (!wanted) return;
+  struct timespec now;
+  clock_gettime(CLOCK_MONOTONIC, &now);
+  if (!second_began.tv_sec) second_began = now;
+  shown++;
+  double seconds = (double)(now.tv_sec - second_began.tv_sec) + (now.tv_nsec - second_began.tv_nsec) / 1e9;
+  if (seconds < 1) return;
+  fprintf(stderr, "fps %.1f\n", shown / seconds);
+  shown = 0;
+  second_began = now;
+}
+
 void gx_present(void) {
   if (!started) start();
   gx_inspect_frame();
@@ -446,4 +465,5 @@ void gx_present(void) {
   gx_copy_rectangle(&from.x, &from.y, &from.width, &from.height);
   gx_backend->present(&from);
   if (++frames <= 3 || frames % 300 == 0) fprintf(stderr, "frame %u\n", frames);
+  log_frame_rate();
 }

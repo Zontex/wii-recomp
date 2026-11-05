@@ -162,6 +162,7 @@ int main(int count, char **arguments) {
   hardware_start();
   audio_start();
   files_start(count > 2 ? arguments[2] : count == 2 ? default_storage() : 0);
+  system_files_make();
   pthread_attr_t attributes;
   pthread_attr_init(&attributes);
   pthread_attr_setstacksize(&attributes, STACK_BYTES);

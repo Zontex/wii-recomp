@@ -124,6 +124,16 @@ class Runtime(unittest.TestCase):
         self.assertEqual({k: v[0] for k, v in tree(storage).items()}, {k: v[0] for k, v in before.items()})
         self.assertEqual((saves / "shared2/only_storage").read_text()[:3], "new")
 
+    def test_system_files_made_on_a_new_wii(self):
+        storage, saves = self.folder / "storage", self.folder / "saves"
+        (storage / "shared2/wc24").mkdir(parents=True)
+        (storage / "shared2/wc24/nwc24msg.cfg").write_bytes(b"WcCf" + bytes(0x3fc))
+        saves.mkdir()
+        before = tree(storage)
+        self.build_and_run([HERE / "c/test_system_files.c", RUNTIME / "system_files.c", RUNTIME / "fs.c",
+                            RUNTIME / "files.c", RUNTIME / "gaps.c"], storage, saves)
+        self.assertEqual(tree(storage), before)
+
     def test_modules_loaded_at_run_time(self):
         sources = [HERE / "c/test_modules.c", RUNTIME / "dispatch.c", RUNTIME / "interp.c", RUNTIME / "quantized.c", RUNTIME / "profile.c"]
         self.build_and_run(sources, "match")
