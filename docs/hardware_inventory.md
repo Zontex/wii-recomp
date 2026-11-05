@@ -26,10 +26,10 @@ Statuses:
 | 3. TEV and pixel features | 48 | 13 | 10 | 0 | 4 | 1 | 76 |
 | 4. Vertex and texture | 49 | 11 | 0 | 3 | 1 | 2 | 66 |
 | 5. Hardware blocks | 30 | 9 | 6 | 0 | 5 | 15 | 65 |
-| 6. Audio microcodes | 12 | 5 | 13 | 0 | 4 | 1 | 35 |
+| 6. Audio microcodes | 21 | 2 | 12 | 0 | 5 | 1 | 41 |
 | 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
 | 8. Controllers | 34 | 16 | 7 | 0 | 6 | 2 | 65 |
-| **All** | **343** | **109** | **53** | **4** | **40** | **53** | **602** |
+| **All** | **352** | **106** | **52** | **4** | **41** | **53** | **608** |
 
 ## Biggest gaps
 
@@ -39,7 +39,7 @@ Ordered by how likely a real game is to hit them.
 2. **Disc images are read only in this project's own format** (`hw.disc_image_files_iso_wbfs_rvz`). ISO, WBFS and RVZ need extracting first.
 3. **Picture copies never reach memory, and EFB peek, poke and bounding box are missing** (`pixel.copy_to_texture`, `pixel.efb_peek_cpu_reads_color_depth`, `pixel.efb_poke_cpu_writes`, `pixel.bounding_box`). The CPU reads a stamp, not pixels. Pokes land in the hardware register shadow.
 4. **ES and DI answer errors to much of what a Wii does** (`ios.identify_ticket_tmd_verify`, `ios.getlength_seek_readdvd`, `ios.openpartition_with_tmd_0x93_0x94`, `ios.encrypt_decrypt`, `ios.launch_return_to_menu_start_title`). Launching works only between the Wii Menu and a disc.
-5. **Only one audio program exists** (`audio.*`). AX in its newer command format. Zelda-family games, older AX and GameCube AX are silent.
+5. **The Zelda family's audio program hasn't been checked against the real one** (`audio.zelda_*`). AX in every version has a C version, equal to the real program on Mario Kart Wii; any program without one runs on the interpreter. The Zelda family's C version, which Super Mario Galaxy 2 uses, follows Dolphin's but has no recording to be compared with yet, and Galaxy 2 reports four mix buffers it doesn't know.
 6. **`setjmp`, C++ exceptions and fibers are at risk** (`cpu.bclr`). `blr` is a host `return`, so code that switches stacks leaves the host stack out of step.
 7. **Self-modifying code** (`cpu.self_modifying_code_icbi`). `icbi` is a no-op, so translated code is never replaced.
 8. **Video interface registers are only stored** (`hw.*` in VI). No beam position, interlace, PAL or 480p modes.
@@ -649,7 +649,7 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 
 ## 6. Audio microcodes
 
-The game's program is recognised by a checksum of its code, as Dolphin does, and its work is rewritten in C. Programs with no C version are run by an interpreter instead, so rows below that are missing in C still play, only more slowly.
+The game's program is recognised by a checksum of its code, as Dolphin does, and its work is rewritten in C. Programs with no C version are run by an interpreter instead, so rows below that are missing in C still play, only more slowly. The interpreter running the real program is also what the C versions are measured against, on sound recordings played by `recomp/tools/sound_bench.py`; each note says whether a recording has reached that row or only Dolphin's code was the guide.
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|

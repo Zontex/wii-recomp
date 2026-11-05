@@ -1,5 +1,6 @@
 """Sound recordings (recomp/runtime/dsp_record.c) and their player and bench
 (recomp/tools/sound_replay.c, sound_bench.py), on made-up programs and data."""
+import os
 import re
 import shutil
 import struct
@@ -234,6 +235,31 @@ class SoundRecordings(unittest.TestCase):
         recording.save(path, 1000, end)
         result = self.play(path)
         self.assertEqual((result["first_mails"], result["mail_steps_differ"]), ("differ", "1"))
+
+
+    def test_muting_keeps_timing(self):
+        """The same interrupts and mails at the same times, muted or not: only the output
+        device is left out."""
+        program = Path(self.folder.name) / "mute_timing"
+        sources = ["audio.c", "ax.c", "zelda.c", "dsp_lle.c", "dsp_lle_ops.c", "dsp_accelerator.c"]
+        subprocess.run(["clang", str(HERE / "c/test_mute_timing.c"), *(str(RUNTIME / name) for name in sources), *FLAGS,
+                        "-o", str(program)], check=True, capture_output=True, text=True)
+        runs = []
+        for muted in (False, True):
+            environment = {key: value for key, value in os.environ.items() if key != "WII_RECOMP_MUTE"}
+            if muted:
+                environment["WII_RECOMP_MUTE"] = "1"
+            run = subprocess.run([str(program), str(RUNTIME / "data")], capture_output=True, text=True, timeout=60,
+                                 env=environment)
+            self.assertEqual(run.returncode, 0, run.stdout + run.stderr)
+            self.assertTrue(run.stdout.endswith("ok\n"), run.stdout[-500:])
+            runs.append(run.stdout.splitlines())
+        unmuted, muted = runs
+        self.assertEqual(unmuted[-2], "output opened")
+        self.assertEqual(muted[-2], "output not opened")
+        self.assertEqual(unmuted[:-2], muted[:-2])
+        self.assertGreater(sum("dsp interrupt, mail dcd10002" in line for line in muted), 500)
+        self.assertGreater(sum("dma interrupt" in line for line in muted), 500)
 
 
 if __name__ == "__main__":
