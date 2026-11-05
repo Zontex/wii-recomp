@@ -30,6 +30,7 @@ void gx_load_palette(void) {
 // Fills palette memory from a copy of the chip's texture memory, as a recording holds.
 // Dolphin keeps palettes in the first half of it, at the same places as here.
 void gx_restore_palettes(const uint8_t *texture_memory) { memcpy(palette_memory, texture_memory, PALETTE_BYTES); }
+void gx_save_palettes(uint8_t *texture_memory) { memcpy(texture_memory, palette_memory, PALETTE_BYTES); }
 
 static void put(uint8_t *to, int r, int g, int b, int a) {
   to[0] = (uint8_t)r; to[1] = (uint8_t)g; to[2] = (uint8_t)b; to[3] = (uint8_t)a;

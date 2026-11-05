@@ -70,6 +70,7 @@ static uint32_t stream_used;
 static uint8_t burst[BURST_BYTES];
 static uint32_t burst_used;
 static uint32_t pe_enabled, pe_status, pe_token;
+static int frame_shown;  // A copy to the screen was just read.
 static _Atomic uint64_t finish_due, token_due;
 static int at_breakpoint;
 static uint32_t fifo_flags;  // Overflow and underflow, until the game clears them.
@@ -159,6 +160,7 @@ static void write_bp(uint32_t value) {
       uint64_t present_start = time_base();
       gx_present();
       stage_add(STAGE_PRESENT, time_base() - present_start);
+      frame_shown = 1;
     }
     else gx_copy_to_texture(data, (gx.bp[BP_PIXEL_FORMAT] & PIXEL_FORMAT_MASK) == PIXEL_FORMAT_DEPTH);
     if (data & (1u << COPY_CLEAR_BIT)) gx_clear();
@@ -173,7 +175,7 @@ static void load_indexed(int command, uint32_t value) {
 }
 
 // Parses one command, returns its bytes, or 0 if it isn't all here yet.
-static uint32_t parse_one(const uint8_t *p, uint32_t left) {
+static uint32_t parse_command(const uint8_t *p, uint32_t left) {
   int command = p[0];
   // 0x44 starts the chip's counters for a profiler, and is one byte, as Dolphin's OpcodeDecoding.cpp reads it.
   if (command == COMMAND_NOP || command == COMMAND_INVALIDATE || command == COMMAND_METRICS) return 1;
@@ -209,7 +211,9 @@ static uint32_t parse_one(const uint8_t *p, uint32_t left) {
     if (list) {
       GxCalledList outer = gx_called_list;
       gx_called_list = (GxCalledList){address, list_bytes, watch_range(address, list_bytes), list};
+      gx_record_list_enter();
       gx_parse(list, list_bytes);
+      gx_record_list_leave();
       gx_called_list = outer;
     }
     return 9;
@@ -236,6 +240,18 @@ static uint32_t parse_one(const uint8_t *p, uint32_t left) {
   static int warnings;
   if (warnings++ < 20) fprintf(stderr, "gx: unknown command %02x\n", command);
   return 1;
+}
+
+// Each command read is also offered to a recording (gx_record.c), which ends its frames
+// after the command that showed one.
+static uint32_t parse_one(const uint8_t *p, uint32_t left) {
+  uint32_t used = parse_command(p, left);
+  if (used) gx_record_command(p, used);
+  if (frame_shown) {
+    frame_shown = 0;
+    gx_record_frame_shown();
+  }
+  return used;
 }
 
 void gx_parse(const uint8_t *data, uint32_t bytes) {

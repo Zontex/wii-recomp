@@ -243,9 +243,10 @@ static void begin_frame(Frame *frame) {
   forget_set_state();
 }
 
-// Timing of one frame in every 300, on when WII_RECOMP_GPU_TIMES is set.
+// Timing of one frame in every 300, on when WII_RECOMP_GPU_TIMES is set, or in every n
+// when it is set to a number n of 2 or more.
 enum { MARKS = 96 };
-static VkQueryPool mark_pool; static int marks, mark_on = -1, mark_frame; static int capturing; static char mark_names[MARKS][48];
+static VkQueryPool mark_pool; static int marks, mark_on = -1, mark_frame, mark_period = 300; static int capturing; static char mark_names[MARKS][48];
 static unsigned mark_draws;
 static void mark(const char *name, int w, int h) {
   if (!capturing || marks >= MARKS || in_strip) return;
@@ -256,10 +257,11 @@ static void mark(const char *name, int w, int h) {
 }
 static void mark_frame_start(void) {
   if (mark_on < 0) { mark_on = getenv("WII_RECOMP_GPU_TIMES") != 0;
+    if (mark_on && atoi(getenv("WII_RECOMP_GPU_TIMES")) >= 2) mark_period = atoi(getenv("WII_RECOMP_GPU_TIMES"));
     if (mark_on) { VkQueryPoolCreateInfo q = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = MARKS};
       vk_check(vkCreateQueryPool(vk.device, &q, 0, &mark_pool), "query pool"); } }
   capturing = 0;
-  if (!mark_on || ++mark_frame % 300) return;
+  if (!mark_on || ++mark_frame % mark_period) return;
   vkCmdResetQueryPool(vk.frame->draw, mark_pool, 0, MARKS);
   marks = 0; capturing = 1; mark("start", 0, 0);
 }
@@ -347,6 +349,8 @@ static VkFramebuffer framebuffer_for(int visible) {
   return visible ? visible_framebuffer : vk.efb_framebuffer;
 }
 
+static int pass_began_as;  // For the GPU times: how the open pass began, as render pass kind, plus 16 if by a clear.
+
 static void start_pass_with_clear(void) {
   int learned = pass_kind_learned();
   if (learned & CLEARS_DEPTH) waiting_clear.values[1].depthStencil.depth = depth_use.clear_depth;
@@ -358,6 +362,7 @@ static void start_pass_with_clear(void) {
                                 .framebuffer = framebuffer_for(visible), .renderArea = area,
                                 .clearValueCount = 2, .pClearValues = waiting_clear.values};
   vkCmdBeginRenderPass(vk.frame->draw, &info, VK_SUBPASS_CONTENTS_INLINE);
+  pass_began_as = 16 | waiting_clear.kind;
   waiting_clear.kind = 0;
   pass_area = area;
   pass_open = 1;
@@ -375,7 +380,9 @@ static void end_pass(void) {
     // What's learned is by a pass's place in the frame, so the frames must have one shape.
     depth_use.shape = depth_use.shape * 31 + pass_area.extent.width * 7 + pass_area.extent.height + pass_area.offset.y * 3;
   }
-  mark("pass", (int)pass_area.extent.width, (int)pass_area.extent.height);
+  char name[24];
+  snprintf(name, sizeof name, "pass (began %d)", pass_began_as);
+  mark(name, (int)pass_area.extent.width, (int)pass_area.extent.height);
 }
 
 static int rectangle_holds(const VkRect2D *outer, const VkRect2D *inner) {
@@ -415,6 +422,7 @@ static void begin_pass(const VkRect2D *area) {
   VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = vk.render_pass, .framebuffer = framebuffer_for(0),
                                 .renderArea = wanted};
   vkCmdBeginRenderPass(vk.frame->draw, &info, VK_SUBPASS_CONTENTS_INLINE);
+  pass_began_as = 0;
   pass_open = 1;
   pass_area = wanted;
   gx_stats.passes++;
@@ -898,6 +906,7 @@ static void clear_now(const GxClear *c) {
   VkCommandBuffer commands = vk.frame->draw;
   VkRect2D area = clip_to_efb(&c->area);
   begin_pass(&area);
+  if (!pass_began_as) pass_began_as = 32 | c->color_write | c->alpha_write << 1 | c->depth_write << 2;  // Drawn as a clear.
   set_pipeline(commands, vk_pipeline_find(clear_shader, &state));
   VkViewport whole = {0, 0, EFB_PIXEL_WIDTH, EFB_PIXEL_HEIGHT, 0, 1};
   set_viewport_and_scissor(commands, &whole, &area);

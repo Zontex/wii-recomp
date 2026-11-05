@@ -53,6 +53,8 @@ Each stage is **done**, **in progress** or **planned**, and each item is ticked 
 
 - [x] **Draw inspector** (`WII_RECOMP_GX_INSPECT`): lists every draw of one frame with its formats, textures and stage setup, and can skip any range of draws to show which one paints what
 - [x] **FIFO replay** (`recomp/tools/replay`): plays a Dolphin FIFO Player recording through our renderer with no game running, and saves each frame
+- [x] **Recording from the console** (`runtime/gx_record.c`): the control pipe's `record <frames> <file>`, or `WII_RECOMP_RECORD`, saves frames of any game in the same format, so a scene needs no menus to reach again
+- [x] **Scene bench** (`recomp/tools/scene_bench.py`): plays every recording in a folder, with processor and graphics chip time per frame, the chip's costliest steps, and a picture comparison against an earlier run
 - [x] **Picture comparison** (`recomp/tools/compare_frames.py`): a numeric difference and a difference image per frame
 - [x] **CPU test harness** (`test/test_recomp_differential.py`): runs every instruction family through both the translator and the interpreter and compares the registers
 - [x] **Menu benchmark** (`recomp/tools/menu_bench.py`): tours 16 Wii Menu screens and reports frame rate and the worst frame for each

@@ -6,6 +6,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <time.h>
 #include <zlib.h>
 
 #include "cpu.h"
@@ -112,7 +113,11 @@ static void clear_whole_picture(const Dff *dff) {
   write_bp(BP_COPY_SIZE, dff->bp[BP_COPY_SIZE]);
 }
 
+static double now_ms(void);
+static double memory_ms;  // Time spent putting recorded memory in, which isn't the chip's work.
+
 static void write_memory(const DffUpdate *update) {
+  double began = now_ms();
   uint32_t physical = update->address & PHYSICAL_MASK;
   uint8_t *base = mem1;
   uint64_t size = MEM1_SIZE;
@@ -126,6 +131,7 @@ static void write_memory(const DffUpdate *update) {
     exit(EXIT_STOP);
   }
   memcpy(base + physical, update->data, update->bytes);
+  memory_ms += now_ms() - began;
 }
 
 // Memory goes in just as the commands reach the place it was recorded at. Those places
@@ -152,11 +158,25 @@ static uint32_t parse_frame_limit(const char *text) {
   return (uint32_t)limit;
 }
 
+static double clock_ms(clockid_t clock) {
+  struct timespec t;
+  clock_gettime(clock, &t);
+  return (double)t.tv_sec * 1e3 + (double)t.tv_nsec / 1e6;
+}
+static double now_ms(void) { return clock_ms(CLOCK_MONOTONIC); }
+
 int main(int argc, char **argv) {
-  uint32_t limit = UINT32_MAX;
-  if (argc == 5 && !strcmp(argv[3], "--frames")) limit = parse_frame_limit(argv[4]);
-  else if (argc != 3) {
-    fprintf(stderr, "usage: %s <recording.dff> <folder for the frames> [--frames <count>]\n", argv[0]);
+  uint32_t limit = UINT32_MAX, repeats = 1;
+  int bad = argc < 3;
+  for (int i = 3; i + 1 < argc + 1 && !bad; i += 2) {
+    if (i + 1 >= argc) bad = 1;
+    else if (!strcmp(argv[i], "--frames")) limit = parse_frame_limit(argv[i + 1]);
+    else if (!strcmp(argv[i], "--repeat")) repeats = parse_frame_limit(argv[i + 1]);
+    else bad = 1;
+  }
+  if (bad) {
+    fprintf(stderr, "usage: %s <recording.dff> <folder for the frames> [--frames <count>] [--repeat <times>]\n"
+                    "  --repeat plays the frames again and again, saving the pictures only the first time, to time them.\n", argv[0]);
     return EXIT_USAGE;
   }
   Dff *dff = dff_load(argv[1]);
@@ -189,6 +209,29 @@ int main(int argc, char **argv) {
     if (snprintf(path, sizeof path, "%s/frame-%0*u.png", argv[2], FRAME_NAME_DIGITS, i) >= (int)sizeof path) stop_because("folder name too long", argv[2]);
     save_png(path);
     saved++;
+  }
+  // Each turn after the first starts from the recording's memory and registers again, so
+  // every turn draws the same. The first frame of a turn also brings all memory in.
+  // Pictures aren't read back while timing, as a game never waits for that.
+  double slowest = 0, total = 0, working = 0;
+  uint32_t timed = 0;
+  vk_picture_sink = 0;
+  for (uint32_t turn = 1; turn < repeats; turn++) {
+    load_registers(dff);
+    for (uint32_t i = 0; i < frames; i++) {
+      double began = now_ms(), began_working = clock_ms(CLOCK_THREAD_CPUTIME_ID), memory_before = memory_ms;
+      play_frame(&dff->frames[i]);
+      double took = now_ms() - began - (memory_ms - memory_before);
+      if (i == 0) continue;
+      total += took, timed++;
+      working += clock_ms(CLOCK_THREAD_CPUTIME_ID) - began_working - (memory_ms - memory_before);
+      if (took > slowest) slowest = took;
+    }
+  }
+  // Working time leaves out waiting for the graphics chip.
+  if (timed) {
+    printf("timed %u frames: %.2f ms each on average, %.2f ms at most, %.2f ms of it working, first frames of each turn and putting memory in left out\n",
+           timed, total / timed, slowest, working / timed);
   }
   printf("saved %u of %u frames at %dx%d: %u draws, %u copies to the screen, %u frames with none, %u with several\n", saved, frames, picture_width,
          picture_height, gx_stats.draws, gx_stats.to_screen, no_copy, several);

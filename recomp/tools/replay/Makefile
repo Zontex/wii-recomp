@@ -6,7 +6,7 @@
 EFB_SCALE ?= 2
 BUILD ?= build
 RUNTIME = ../../runtime
-GX_SOURCES = debug gaps guest_memory memory_watch gx_backend gx_copy gx_draw gx_fifo gx_inspect gx_light gx_shader gx_tev gx_texture gx_transform gx_vertex gx_vulkan gx_vulkan_device gx_vulkan_pipeline gx_vulkan_window dff
+GX_SOURCES = debug gaps guest_memory memory_watch gx_backend gx_copy gx_draw gx_fifo gx_record gx_inspect gx_light gx_shader gx_tev gx_texture gx_transform gx_vertex gx_vulkan gx_vulkan_device gx_vulkan_pipeline gx_vulkan_window dff
 
 CFLAGS = -O2 -w -fno-strict-aliasing -fwrapv -fsigned-char -ffp-contract=off -I$(RUNTIME) -I/usr/local/include -DGX_WITH_VULKAN "-DEFB_SCALE=$(EFB_SCALE)"
 LDLIBS = -L/usr/local/lib -lglfw -lz -lm -lpthread

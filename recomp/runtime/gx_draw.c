@@ -445,6 +445,10 @@ void gx_clear(void) {
   clear.depth = (double)(gx.bp[BP_CLEAR_DEPTH] & 0xffffff) / 0xffffff;
   clear.color_write = (blend >> 3) & 1;
   clear.alpha_write = ((blend >> 4) & 1) && gx_target_has_alpha();  // As in Dolphin's ClearScreen.
+  // A picture with no alpha never shows what its alpha holds: blending reads it as full
+  // and copies make it full. So a clear of color may clear alpha too, which lets a
+  // backend begin its next pass with the clear instead of drawing it.
+  if (!gx_target_has_alpha() && clear.color_write) clear.alpha_write = 1;
   clear.depth_write = (gx.bp[BP_Z_MODE] >> 4) & 1;
   gx_backend->clear(&clear);
 }

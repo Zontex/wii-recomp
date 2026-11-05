@@ -102,6 +102,14 @@ extern unsigned gx_cp_written;
 DecodedTexture gx_decode_texture(int map, TextureMemo *memo);
 void gx_load_palette(void);
 void gx_restore_palettes(const uint8_t *texture_memory);
+void gx_save_palettes(uint8_t *texture_memory);
+
+// Recording frames for recomp/tools/replay (gx_record.c).
+void gx_record_request(int frames, const char *path);
+void gx_record_command(const uint8_t *bytes, uint32_t count);
+void gx_record_frame_shown(void);
+void gx_record_list_enter(void);
+void gx_record_list_leave(void);
 
 enum { MAX_STAGES = 16, TEV_INDIRECT_SOURCES = 4, TEV_INDIRECT_MATRICES = 3 };
 
