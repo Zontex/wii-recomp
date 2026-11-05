@@ -54,13 +54,14 @@ static int has_attachment(int device) {
   return is_board(device) || plugged;
 }
 
-// The keyboard, pipe and controllers press the first remote's buttons. The board has a
-// single button, its power switch, which nothing presses.
-static void buttons_into(int device, uint8_t *to) {
-  uint32_t buttons = device == 0 ? input_buttons() : 0;
+// Remote n is player n+1's. The board has a single button, its power switch, which
+// nothing presses.
+static void put_buttons(uint32_t buttons, uint8_t *to) {
   to[0] = (uint8_t)(buttons & 0x1f);
   to[1] = (uint8_t)((buttons >> 8) & 0x9f);
 }
+
+static void buttons_into(int device, uint8_t *to) { put_buttons(is_board(device) ? 0 : input_buttons(device), to); }
 
 static void report_status(int device) {
   uint8_t report[7] = {REPORT_STATUS};
@@ -94,7 +95,7 @@ static void read_memory(uint32_t address, uint8_t *out, uint32_t bytes) {
 
 static void attachment_bytes(int device, uint32_t offset, uint8_t *out, uint32_t bytes) {
   if (is_board(device)) board_read(offset, out, bytes);
-  else attachment_read(offset, out, bytes);
+  else attachment_read(device, offset, out, bytes);
 }
 
 // Reads come back in pieces of at most 16 bytes.
@@ -146,7 +147,7 @@ void wii_remote_simulated_output(int device, const uint8_t *data, uint32_t bytes
     uint32_t bytes_written = data[5] > MEMORY_PIECE ? MEMORY_PIECE : data[5];
     if (address >> 16 == ATTACHMENT_SPACE) {
       if (is_board(device)) board_write(address & 0xffff, data + 6, bytes_written);
-      else attachment_write(address & 0xffff, data + 6, bytes_written);
+      else attachment_write(device, address & 0xffff, data + 6, bytes_written);
     } else if (address >> 16 == CAMERA_SPACE && !is_board(device)) {
       camera_write(address & 0xffff, data + 6, bytes_written);
     }
@@ -173,16 +174,16 @@ void wii_remote_simulated_update(int device, uint64_t now) {
   if (!mode || now < remotes[device].next_report) return;
   remotes[device].next_report = now + REPORT_TICKS;
   uint8_t report[REPORT_BYTES] = {mode->mode};
-  buttons_into(device, report + 1);
+  PlayerState player = {0};
+  if (!is_board(device)) input_snapshot(device, &player);
+  put_buttons(player.buttons, report + 1);
   if (mode->motion) {
     report[3] = 0x80;  // Held still and flat: one g on the Z axis.
     report[4] = 0x80;
     report[5] = 0x9a;
   }
   if (mode->camera_bytes && !is_board(device)) {
-    float x, y;
-    input_pointer_now(&x, &y);
-    camera_fill(x, y, report + mode->camera_at, mode->camera_bytes);
+    camera_fill(player.pointer_x, player.pointer_y, report + mode->camera_at, mode->camera_bytes);
   } else if (mode->camera_bytes) {
     memset(report + mode->camera_at, 0xff, mode->camera_bytes);
   }
@@ -190,7 +191,7 @@ void wii_remote_simulated_update(int device, uint64_t now) {
     memset(report + mode->attachment_at, 0, mode->attachment_bytes);
   } else if (mode->attachment_bytes) {
     if (is_board(device)) board_fill(report + mode->attachment_at, mode->attachment_bytes);
-    else attachment_fill(report + mode->attachment_at, mode->attachment_bytes);
+    else attachment_fill(device, &player, report + mode->attachment_at, mode->attachment_bytes);
   }
   if (!remotes[device].continuous && !memcmp(report, remotes[device].last_report, mode->bytes)) return;
   if (getenv("WII_RECOMP_BLUETOOTH_LOG") && (report[1] != remotes[device].last_report[1] || report[2] != remotes[device].last_report[2])) {

@@ -15,6 +15,8 @@
 #include "remote_link.h"
 #include "wii_remote.h"
 
+_Static_assert(BLUETOOTH_BOARD == PLAYERS, "a remote for each player, then the board");
+
 enum {
   USB_CONTROL = 0, USB_BULK = 1, USB_INTERRUPT = 2, VECTOR_BYTES = 8, CONTROL_DATA_VECTOR = 6,
   ENDPOINT_EVENTS = 0x81, ENDPOINT_DATA_IN = 0x82,
@@ -71,11 +73,11 @@ static void queue_event(int code, const uint8_t *parameters, uint32_t bytes);
 static uint32_t handle_of(int device) { return BLUETOOTH_FIRST_HANDLE + (uint32_t)device; }
 static const char *name_of(int device) { return device == BLUETOOTH_BOARD ? board_name : remote_name; }
 
-// The simulated remote is there unless a real one holds its slot, and the simulated board
-// likewise, in games built to use one: the ones with the board's calibration flag. With
-// WII_RECOMP_REMOTES=real or loopback only linked devices are there.
+// A connected player's simulated remote is there unless a real one holds its slot, and
+// the simulated board likewise, in games built to use one: the ones with the board's
+// calibration flag. With WII_RECOMP_REMOTES=real or loopback only linked devices are there.
 static int simulated_here(int device) {
-  int mode = link_mode(), wanted = device == 0 || (device == BLUETOOTH_BOARD && title->calibration_flag);
+  int mode = link_mode(), wanted = device == BLUETOOTH_BOARD ? title->calibration_flag != 0 : input_connected(device);
   if (mode == LINK_SIMULATED) return wanted;
   return mode == LINK_AUTO && wanted && !link_linked(device);
 }
@@ -239,6 +241,16 @@ static void receive_data(uint32_t address, uint32_t bytes) {
 // Devices arrive, leave and wake between the game's commands. One that called and got
 // no answer for ten seconds calls again, as a real remote does.
 enum { TICKS_PER_SECOND = 60750000, CALL_AGAIN_SECONDS = 10 };
+
+// A remote's own player pressing a button, or for the board, anyone.
+static int pressed(int device) {
+  if (device < PLAYERS) return input_buttons(device) != 0;
+  for (int i = 0; i < PLAYERS; i++) {
+    if (input_buttons(i)) return 1;
+  }
+  return 0;
+}
+
 void bluetooth_update(uint64_t now) {
   link_update(now);
   for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
@@ -251,7 +263,7 @@ void bluetooth_update(uint64_t now) {
   find_devices();
   for (int i = 0; i < BLUETOOTH_DEVICES; i++) {
     // A simulated device the game hung up on wakes with a press, as a real one does.
-    if (devices[i].hung_up && devices[i].source == SOURCE_SIMULATED && input_buttons()) devices[i].hung_up = devices[i].called = 0;
+    if (devices[i].hung_up && devices[i].source == SOURCE_SIMULATED && pressed(i)) devices[i].hung_up = devices[i].called = 0;
     if (devices[i].called && !devices[i].connected && now - devices[i].called_at > (uint64_t)CALL_AGAIN_SECONDS * TICKS_PER_SECOND) {
       devices[i].called = 0;
     }

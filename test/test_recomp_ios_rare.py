@@ -46,6 +46,19 @@ class RareRequests(unittest.TestCase):
         self.assertIn("remotes: the board 00:23:31:00:00:09 is player 5", result.stderr)
         self.assertIn("00:23:31:00:00:09 4", (self.folder / "remotes.txt").read_text())  # Its slot is remembered.
 
+    def test_loopback_devices_through_the_chip(self):
+        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "remote_link.c", "remote_link_loopback.c", "wii_attachment.c",
+                   "wii_attachment_key.c", "wii_board.c", "wii_camera.c", "input.c", "gaps.c"]
+        self.build_and_run([HERE / "c/test_loopback_chip.c"] + [RUNTIME / name for name in sources], self.folder / "remotes.txt")
+
+    def test_four_players_through_the_chip(self):
+        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "remote_link.c", "wii_attachment.c", "wii_attachment_key.c",
+                   "wii_board.c", "wii_camera.c", "input.c", "gaps.c"]
+        self.build_and_run([HERE / "c/test_players_chip.c"] + [RUNTIME / name for name in sources])
+
+    def test_players_controls_and_commands(self):
+        self.build_and_run([HERE / "c/test_players.c", RUNTIME / "input.c"])
+
     @unittest.skipUnless(sys.platform == "linux", "Linux's Bluetooth backend")
     def test_linux_remote_sockets(self):
         sources = [HERE / "c/test_remote_link_linux.c", RUNTIME / "remote_link_linux.c", RUNTIME / "remote_link.c"]

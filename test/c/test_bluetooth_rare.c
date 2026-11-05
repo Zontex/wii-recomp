@@ -6,17 +6,19 @@
 #include "harness.h"
 #include "bluetooth.h"
 #include "ios.h"
+#include "input.h"
 #include "title.h"
 #include "wii_remote.h"
 
 const Title *title = &(Title){.virtual_bluetooth = 1};
 uint32_t hw_read(uint32_t a, int n) { return 0; }
 void hw_write(uint32_t a, uint32_t v, int n) {}
-uint32_t input_buttons(void) { return 0; }
-void input_pointer_now(float *x, float *y) { *x = *y = 0; }
-void attachment_read(uint32_t address, uint8_t *out, uint32_t bytes) { memset(out, 0, bytes); }
-void attachment_write(uint32_t address, const uint8_t *data, uint32_t bytes) {}
-void attachment_fill(uint8_t *out, uint32_t bytes) { for (uint32_t i = 0; i < bytes; i++) out[i] = (uint8_t)(0x40 + i); }
+uint32_t input_buttons(int player) { return 0; }
+int input_connected(int player) { return player == 0; }
+void input_snapshot(int player, PlayerState *out) { memset(out, 0, sizeof *out); }
+void attachment_read(int device, uint32_t address, uint8_t *out, uint32_t bytes) { memset(out, 0, bytes); }
+void attachment_write(int device, uint32_t address, const uint8_t *data, uint32_t bytes) {}
+void attachment_fill(int device, const PlayerState *player, uint8_t *out, uint32_t bytes) { for (uint32_t i = 0; i < bytes; i++) out[i] = (uint8_t)(0x40 + i); }
 void board_read(uint32_t address, uint8_t *out, uint32_t bytes) {}
 void board_write(uint32_t address, const uint8_t *data, uint32_t bytes) {}
 void board_fill(uint8_t *out, uint32_t bytes) {}

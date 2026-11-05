@@ -77,7 +77,7 @@ static void *devices_thread(void *unused) {
   const struct timespec millisecond = {0, 1000000};
   for (;;) {
     // A device the game turned off comes back when a button is pressed.
-    if (input_buttons()) {
+    if (input_buttons(0)) {
       for (int i = 0; i < DEVICES; i++) {
         if (!loops[i].on && (i == 0 || title->calibration_flag)) plug_in(&loops[i]);
       }

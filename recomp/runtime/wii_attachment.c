@@ -1,6 +1,7 @@
-// What's plugged into the simulated Wii Remote: a Classic Controller. An attachment is a
+// What's plugged into each simulated Wii Remote: a Classic Controller. An attachment is a
 // small block of registers the remote reads over a wire. Games can turn on encryption of
-// everything read from it, using a key they choose: see wii_attachment_key.c.
+// everything read from it, using a key they choose: see wii_attachment_key.c. Each
+// remote has its own, so two players' games can use two keys.
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -15,11 +16,18 @@ enum {
   STICK_LEFT_RANGE = 63, STICK_RIGHT_RANGE = 31, CLASSIC_BYTES = 6,
 };
 
-static uint8_t registers[REGISTERS];
-static int started, keyed;
-static uint8_t key_add[8], key_exclusive[8];  // Made from the key the game wrote.
+typedef struct {
+  uint8_t registers[REGISTERS];
+  int started, keyed;
+  uint8_t key_add[8], key_exclusive[8];  // Made from the key the game wrote.
+} Attachment;
 
-static void start(void) {
+static Attachment attachments[PLAYERS];
+
+static Attachment *start(int device) {
+  Attachment *a = &attachments[device >= 0 && device < PLAYERS ? device : 0];
+  if (a->started) return a;
+  uint8_t *registers = a->registers;
   static const uint8_t calibration[CALIBRATION_BYTES] = {0xff, 0, 0x80, 0xff, 0, 0x80, 0xff, 0, 0x80, 0xff, 0, 0x80, 0, 0};
   static const uint8_t identity[] = {0, 0, 0xa4, 0x20, 1, 1};
   uint8_t sum = 0;
@@ -30,7 +38,8 @@ static void start(void) {
     registers[base + CALIBRATION_BYTES + 1] = (uint8_t)(sum + CHECK_TWO);
   }
   memcpy(registers + IDENTITY, identity, sizeof identity);
-  started = 1;
+  a->started = 1;
+  return a;
 }
 
 void attachment_encrypt(uint8_t *bytes, uint32_t count, uint32_t address, const uint8_t add[8], const uint8_t exclusive[8]) {
@@ -42,26 +51,28 @@ void attachment_encrypt(uint8_t *bytes, uint32_t count, uint32_t address, const 
 
 // The game writes a key, and both ends make the same two tables from it: the game's
 // library to decrypt what it reads, and the attachment to encrypt it.
-static void encrypt_if_on(uint8_t *bytes, uint32_t count, uint32_t address) {
-  if (registers[ENABLE] != ENABLE_ENCRYPTED || !keyed) return;
-  attachment_encrypt(bytes, count, address, key_add, key_exclusive);
+static void encrypt_if_on(Attachment *a, uint8_t *bytes, uint32_t count, uint32_t address) {
+  if (a->registers[ENABLE] != ENABLE_ENCRYPTED || !a->keyed) return;
+  attachment_encrypt(bytes, count, address, a->key_add, a->key_exclusive);
 }
 
-void attachment_read(uint32_t address, uint8_t *out, uint32_t bytes) {
-  if (!started) start();
-  for (uint32_t i = 0; i < bytes; i++) out[i] = registers[(address + i) % REGISTERS];
-  encrypt_if_on(out, bytes, address);
+void attachment_read(int device, uint32_t address, uint8_t *out, uint32_t bytes) {
+  Attachment *a = start(device);
+  for (uint32_t i = 0; i < bytes; i++) out[i] = a->registers[(address + i) % REGISTERS];
+  encrypt_if_on(a, out, bytes, address);
 }
 
-void attachment_write(uint32_t address, const uint8_t *data, uint32_t bytes) {
-  if (!started) start();
+void attachment_write(int device, uint32_t address, const uint8_t *data, uint32_t bytes) {
+  Attachment *a = start(device);
   for (uint32_t i = 0; i < bytes; i++) {
     uint32_t at = (address + i) % REGISTERS;
-    registers[at] = data[i];
-    if (at == ENABLE) keyed = 0;
+    a->registers[at] = data[i];
+    if (at == ENABLE) a->keyed = 0;
     if (at == KEY_LAST) {
-      if (!attachment_key_tables(registers + KEY_FIRST, key_add, key_exclusive)) fprintf(stderr, "attachment: the game's key isn't one the Wii makes, so fallback tables are used\n");
-      keyed = 1;
+      if (!attachment_key_tables(a->registers + KEY_FIRST, a->key_add, a->key_exclusive)) {
+        fprintf(stderr, "attachment: the game's key isn't one the Wii makes, so fallback tables are used\n");
+      }
+      a->keyed = 1;
     }
   }
 }
@@ -88,11 +99,10 @@ void attachment_classic_state(uint8_t *to, uint32_t buttons, const float sticks[
   }
 }
 
-void attachment_fill(uint8_t *out, uint32_t bytes) {
-  float sticks[4];
+void attachment_fill(int device, const PlayerState *player, uint8_t *out, uint32_t bytes) {
+  Attachment *a = start(device);
   uint8_t state[CLASSIC_BYTES];
-  input_sticks(sticks);
-  attachment_classic_state(state, input_buttons(), sticks);
+  attachment_classic_state(state, player->buttons, player->sticks);
   for (uint32_t i = 0; i < bytes; i++) out[i] = i < CLASSIC_BYTES ? state[i] : 0xff;
-  encrypt_if_on(out, bytes, 0);
+  encrypt_if_on(a, out, bytes, 0);
 }

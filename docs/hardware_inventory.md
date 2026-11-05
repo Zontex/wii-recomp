@@ -28,8 +28,8 @@ Statuses:
 | 5. Hardware blocks | 25 | 12 | 6 | 0 | 6 | 16 | 65 |
 | 6. Audio microcodes | 9 | 3 | 7 | 0 | 0 | 3 | 22 |
 | 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
-| 8. Controllers | 34 | 16 | 7 | 0 | 6 | 2 | 65 |
-| **All** | **335** | **110** | **47** | **4** | **37** | **56** | **589** |
+| 8. Controllers | 35 | 15 | 7 | 0 | 6 | 2 | 65 |
+| **All** | **336** | **109** | **47** | **4** | **37** | **56** | **589** |
 
 ## Biggest gaps
 
@@ -44,7 +44,7 @@ Ordered by how likely a real game is to hit them.
 7. **Self-modifying code** (`cpu.self_modifying_code_icbi`). `icbi` is a no-op, so translated code is never replaced.
 8. **Video interface registers are only stored** (`hw.*` in VI). No beam position, interlace, PAL or 480p modes.
 9. **No GameCube controllers** (`hw.gc_controller_wheel_keyboard_dance_mat`). Every port answers that nothing is plugged in.
-10. **Wii Remote motion is fixed at rest, and there's no Nunchuk, MotionPlus, speaker or second remote** (`ctl.*`). Covered by the controllers stage of `ROADMAP.md`.
+10. **Wii Remote motion is fixed at rest, and there's no Nunchuk, MotionPlus or speaker** (`ctl.*`). Covered by the controllers stage of `ROADMAP.md`.
 11. **Floating-point status flags aren't worked out from arithmetic** (`cpu.status_flags_fprf_fr_fi_fx_and_others`). Only the game's own writes change them.
 12. **No guest exceptions or memory mapping** (`cpu.program_trap_illegal`, `cpu.dsi_isi`, `cpu.game_defined_bat_maps`, `cpu.page_tables_segment_registers`).
 13. **Copy filters are ignored**: Y scale, gamma, anti-aliasing and deflicker, clamp and field copies (`pixel.copy_*`, `pixel.gamma_on_xfb_copy_1_0_1_7_2_2`).
@@ -774,10 +774,10 @@ The AX work is rewritten in C. There's no DSP interpreter, so each program needs
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
-| `ctl.kpadread_replacement` | `KPADRead` replacement | partial | `runtime/input.c:159` | Remote on channel 0. Fixed motion. An older SDK layout reports no samples (`system_functions.json`). |
-| `ctl.wpadprobe_replacement` | `WPADProbe` replacement | done | `runtime/input.c:170` |  |
-| `ctl.balance_board` | Balance Board | done | `runtime/input.c:131-150`, `:179-209` | Through signature-matched functions. Only for games with the board library. |
-| `ctl.host_input` | Host input | partial | `runtime/input.c:222-236` | Control pipe commands and window. Sticks fixed (`input.c:99`). |
+| `ctl.kpadread_replacement` | `KPADRead` replacement | partial | `runtime/input_direct.c` | Player n's remote on channel n, the board on channel 3 in games with one. Fixed motion. An older SDK layout reports no samples (`system_functions.json`). |
+| `ctl.wpadprobe_replacement` | `WPADProbe` replacement | done | `runtime/input_direct.c` | A channel is connected while its player is. |
+| `ctl.balance_board` | Balance Board | done | `runtime/input.c`, `runtime/input_direct.c` | Through signature-matched functions. Only for games with the board library. |
+| `ctl.host_input` | Host input | partial | `runtime/input.c`, `runtime/control_pipe.c`, `runtime/window.c` | Four players' controls. The keyboard and mouse drive player 1, with the arrows on the left stick; the control pipe drives any player (`p2 press a`). No host controllers yet. |
 
 ### Bluetooth stack
 
@@ -840,7 +840,7 @@ The AX work is rewritten in C. There's no DSP interpreter, so each program needs
 | `ctl.ir_camera` | IR camera | done | `runtime/wii_camera.c`, `runtime/wii_remote.c:151-156` | Basic and extended modes from the host pointer. 0xFF when off. Full mode is the 0x3E/0x3F row. |
 | `ctl.speaker` | Speaker | missing |  |  |
 | `ctl.eeprom` | EEPROM | partial | `runtime/wii_remote.c:53` | Calibration only. Mii storage missing. |
-| `ctl.several_remotes` | Several remotes | partial | `runtime/bluetooth.h:8`, `runtime/bluetooth.c:66-77` | Five device slots. Only remote 0 and the board are present. |
+| `ctl.several_remotes` | Several remotes | done | `runtime/bluetooth.c` (`simulated_here`), `runtime/input.c` | Four remotes and the board. A simulated remote is there while its player is connected, and calls the console when they join; each has its own attachment and key (`runtime/wii_attachment.c`). |
 | `ctl.attachment_wire_protocol` | Attachment wire protocol | done | `runtime/wii_attachment.c:58-72` |  |
 | `ctl.attachment_encryption` | Attachment encryption | done | `runtime/wii_attachment_key.c` | Tables made from the key the game writes. |
 | `ctl.attachment_hot_plug` | Attachment hot plug | on demand |  | Plugging in is the player's doing, not a game's request, so it needs a host control from the controllers stage. |

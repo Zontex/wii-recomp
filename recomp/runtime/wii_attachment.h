@@ -1,10 +1,12 @@
-// The attachment on the simulated Wii Remote.
+// The attachment on each simulated Wii Remote, by its slot (0 to 3).
 #pragma once
 #include <stdint.h>
+#include "input.h"
 
-void attachment_read(uint32_t address, uint8_t *out, uint32_t bytes);
-void attachment_write(uint32_t address, const uint8_t *data, uint32_t bytes);
-void attachment_fill(uint8_t *out, uint32_t bytes);  // Its current state, as a data report carries it.
+void attachment_read(int device, uint32_t address, uint8_t *out, uint32_t bytes);
+void attachment_write(int device, uint32_t address, const uint8_t *data, uint32_t bytes);
+// Its current state from the player's controls, as a data report carries it.
+void attachment_fill(int device, const PlayerState *player, uint8_t *out, uint32_t bytes);
 
 // Exposed for testing.
 void attachment_encrypt(uint8_t *bytes, uint32_t count, uint32_t address, const uint8_t add[8], const uint8_t exclusive[8]);

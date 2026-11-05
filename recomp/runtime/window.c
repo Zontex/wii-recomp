@@ -28,7 +28,7 @@ static void on_key(GLFWwindow *from, int key, int scancode, int action, int mods
     {GLFW_KEY_X, BUTTON_CLASSIC_L}, {GLFW_KEY_C, BUTTON_CLASSIC_R}, {GLFW_KEY_Z, BUTTON_CLASSIC_ZL}, {GLFW_KEY_V, BUTTON_CLASSIC_ZR},
   };
   for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
-    if (key == keys[i].key) input_hold(keys[i].button, action == GLFW_PRESS);
+    if (key == keys[i].key) input_hold(0, keys[i].button, action == GLFW_PRESS);
   }
   int down = action == GLFW_PRESS;
   // The arrows also tilt the Classic Controller's stick, which games such as Mario Kart steer with.
@@ -37,7 +37,7 @@ static void on_key(GLFWwindow *from, int key, int scancode, int action, int mods
   if (key == GLFW_KEY_RIGHT) right = down;
   if (key == GLFW_KEY_UP) up = down;
   if (key == GLFW_KEY_DOWN) low = down;
-  if (key >= GLFW_KEY_RIGHT && key <= GLFW_KEY_UP) input_stick((float)(right - left), (float)(up - low));
+  if (key >= GLFW_KEY_RIGHT && key <= GLFW_KEY_UP) input_stick(0, (float)(right - left), (float)(up - low));
   if (key == GLFW_KEY_SPACE && down) input_board_toggle();
   static float lean_x, lean_y;
   if (key == GLFW_KEY_A) lean_x = down ? -0.6f : 0;
@@ -54,14 +54,14 @@ static void on_mouse_move(GLFWwindow *from, double x, double y) {
   if (scripted()) return;
   int width, height;
   glfwGetWindowSize(from, &width, &height);
-  input_pointer((float)(x / width * 2 - 1), (float)(y / height * 2 - 1));
+  input_pointer(0, (float)(x / width * 2 - 1), (float)(y / height * 2 - 1));
 }
 
 static void on_mouse_button(GLFWwindow *from, int button, int action, int mods) {
   (void)from; (void)mods;
   if (scripted()) return;
-  if (button == GLFW_MOUSE_BUTTON_LEFT) input_hold(BUTTON_A, action == GLFW_PRESS);
-  if (button == GLFW_MOUSE_BUTTON_RIGHT) input_hold(BUTTON_B, action == GLFW_PRESS);
+  if (button == GLFW_MOUSE_BUTTON_LEFT) input_hold(0, BUTTON_A, action == GLFW_PRESS);
+  if (button == GLFW_MOUSE_BUTTON_RIGHT) input_hold(0, BUTTON_B, action == GLFW_PRESS);
 }
 
 // A Mac slows down a program whose window is covered or out of sight, which stretches

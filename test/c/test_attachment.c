@@ -2,8 +2,6 @@
 #include "../../recomp/runtime/wii_attachment.c"
 #include "../../recomp/runtime/wii_attachment_key.c"
 #include "../harness.h"
-void input_sticks(float out[4]) { for (int i = 0; i < 4; i++) out[i] = 0; }
-uint32_t input_buttons(void) { return 0; }
 
 static uint8_t decrypt(uint8_t value, uint32_t address, const uint8_t *add, const uint8_t *exclusive) {
   return (uint8_t)((value ^ exclusive[address % 8]) + add[address % 8]);
@@ -37,11 +35,11 @@ int main(void) {
   CHECK_EQ(state[0] & 63, 63);
   CHECK_EQ(state[1] & 63, 63);
   uint8_t id[6], written = 0x55;
-  attachment_read(0xfa, id, 6);
+  attachment_read(0, 0xfa, id, 6);
   CHECK_EQ(id[2], 0xa4);
   CHECK_EQ(id[4], 1);
-  attachment_write(0xf0, &written, 1);
-  attachment_read(0xfa, id, 6);
+  attachment_write(0, 0xf0, &written, 1);
+  attachment_read(0, 0xfa, id, 6);
   CHECK_EQ(id[3], 0x20);
 
   // A key The Last Story wrote, and the tables its own library made from it.
@@ -56,10 +54,22 @@ int main(void) {
   }
   // Writing the key turns encryption on with those tables.
   static const uint8_t encrypted = 0xaa;
-  attachment_write(0xf0, &encrypted, 1);
-  attachment_write(0x40, key, 16);
+  attachment_write(0, 0xf0, &encrypted, 1);
+  attachment_write(0, 0x40, key, 16);
   uint8_t coded[6];
-  attachment_read(0xfa, coded, 6);
+  attachment_read(0, 0xfa, coded, 6);
   for (int i = 0; i < 6; i++) CHECK_EQ(decrypt(coded[i], 0xfa + (uint32_t)i, want_add, want_exclusive), id[i]);
+
+  // Each remote's attachment is its own: the second player's still reads plainly, and
+  // its state comes from that player's controls.
+  uint8_t plain[6];
+  attachment_read(1, 0xfa, plain, 6);
+  for (int i = 0; i < 6; i++) CHECK_EQ(plain[i], id[i]);
+  PlayerState second = {.buttons = BUTTON_A, .sticks = {1, 1, 0, 0}};
+  attachment_fill(1, &second, plain, 6);
+  CHECK_EQ(plain[0] & 63, 63);
+  CHECK_EQ(plain[5], 0xef);
+  attachment_fill(0, &second, coded, 6);
+  CHECK_EQ(decrypt(coded[5], 5, want_add, want_exclusive), 0xef);
   return finish();
 }
