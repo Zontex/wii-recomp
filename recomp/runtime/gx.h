@@ -210,6 +210,8 @@ int gx_constant_alpha_used(void);
 int gx_blend_needs_second_output(const TevKey *key);
 struct GxTexture *gx_copy_find(int map);
 int gx_copy_is_depth(int map);
+// Frames shown so far, for work done once a frame.
+unsigned gx_frame_number(void);
 
 // Vertices go straight into the buffer the shader reads: reserve room, decode, draw.
 extern int gx_vertex_format;

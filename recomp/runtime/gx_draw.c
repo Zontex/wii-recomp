@@ -30,6 +30,8 @@ enum {
 
 static unsigned frames;
 
+unsigned gx_frame_number(void) { return frames; }
+
 typedef struct {
   int used;
   uint32_t address, image, palette;

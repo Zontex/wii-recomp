@@ -19,7 +19,7 @@ enum {
   COPY_RG8 = 11, COPY_GB8 = 12, COPY_FORMATS = 16,
   TEXTURE_I4 = 0, TEXTURE_I8 = 1, TEXTURE_IA4 = 2, TEXTURE_IA8 = 3, TEXTURE_RGB565 = 4, TEXTURE_RGB5A3 = 5, TEXTURE_RGBA8 = 6, TEXTURE_C4 = 8, TEXTURE_C8 = 9,
   TEXTURE_C14X2 = 10, TEXTURE_CMPR = 14, TEXTURE_FORMATS = 16,
-  STAMP_WORDS = 256, STAMP_COLUMN_STEP = 37,
+  STAMP_WORDS = 256, STAMP_COLUMN_STEP = 37, STAMP_QUICK_STEP = 32,
 };
 #define STAMP_MIX 0x9e3779b1u
 
@@ -28,6 +28,7 @@ typedef struct {
   GxTexture *texture, *depth_texture;
   int from_depth, live;
   uint32_t width, height, format, row_bytes, rows, stride, stamp;
+  unsigned checked_frame;  // The frame, plus 1, its whole stamp was last checked in.
 } Copy;
 
 static Copy copies[MAX_COPIES];
@@ -79,11 +80,14 @@ static void stamp_memory(const Copy *copy) {
   }
 }
 
-static int stamp_is_whole(const Copy *copy) {
-  for (uint32_t i = 0; i < STAMP_WORDS; i++) {
-    uint32_t value;
+// Every `step`th word of the stamp.
+static int stamp_is_whole(const Copy *copy, uint32_t step) {
+  for (uint32_t i = 0; i < STAMP_WORDS; i += step) {
+    uint32_t value, found;
     const uint8_t *word = stamp_word(copy, i, &value);
-    if (word && memcmp(word, &value, sizeof value)) return 0;
+    if (!word) continue;
+    memcpy(&found, word, sizeof found);
+    if (found != value) return 0;
   }
   return 1;
 }
@@ -169,6 +173,7 @@ void gx_copy_to_texture(uint32_t control, int from_depth) {
   copy->live = 1;
   drop_overlapping(copy);
   stamp_memory(copy);
+  copy->checked_frame = gx_frame_number() + 1;
 }
 
 // The copy a map's texture could be. Whatever shape a texture has, the first question is
@@ -180,10 +185,15 @@ static Copy *usable_copy(int map) {
   for (int i = 0; i < copy_count; i++) {
     Copy *copy = &copies[i];
     if (copy->address != address || !copy->live) continue;
-    if (!stamp_is_whole(copy)) {
+    // Games bind a copy for draw after draw. The whole stamp is checked once a frame, as
+    // memory textures are, and a few of its words every time, which a new picture written
+    // over it would change.
+    int whole_checked = copy->checked_frame == gx_frame_number() + 1;
+    if (!stamp_is_whole(copy, whole_checked ? STAMP_QUICK_STEP : 1)) {
       copy->live = 0;
       return 0;
     }
+    copy->checked_frame = gx_frame_number() + 1;
     uint32_t format = (image >> TEXTURE_FORMAT_SHIFT) & TEXTURE_FORMAT_MASK;
     uint32_t width = (image & TEXTURE_SIZE_MASK) + 1, height = ((image >> COORDINATE_BITS) & TEXTURE_SIZE_MASK) + 1;
     if (format == TEXTURE_CMPR || texel_bits[format] != texel_bits[copy->format]) {

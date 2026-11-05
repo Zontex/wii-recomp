@@ -25,9 +25,14 @@ typedef struct {
   int normal_components, normal_type, normal_indexes;
   int color_type[2], color_alpha[2];
   int texture_components[TEXTURES], texture_type[TEXTURES], texture_shift[TEXTURES];
+  float position_scale, normal_scale, texture_scale[TEXTURES];  // From the shifts, worked out once a draw.
 } Format;
 
 static uint32_t bits(uint32_t value, int low, int count) { return (value >> low) & ((1u << count) - 1); }
+
+static int normal_shift(int type) {
+  return type == COMPONENT_U8 ? NORMAL_SHIFT_U8 : type == COMPONENT_S8 ? NORMAL_SHIFT_S8 : type == COMPONENT_U16 ? NORMAL_SHIFT_U16 : NORMAL_SHIFT_S16;
+}
 
 static void read_format(int v, Format *f) {
   uint32_t low = gx.cp[CP_DESCRIPTOR_LOW], high = gx.cp[CP_DESCRIPTOR_HIGH];
@@ -69,6 +74,9 @@ static void read_format(int v, Format *f) {
     f->position_shift = 0;
     for (int i = 0; i < TEXTURES; i++) f->texture_shift[i] = 0;
   }
+  f->position_scale = 1.0f / (float)(1u << f->position_shift);
+  for (int i = 0; i < TEXTURES; i++) f->texture_scale[i] = 1.0f / (float)(1u << f->texture_shift[i]);
+  f->normal_scale = 1.0f / (float)(1u << normal_shift(f->normal_type));
 }
 
 static uint32_t component_bytes(int type) {
@@ -109,8 +117,7 @@ uint32_t gx_vertices_size(int format, int count) {
   return vertex_bytes(&f) * (uint32_t)count;
 }
 
-static float read_component(const uint8_t *p, int type, int shift) {
-  float scale = 1.0f / (float)(1u << shift);
+static inline float read_component(const uint8_t *p, int type, float scale) {
   switch (type) {
     case COMPONENT_U8: return (float)p[0] * scale;
     case COMPONENT_S8: return (float)(int8_t)p[0] * scale;
@@ -155,13 +162,9 @@ static const uint8_t *locate(const uint8_t **p, int kind, int array, uint32_t di
   return host((gx.cp[CP_ARRAY_BASE + array] + index * (gx.cp[CP_ARRAY_STRIDE + array] & 0xff)) | 0x80000000u);
 }
 
-static int normal_shift(int type) {
-  return type == COMPONENT_U8 ? NORMAL_SHIFT_U8 : type == COMPONENT_S8 ? NORMAL_SHIFT_S8 : type == COMPONENT_U16 ? NORMAL_SHIFT_U16 : NORMAL_SHIFT_S16;
-}
-
 static void read_normal(const uint8_t *source, const Format *f, float out[3]) {
   uint32_t size = component_bytes(f->normal_type);
-  for (uint32_t i = 0; i < 3; i++) out[i] = read_component(source + i * size, f->normal_type, normal_shift(f->normal_type));
+  for (uint32_t i = 0; i < 3; i++) out[i] = read_component(source + i * size, f->normal_type, f->normal_scale);
 }
 
 static void read_normals(const uint8_t **p, const Format *f, Vertex *v) {
@@ -225,7 +228,7 @@ int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
     if (f.position != KIND_NONE) {
       const uint8_t *source = locate(&p, f.position, ARRAY_POSITION, (uint32_t)f.position_components * size);
       for (int i = 0; source && i < f.position_components; i++) {
-        v->position[i] = read_component(source + (uint32_t)i * size, f.position_type, f.position_shift);
+        v->position[i] = read_component(source + (uint32_t)i * size, f.position_type, f.position_scale);
       }
     }
     if (f.normal != KIND_NONE) read_normals(&p, &f, v);
@@ -240,8 +243,8 @@ int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
       uint32_t bytes = component_bytes(f.texture_type[i]);
       const uint8_t *source = locate(&p, f.texture[i], ARRAY_TEXTURE + i, (uint32_t)f.texture_components[i] * bytes);
       if (!source) continue;
-      v->uv[i][0] = read_component(source, f.texture_type[i], f.texture_shift[i]);
-      if (f.texture_components[i] > 1) v->uv[i][1] = read_component(source + bytes, f.texture_type[i], f.texture_shift[i]);
+      v->uv[i][0] = read_component(source, f.texture_type[i], f.texture_scale[i]);
+      if (f.texture_components[i] > 1) v->uv[i][1] = read_component(source + bytes, f.texture_type[i], f.texture_scale[i]);
     }
     if (n == count - 1) keep_last_normals(&f, v);
     if (!skipped) kept++;
