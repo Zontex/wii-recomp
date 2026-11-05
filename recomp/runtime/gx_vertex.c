@@ -284,7 +284,7 @@ int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
 // it decoded, and the next call reuses it while three things hold: the list's bytes are
 // unwritten, so the draw is the same command; the vertex registers it was decoded with are
 // the same; and the arrays it indexed are unwritten (memory_watch.h). WiiCompiled keeps
-// a scan of each list in the same way (CREDITS.md).
+// a scan of each list in the same way (CREDITS.md). WII_RECOMP_LIST_CACHE=1 turns it on.
 GxCalledList gx_called_list;
 unsigned gx_list_draws_reused, gx_list_draws_decoded;
 
@@ -375,7 +375,12 @@ static void keep(KeptDraw *d, uint32_t offset, int format, int count, int kept, 
 
 int gx_read_list_vertices(const uint8_t *data, int format, int count, Vertex *out) {
   format &= 7;
-  if (keeping < 0) keeping = watch_enabled() && !getenv("WII_RECOMP_NO_LIST_CACHE");
+  // Off unless asked for: on the Pi, half a race's list draws miss, as characters' vertices
+  // are rewritten every frame, and the lookups and the extra copy of each kept vertex cost
+  // more than decoding saves (a race frame's commands took 13.1 ms with it, 11.5 without).
+  // Keeping the vertices on the graphics card instead, so a hit copies nothing, is what
+  // would pay.
+  if (keeping < 0) keeping = watch_enabled() && getenv("WII_RECOMP_LIST_CACHE");
   if (!keeping) return gx_read_vertices(data, format, count, out);
   uint32_t offset = (uint32_t)(data - gx_called_list.start);
   KeptDraw *d = kept_slot(offset);

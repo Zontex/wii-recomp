@@ -938,6 +938,25 @@ class DepthRange(Scene):
         self.depth_through(self.UNSEEN + self.COPY, self.UNSEEN)
 
 
+class KeptDrawState(Scene):
+    """A draw keeps what the last one worked out from the registers until one is written."""
+    RED, GREEN = (200, 30, 60), (20, 180, 40)
+
+    def test_a_new_matrix_moves_the_next_draw(self):
+        # Only matrix memory changes between the two draws.
+        moved = xf_command(0, float_bits(1.0), 0, 0, float_bits(300.0))
+        picture = self.picture(base_state(), quad(self.RED) + moved + quad(self.GREEN))
+        self.assert_pixel(picture, 200, 200, self.RED)
+        self.assert_pixel(picture, 500, 200, self.GREEN)
+
+    def test_a_new_stage_color_reaches_the_next_draw(self):
+        state = base_state()
+        state[0][0xc0] = color_stage(d=COLOR_R1)  # The stage gives register 1, not the vertex color.
+        picture = self.picture(state, register(1, *self.RED, 255) + quad(WHITE) + register(1, *self.GREEN, 255) + quad(WHITE, 400, 100, 600, 300))
+        self.assert_pixel(picture, 200, 200, self.RED)
+        self.assert_pixel(picture, 500, 200, self.GREEN)
+
+
 class DestinationAlpha(Scene):
     """Draws into the corner, copies it with its alpha, and shows that alpha as gray."""
     TARGET = 0x00300000

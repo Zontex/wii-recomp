@@ -213,13 +213,19 @@ int gx_transform_bounds(const Vertex *vertices, int count, float bounds[4]) {
 }
 
 // Normals sit tightly in the chip's memory, but a block spaces rows four words apart.
+// Each block of matrices goes to the backend only when its memory was written since the
+// last time, which the backend keeps. Comparing a kilobyte or more for each draw cost more.
+static int written_since_sent(int part) {
+  static unsigned sent[XF_PARTS];
+  if (sent[part] == gx_xf_written[part]) return 0;
+  sent[part] = gx_xf_written[part];
+  return 1;
+}
+
 static void send_normal_matrices(void) {
-  static uint32_t words_sent[MATRIX_ROWS * NORMAL_WORDS_PER_ROW];
   static float rows[MATRIX_ROWS][4];
-  if (memcmp(words_sent, &gx.xf[XF_NORMAL_MATRICES], sizeof words_sent)) {
-    memcpy(words_sent, &gx.xf[XF_NORMAL_MATRICES], sizeof words_sent);
-    for (int i = 0; i < MATRIX_ROWS; i++) memcpy(rows[i], &words_sent[i * NORMAL_WORDS_PER_ROW], 3 * sizeof(float));
-  }
+  if (!written_since_sent(XF_PART_NORMALS)) return;
+  for (int i = 0; i < MATRIX_ROWS; i++) memcpy(rows[i], &gx.xf[XF_NORMAL_MATRICES + i * NORMAL_WORDS_PER_ROW], 3 * sizeof(float));
   gx_constants_send(CONSTANTS_NORMALS, rows, sizeof rows);
 }
 
@@ -238,11 +244,11 @@ void gx_transform_apply(const VertexKey *key) {
     for (int i = 0; i < MAX_TEXTURE_MAPS; i++) {
       values.post_index[i / VALUES_PER_VECTOR][i % VALUES_PER_VECTOR] = (int32_t)(gx.xf[XF_POST_MATRIX_INDEX + i] & POST_MATRIX_MASK);
     }
-    gx_constants_send(CONSTANTS_POST, &gx.xf[XF_POST_MATRICES], MATRIX_ROWS * WORDS_PER_ROW * sizeof(uint32_t));
+    if (written_since_sent(XF_PART_POST)) gx_constants_send(CONSTANTS_POST, &gx.xf[XF_POST_MATRICES], MATRIX_ROWS * WORDS_PER_ROW * sizeof(uint32_t));
   }
   gx_constants_send(CONSTANTS_DRAW, &values, sizeof values);
-  gx_constants_send(CONSTANTS_MATRICES, &gx.xf[XF_MATRICES], MATRIX_ROWS * WORDS_PER_ROW * sizeof(uint32_t));
-  if (key->uses_lights) gx_light_send();
+  if (written_since_sent(XF_PART_MATRICES)) gx_constants_send(CONSTANTS_MATRICES, &gx.xf[XF_MATRICES], MATRIX_ROWS * WORDS_PER_ROW * sizeof(uint32_t));
+  if (key->uses_lights && written_since_sent(XF_PART_LIGHTS)) gx_light_send();
   if (key->has_normal) send_normal_matrices();
 }
 

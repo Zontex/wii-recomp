@@ -12,6 +12,7 @@
 #include <unistd.h>
 #endif
 
+#include "timeline.h"
 #include "cpu.h"
 #include "debug.h"
 #include "title.h"
@@ -63,7 +64,18 @@ _Static_assert(STREAM_BYTES >= LARGEST_DRAW_BYTES, "a draw must fit the stream")
 
 GxState gx;
 GxStats gx_stats;
-unsigned gx_cp_written = 1;
+unsigned gx_cp_written = 1, gx_settings_written = 1, gx_xf_written[XF_PARTS] = {1, 1, 1, 1};
+
+// The XF memory a write lands in: matrices from 0, normal matrices from 0x400, the
+// matrices applied after from 0x500, lights from 0x600, and settings from 0x1000.
+void gx_xf_note(uint32_t address, uint32_t count) {
+  static const uint32_t starts[XF_PARTS + 1] = {0, 0x400, 0x500, 0x600, 0x1000};
+  uint32_t end = address + count;
+  for (int part = 0; part < XF_PARTS; part++) {
+    if (address < starts[part + 1] && end > starts[part]) gx_xf_written[part]++;
+  }
+  if (end > starts[XF_PARTS]) gx_settings_written++;
+}
 
 static uint8_t stream[STREAM_BYTES];
 static uint32_t stream_used;
@@ -118,6 +130,7 @@ static void setting_gaps(uint32_t reg, uint32_t data) {
 
 static void write_bp(uint32_t value) {
   uint32_t reg = value >> 24, data = value & 0xffffff;
+  gx_settings_written++;
   if (reg == BP_MASK) {
     gx.bp[BP_MASK] = data;
     return;
@@ -131,11 +144,13 @@ static void write_bp(uint32_t value) {
     bank[reg - BP_TEV_REGISTER] = gx.bp[reg];
   }
   if (reg == BP_DRAW_DONE) {
+    TIMELINE_MOMENT("draw done read");
     gx_stats.draw_done++;
     finish_due = time_base() + SIGNAL_DELAY_TICKS;
   }
   else if (reg == BP_TOKEN || reg == BP_TOKEN_NOW) {
     pe_token = data & 0xffff;
+    TIMELINE_MOMENT("token read");
     if (reg == BP_TOKEN) token_due = time_base() + SIGNAL_DELAY_TICKS;
     if (reg == BP_TOKEN && paces_by_token) {
       held_at_token = 1;
@@ -158,7 +173,10 @@ static void write_bp(uint32_t value) {
     // The chip copies the picture out first, then clears for the next frame.
     if (data & (1u << COPY_TO_SCREEN_BIT)) {
       uint64_t present_start = time_base();
+      TIMELINE_BEGIN("present");
       gx_present();
+      TIMELINE_END("present");
+      timeline_frame_shown();
       stage_add(STAGE_PRESENT, time_base() - present_start);
       frame_shown = 1;
     }
@@ -172,6 +190,7 @@ static void load_indexed(int command, uint32_t value) {
   uint32_t index = value >> 16, count = ((value >> 12) & 15) + 1, address = value & 0xfff;
   uint32_t source = (gx.cp[CP_ARRAY_BASE + array] + index * (gx.cp[CP_ARRAY_STRIDE + array] & 0xff)) | 0x80000000u;
   for (uint32_t i = 0; i < count && address + i < XF_SIZE; i++) gx.xf[address + i] = rd32(source + i * 4);
+  gx_xf_note(address, count);
 }
 
 // Parses one command, returns its bytes, or 0 if it isn't all here yet.
@@ -188,6 +207,7 @@ static uint32_t parse_command(const uint8_t *p, uint32_t left) {
     if (left < 6) return 0;
     gx.cp[p[1]] = big32(p + 2);
     gx_cp_written++;
+    gx_settings_written++;
     return 6;
   }
   if (command == COMMAND_XF) {
@@ -195,6 +215,7 @@ static uint32_t parse_command(const uint8_t *p, uint32_t left) {
     uint32_t count = big16(p + 1) + 1, address = big16(p + 3), bytes = 5 + count * 4;
     if (left < bytes) return 0;
     for (uint32_t i = 0; i < count && address + i < XF_SIZE; i++) gx.xf[address + i] = big32(p + 5 + i * 4);
+    gx_xf_note(address, count);
     // Turning clipping off only changes what lies outside the view. Not followed.
     if (address <= XF_CLIP_DISABLE && address + count > XF_CLIP_DISABLE && gx.xf[XF_CLIP_DISABLE]) gap_hit("gx.0x1005_clip_disable", gx.xf[XF_CLIP_DISABLE]);
     return bytes;
@@ -303,7 +324,9 @@ static void *commands_thread(void *unused) {
     } else if (++empty_turns < EMPTY_TURNS_BEFORE_SLEEP) {
       sched_yield();
     } else {
+      TIMELINE_BEGIN("no commands");
       wait_briefly();
+      TIMELINE_END("no commands");
     }
   }
   return 0;

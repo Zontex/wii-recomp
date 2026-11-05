@@ -93,9 +93,13 @@ typedef struct {
   uint32_t hashed_address, hashed_bytes;
 } TextureMemo;
 
-// Counts writes to the vertex registers, so what is worked out from them can be kept
-// until the next. The idea of a count for this is WiiCompiled's (CREDITS.md).
-extern unsigned gx_cp_written;
+// Counts of register writes, so what is worked out from them can be kept until the next.
+// The idea of a count for this is WiiCompiled's (CREDITS.md). gx_settings_written counts
+// every BP, CP and XF setting (0x1000 on) written; the XF parts count their own memory.
+extern unsigned gx_cp_written, gx_settings_written;
+enum { XF_PART_MATRICES, XF_PART_NORMALS, XF_PART_POST, XF_PART_LIGHTS, XF_PARTS };
+extern unsigned gx_xf_written[XF_PARTS];
+void gx_xf_note(uint32_t address, uint32_t count);
 
 // Decodes the texture a map points at, or returns 0 if it has none, or if it is what the
 // memo says it was.

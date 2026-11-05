@@ -56,18 +56,14 @@ void gx_light_read_colors(float material[2][4], float ambient[2][4]) {
   }
 }
 
-// Lights change far less often than draws happen, so the words are compared first.
+// Sent only when light memory was written since (gx_transform.c).
 void gx_light_send(void) {
-  static uint32_t words_sent[MAX_LIGHTS * LIGHT_WORDS];
   static LightValues lights[MAX_LIGHTS];
-  if (memcmp(words_sent, &gx.xf[XF_LIGHTS], sizeof words_sent)) {
-    memcpy(words_sent, &gx.xf[XF_LIGHTS], sizeof words_sent);
-    static const int vectors[LIGHT_VECTORS] = {LIGHT_COSINE, LIGHT_DISTANCE, LIGHT_POSITION, LIGHT_DIRECTION};
-    for (int i = 0; i < MAX_LIGHTS; i++) {
-      const uint32_t *base = &gx.xf[XF_LIGHTS + i * LIGHT_WORDS];
-      unpack_color(base[LIGHT_COLOR], lights[i].color);
-      for (int v = 0; v < LIGHT_VECTORS; v++) memcpy(lights[i].vectors[v], &base[vectors[v]], 3 * sizeof(float));
-    }
+  static const int vectors[LIGHT_VECTORS] = {LIGHT_COSINE, LIGHT_DISTANCE, LIGHT_POSITION, LIGHT_DIRECTION};
+  for (int i = 0; i < MAX_LIGHTS; i++) {
+    const uint32_t *base = &gx.xf[XF_LIGHTS + i * LIGHT_WORDS];
+    unpack_color(base[LIGHT_COLOR], lights[i].color);
+    for (int v = 0; v < LIGHT_VECTORS; v++) memcpy(lights[i].vectors[v], &base[vectors[v]], 3 * sizeof(float));
   }
   gx_constants_send(CONSTANTS_LIGHTS, lights, sizeof lights);
 }

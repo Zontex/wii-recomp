@@ -1,6 +1,7 @@
 // Rarely used registers in hardware.c: the reset button, the audio interface's interrupt,
 // the accelerator DMA, the serial I/O buffer and the DTV status.
 #include "../../recomp/runtime/hardware.c"
+#include "../../recomp/runtime/timeline.c"
 #include "../harness.h"
 #include <string.h>
 
