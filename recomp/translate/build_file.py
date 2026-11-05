@@ -48,7 +48,7 @@ INTERFACE_HEADERS = ["cpu.h", "guest_memory.h", "title.h", "modules.h"]
 AUDIO_SOURCES = {"darwin": "audio_output_mac.c", "linux": "audio_output_linux.c"}
 # Real Wii Remotes: IOKit's HID on the Mac, Bluetooth sockets on Linux (remote_link.h).
 REMOTE_SOURCES = {"darwin": "remote_link_mac.c", "linux": "remote_link_linux.c"}
-BACKEND_SOURCES = {"opengl": ["gx_gl.c"], "vulkan": ["gx_vulkan.c", "gx_vulkan_device.c", "gx_vulkan_pipeline.c", "gx_vulkan_window.c", "gx_shot.c"]}
+BACKEND_SOURCES = {"opengl": ["gx_gl.c"], "vulkan": ["gx_vulkan.c", "gx_vulkan_device.c", "gx_vulkan_pipeline.c", "gx_vulkan_window.c"]}
 LIBRARY_FOLDERS = ["/usr/local/lib", "/usr/lib", "/usr/lib/aarch64-linux-gnu"] + ([f"{VULKAN_SDK}/lib"] if VULKAN_SDK else [])
 VULKAN_LIBRARIES = ["vulkan", SHADERC]
 
