@@ -28,6 +28,11 @@ int main(void) {
   CHECK_EQ(state[5], 0xef);
   attachment_classic_state(state, BUTTON_DOWN | BUTTON_PLUS, centred);
   CHECK_EQ(state[4], 0xbb);
+  attachment_classic_state(state, BUTTON_CLASSIC_L | BUTTON_CLASSIC_ZR, centred);  // L reads fully down as well.
+  CHECK_EQ(state[4], 0xdf);
+  CHECK_EQ(state[5], 0xfb);
+  CHECK_EQ((state[2] >> 5 & 3) << 3 | state[3] >> 5, 31);
+  CHECK_EQ(state[3] & 31, 0);
   attachment_classic_state(state, 0, left_full);
   CHECK_EQ(state[0] & 63, 63);
   CHECK_EQ(state[1] & 63, 63);

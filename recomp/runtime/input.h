@@ -7,6 +7,8 @@ enum {
   BUTTON_LEFT = 0x0001, BUTTON_RIGHT = 0x0002, BUTTON_DOWN = 0x0004, BUTTON_UP = 0x0008, BUTTON_PLUS = 0x0010,
   BUTTON_TWO = 0x0100, BUTTON_ONE = 0x0200, BUTTON_B = 0x0400, BUTTON_A = 0x0800, BUTTON_MINUS = 0x1000,
   BUTTON_HOME = 0x8000,
+  // The Classic Controller's shoulder buttons, which the Wii Remote doesn't have.
+  BUTTON_CLASSIC_L = 0x10000, BUTTON_CLASSIC_R = 0x20000, BUTTON_CLASSIC_ZL = 0x40000, BUTTON_CLASSIC_ZR = 0x80000,
 };
 
 void input_hold(uint32_t buttons, int down);
