@@ -166,6 +166,28 @@ def find_one(finder, entry, found):
     return None if matches else finder.similar(entry["hashes"])
 
 
+LOAD_WORD, COMPARE_IMMEDIATE, BRANCH_CONDITIONAL = 32, 11, 16
+BRANCH_IF_EQUAL = (12 << 21) | (2 << 16)  # BO "if true", BI cr0's equal bit.
+
+
+def idle_loop(program, body, hint):
+    """Where a function waits for a small variable to change: a load through r13, a compare
+    with 0, and a branch back to the load while it's equal. Libraries of different years
+    put it at slightly different places, so the hint only chooses between several."""
+    found = []
+    for address in sorted(body):
+        if address + 8 not in body:
+            continue
+        load, compare, branch = (program.word(address + i * 4) for i in range(3))
+        if fields(load)[0] != LOAD_WORD or fields(load)[2] != SMALL_DATA:
+            continue
+        if fields(compare)[0] != COMPARE_IMMEDIATE or fields(compare)[2] != fields(load)[1] or compare & 0xffff:
+            continue
+        if branch >> 26 == BRANCH_CONDITIONAL and branch & 0x03ff0000 == BRANCH_IF_EQUAL and signed16(branch & 0xfffc) == -8:
+            found.append(address)
+    return min(found, key=lambda address: abs(address - hint)) if found else None
+
+
 def resolve(program, functions, entries):
     """Returns (replaced, idle loops, values) for a game, or stops if anything is unclear."""
     finder = Finder(program, functions)
@@ -196,7 +218,11 @@ def resolve(program, functions, entries):
     for entry in wanted:
         address = found[entry["name"]]
         if "idle_offset" in entry:
-            idle_loops[address + entry["idle_offset"]] = entry["reason"]
+            loop = idle_loop(program, functions[address], address + entry["idle_offset"])
+            if loop is None:
+                print(f"no idle loop found in {entry['name']} at {address:08x}: it will spin", file=sys.stderr)
+            else:
+                idle_loops[loop] = entry["reason"]
         if "body" in entry:
             replaced[address] = (entry["reason"], entry["body"].format(**values))
     return replaced, idle_loops, values
