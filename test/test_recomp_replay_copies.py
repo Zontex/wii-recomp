@@ -5,6 +5,7 @@ processor would, or peeks and pokes the picture. Expected bytes come from the fo
 layouts: RGB565 is big-endian 5, 6 and 5 bits, RGBA8 a block of alpha and red pairs then
 one of green and blue, and intensity is Y = (66 R + 129 G + 25 B + 4096) / 256, rounded.
 """
+import mmap
 import shutil
 import subprocess
 import tempfile
@@ -104,8 +105,11 @@ class CopiesInMemory(Played):
         self.assertEqual(data[0x80:0x84], b"\x11\x22\x33\x44")
         self.assertEqual(data[:0x80] + data[0x84:], bytes(0xfc))
         self.assertIn("1 pages kept from a copy as the game wrote into them", self.log)
-        # The copy's other pages, still held, take it whole.
-        self.assertEqual(self.memory([(made, updates), b"", b""], target, 2), bytes([0xc8, 0xe7]))
+        # The copy's start takes it if it's on a page of its own, still held, and keeps what
+        # was there if it shares the written page, as with 16 KiB pages on the Pi.
+        page = mmap.PAGESIZE
+        landed = target // page != (end - 0x80) // page
+        self.assertEqual(self.memory([(made, updates), b"", b""], target, 2), bytes([0xc8, 0xe7]) if landed else bytes(2))
 
     def test_a_late_copy_lands_on_a_page_only_beside_it_written(self):
         # Only data beside the copy on its last page is written: the copy lands there whole.
