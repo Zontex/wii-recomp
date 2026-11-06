@@ -56,10 +56,10 @@ static void report_activity(uint64_t second) {
   if (enabled < 0) enabled = getenv("WII_RECOMP_ACTIVITY") != 0;
   if (second == last || !enabled) return;
   last = second;
-  fprintf(stderr, "second %llu: %u draws, %u copies, %u to screen, %u draw done, %u new shaders, slowest %.1f ms, worst frame %.1f ms, passes %u, new pipelines %u\n",
+  fprintf(stderr, "second %llu: %u draws, %u copies, %u to screen, %u draw done, %u new shaders, slowest %.1f ms, worst frame %.1f ms, passes %u, new pipelines %u, drains %u, waited reads %u\n",
           (unsigned long long)second, gx_stats.draws, gx_stats.copies, gx_stats.to_screen, gx_stats.draw_done,
           gx_stats.new_shaders, (double)gx_stats.slowest_shader_ms, (double)gx_stats.worst_frame_ms, gx_stats.passes,
-          gx_stats.new_pipelines);
+          gx_stats.new_pipelines, gx_stats.drains, gx_stats.waited_reads);
   gx_stats = (GxStats){0};
 }
 
@@ -71,7 +71,12 @@ void stage_add(int stage, uint64_t ticks) {
   if (stage == STAGE_IDLE && ticks > longest_idle) longest_idle = ticks;
 }
 
+// WII_RECOMP_FRAME_LOG=1 prints the time since the last frame shown, for each frame, so a
+// tool can tell an even 60 from frames that come in fits (recomp/tools/race_bench.py).
 void stage_frame(float gap_ms) {
+  static int frame_log = -1;
+  if (frame_log < 0) frame_log = getenv("WII_RECOMP_FRAME_LOG") != 0;
+  if (frame_log) fprintf(stderr, "frame %.2f\n", (double)gap_ms);
   static long switches_before;
   struct rusage usage;
   getrusage(RUSAGE_SELF, &usage);

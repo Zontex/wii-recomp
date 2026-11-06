@@ -18,7 +18,9 @@ typedef struct {
 extern GxState gx;
 
 // Counters for the once-a-second report in debug.c.
-typedef struct { unsigned draws, copies, to_screen, draw_done, new_shaders, new_pipelines, passes; float slowest_shader_ms, worst_frame_ms; } GxStats;
+// Drains count the times the card was emptied in the middle of a frame; waited reads, the
+// copies the game's touch had to wait for. Both should be 0 in a smooth scene.
+typedef struct { unsigned draws, copies, to_screen, draw_done, new_shaders, new_pipelines, passes, drains, waited_reads; float slowest_shader_ms, worst_frame_ms; } GxStats;
 extern GxStats gx_stats;
 
 enum { VERTEX_MATRIX_POSITION = 0, VERTEX_MATRIX_COORDINATE = 1, VERTEX_MATRICES = 1 + MAX_TEXTURE_MAPS, VERTEX_MATRIX_SLOTS = 12, VERTEX_NORMALS_UV = 5 };

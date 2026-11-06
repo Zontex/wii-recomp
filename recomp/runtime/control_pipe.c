@@ -3,7 +3,8 @@
 // console's are here: reset to press its reset button, shot <file> to save the next
 // picture, record <frames> <file> to record frames for recomp/tools/replay, record-sound
 // <frames> <file> to record the audio processor's work for recomp/tools/sound_bench.py,
-// dump and skip for the graphics inspector.
+// timeline <frames> <file> to record what each thread does (timeline.h), dump and skip for
+// the graphics inspector.
 #include <fcntl.h>
 #include <pthread.h>
 #include <stdio.h>
@@ -17,6 +18,7 @@
 #include "gx.h"
 #include "hardware.h"
 #include "input.h"
+#include "timeline.h"
 #include "pads.h"
 
 static void run_command(const char *line) {
@@ -27,6 +29,7 @@ static void run_command(const char *line) {
   else if (!strncmp(line, "dump", 4)) gx_inspect_dump();
   else if (sscanf(line, "record-sound %d %1023s", &first, path) == 2) dsp_record_request(first, path);
   else if (sscanf(line, "record %d %1023s", &first, path) == 2) gx_record_request(first, path);
+  else if (sscanf(line, "timeline %d %1023s", &first, path) == 2 && first > 0) timeline_request((unsigned)first, path);
   else if (sscanf(line, "skip %d %d", &first, &last) == 2) gx_inspect_skip(first, last);
   else if (sscanf(line, "shot %1023s", path) == 1) gx_shot(path);
   else fprintf(stderr, "control: unknown command: %s", line);

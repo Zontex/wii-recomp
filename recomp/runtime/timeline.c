@@ -1,5 +1,6 @@
 // Records timeline marks (timeline.h) into a fixed ring, from any thread, and writes them
-// out once the asked-for frames have passed.
+// out once the asked-for frames have passed. WII_RECOMP_TIMELINE asks at start; the control
+// pipe's timeline <frames> <file> asks from the next frame shown.
 #include <pthread.h>
 #include <stdatomic.h>
 #include <stdint.h>
@@ -60,7 +61,25 @@ static void write_out(void) {
   fprintf(stderr, "timeline: wrote %u marks to %s\n", count, path);
 }
 
+// From the control pipe's thread: start at the next frame shown, for a count of frames.
+static _Atomic unsigned requested;
+static char requested_path[4096];
+
+void timeline_request(unsigned frames, const char *file) {
+  if (!frames || atomic_load(&requested) || timeline_on) return;
+  snprintf(requested_path, sizeof requested_path, "%s", file);
+  atomic_store(&requested, frames);
+}
+
 void timeline_frame_shown(void) {
+  unsigned frames = atomic_exchange(&requested, 0);
+  if (frames) {
+    if (!marks) marks = calloc(MOST_MARKS, sizeof *marks);
+    atomic_store(&used, 0);
+    snprintf(path, sizeof path, "%s", requested_path);
+    first_frame = frame + 1;
+    last_frame = first_frame + frames;
+  }
   if (!marks) return;
   frame++;
   if (frame == first_frame) timeline_on = 1;

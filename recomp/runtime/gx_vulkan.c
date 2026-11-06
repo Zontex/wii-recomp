@@ -505,6 +505,7 @@ static void begin_pass(const VkRect2D *area) {
 // Sends what's recorded so far and waits for all of it, for when a frame's memory runs out.
 static void record_reads(void);
 static void finish_commands(void) {
+  gx_stats.drains++;
   record_reads();
   give_up_layer();
   leave_strip();
@@ -2021,6 +2022,7 @@ static const void *read_finish(unsigned ticket, int *width, int *height) {
   int slot = (int)(ticket % READ_SLOTS);
   if (reads[slot].ticket != ticket) return 0;
   if (!read_ready(ticket)) {
+    gx_stats.waited_reads++;
     if (reads[slot].serial == batch) {
       TIMELINE_BEGIN("waiting for a read back");
       finish_commands();  // Sends everything so far and waits for it.
