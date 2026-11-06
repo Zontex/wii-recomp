@@ -153,6 +153,11 @@ int main(int count, char **arguments) {
   CHECK(exists(saves, "/shared2/both"));  // Written once the writer closed, whole.
   files_close(second);
 
+  // Launching a title makes its folders, so it can ask how much its data folder holds.
+  files_make_title_folders(0x0001000452464545ull);
+  CHECK(exists(saves, "/title/00010004/52464545/data/.") || ioctl_path(GET_ATTR, "/title/00010004/52464545/data", 0, 0) == 0);
+  CHECK_EQ(ioctl_path(GET_ATTR, "/title/00010004/52464545/content", 0, 0), 0);
+
   // No storage folder at all, as when none is given on the command line.
   files_start(0);
   CHECK(!files_find("/shared2/read_only", full, sizeof full));

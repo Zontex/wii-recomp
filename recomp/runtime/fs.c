@@ -348,6 +348,21 @@ static int get_usage(uint32_t request) {
   return 0;
 }
 
+// A title's folders, as IOS makes them when it's launched (Dolphin's DIVerify does too):
+// its content folder, and its data folder, where its saves go.
+void files_make_title_folders(uint64_t title) {
+  if (!title) return;
+  static const char *const kinds[] = {"content", "data"};
+  for (int i = 0; i < 2; i++) {
+    char path[PATH_BYTES], full[MAX_PATH];
+    snprintf(path, sizeof path, "/title/%08x/%08x/%s", (uint32_t)(title >> 32), (uint32_t)title, kinds[i]);
+    if (kind_of(path)) continue;
+    files_save_path(path, full, sizeof full);
+    files_make_parents(full);
+    mkdir(full, 0700);
+  }
+}
+
 int fs_request(uint32_t command, uint32_t request) {
   uint32_t code = rd32(request + 12);
   if (command == IOS_IOCTLV) {

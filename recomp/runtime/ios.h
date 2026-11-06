@@ -53,6 +53,7 @@ void files_make_parents(const char *full);
 int files_write_whole(const char *full, const void *data, size_t bytes);
 // A fixed-size value from the console settings (SYSCONF), such as IPL.CB. Its size, or 0.
 int files_system_setting(const char *name, uint8_t *out, size_t limit);
+void files_make_title_folders(uint64_t title);  // Its content and data folders, as launching makes them.
 int files_find(const char *path, char *out, unsigned long size);
 void system_files_make(void);  // What the Wii Menu makes on a new Wii, where storage lacks it.
 int fs_request(uint32_t command, uint32_t request);
