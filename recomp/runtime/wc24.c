@@ -32,14 +32,10 @@ static int read_file(const char *path, uint8_t *out, size_t bytes) {
 }
 
 static int write_file(const char *path, const uint8_t *data, size_t bytes) {
-  char full[MAX_PATH], partial[MAX_PATH + 8];
+  char full[MAX_PATH];
   files_save_path(path, full, sizeof full);
   files_make_parents(full);
-  snprintf(partial, sizeof partial, "%s.new", full);
-  FILE *file = fopen(partial, "wb");
-  int done = file && fwrite(data, 1, bytes, file) == bytes;
-  if (file) done = !fclose(file) && done;
-  return done && !rename(partial, full);  // A cut-off write never replaces the old file.
+  return files_write_whole(full, data, bytes);  // A cut-off write never replaces the old file.
 }
 
 // A value such as AREA, MODEL or GAME from setting.txt, which is lightly scrambled.

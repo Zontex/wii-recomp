@@ -1049,6 +1049,12 @@ def choose_fast(counts, share=HOT_SHARE):
     return chosen
 
 
+def virtual_bluetooth_keeps(entry):
+    """Whether the program's own code stays for this entry with --virtual-bluetooth."""
+    return (entry.get("body") in DIRECT_INPUT or "Bluetooth" in entry["name"] or entry["name"].startswith("KPADRead")
+            or entry.get("group") == "board")
+
+
 def main():
     dol = Path(sys.argv[1])
     program = Program(dol.read_bytes())
@@ -1056,6 +1062,10 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     functions, _ = find_functions(program)
     entries = load_entries()
+    if "--virtual-bluetooth" in sys.argv:
+        # What's dropped below needn't be found at all: a program may have no KPAD, as some
+        # channels haven't, and nothing of it would be replaced anyway.
+        entries = [dict(entry, group="optional") if virtual_bluetooth_keeps(entry) else entry for entry in entries]
     replaced, idle_loops, values = resolve(program, functions, entries)
     if "--virtual-bluetooth" in sys.argv:
         # The program's own controller code runs, including an older KPADRead left as a stub,

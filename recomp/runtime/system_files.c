@@ -230,13 +230,11 @@ void system_files_make(void) {
     file->fill(data, file->bytes);
     files_save_path(file->path, full, sizeof full);
     files_make_parents(full);
-    FILE *out = fopen(full, "wb");
-    if (out && fwrite(data, 1, file->bytes, out) == file->bytes) {
+    if (files_write_whole(full, data, file->bytes)) {
       fprintf(stderr, "storage: made a new %s, as the Wii Menu does when a Wii first starts\n", file->path);
     } else {
       fprintf(stderr, "storage: couldn't make %s in the save folder\n", file->path);
     }
-    if (out) fclose(out);
     free(data);
   }
 }

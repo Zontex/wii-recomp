@@ -78,10 +78,7 @@ static void save_config(void) {
   char full[1024];
   files_save_path(CONFIG_PATH, full, sizeof full);
   files_make_parents(full);
-  FILE *file = fopen(full, "wb");
-  if (!file) return;
-  fwrite(config, 1, sizeof config, file);
-  fclose(file);
+  if (!files_write_whole(full, config, sizeof config)) fprintf(stderr, "net: couldn't save %s\n", full);
 }
 
 // The network settings manager. The answer word goes in the first output.

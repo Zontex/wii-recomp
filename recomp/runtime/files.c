@@ -82,8 +82,11 @@ int files_find(const char *path, char *out, unsigned long size) {
 // Writes a whole file so that a power cut leaves the old one or the new one, never part:
 // a temporary file beside it, flushed to the disk, then renamed over it.
 int files_write_whole(const char *full, const void *data, size_t bytes) {
+  // Named with a dot first, so a listing never shows one a power cut left behind.
   char temporary[MAX_PATH + 8];
-  snprintf(temporary, sizeof temporary, "%s.part", full);
+  const char *slash = strrchr(full, '/');
+  int folder = slash ? (int)(slash - full) + 1 : 0;
+  snprintf(temporary, sizeof temporary, "%.*s.%s.part", folder, full, full + folder);
   FILE *file = fopen(temporary, "wb");
   if (!file) return 0;
   int written = fwrite(data, 1, bytes, file) == bytes && !fflush(file) && !fsync(fileno(file));
