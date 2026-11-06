@@ -5,8 +5,9 @@
 #include "title.h"
 #include <stddef.h>
 #include <sys/stat.h>
-const Title *title = &(Title){0};
-void bluetooth_register_remote(uint8_t *settings, size_t bytes) {}
+const Title *title = &(Title){.virtual_bluetooth = 1};
+static size_t registered_bytes;  // The settings' size when the console last listed its remotes in them.
+void bluetooth_register_remote(uint8_t *settings, size_t bytes) { registered_bytes = bytes; }
 void camera_set_bar_above(int above) {}
 uint32_t hw_read(uint32_t a, int n) { return 0; }
 void hw_write(uint32_t a, uint32_t v, int n) {}
@@ -86,6 +87,44 @@ int main(int count, char **arguments) {
     for (int bit = 0; bit < 8; bit++) crc = crc & 0x8000 ? (uint16_t)(crc << 1 ^ 0x1021) : (uint16_t)(crc << 1);
   }
   CHECK_EQ(at16(0x1f1de), crc);
+
+  // The system settings, with every item Dolphin's SysConf.cpp gives a new Wii.
+  CHECK_EQ(load(saves, "/shared2/sys/SYSCONF"), 0x4000);
+  CHECK(!memcmp(data, "SCv0", 4));
+  CHECK(!memcmp(data + 0x3ffc, "SCed", 4));
+  uint32_t items = at16(4), found = 0;
+  CHECK_EQ(items, 27);
+  for (uint32_t i = 0; i < items; i++) {
+    uint32_t at = at16(6 + i * 2), type = data[at] >> 5, name_bytes = (data[at] & 31) + 1;
+    const char *name = (const char *)data + at + 1;
+    uint32_t value = at + 1 + name_bytes, size = type == 1 ? at16(value) + 1 : type == 2 ? data[value] + 1u : type == 5 ? 4 : 1;
+    value += type == 1 ? 2 : type == 2 ? 1 : 0;
+    CHECK(value + size <= at16(6 + (i + 1) * 2));  // Each ends where the next, or the end mark, starts.
+    if (name_bytes == 7 && !memcmp(name, "BT.DINF", 7)) {
+      found++;
+      CHECK_EQ(size, 0x461);
+      CHECK_EQ(data[value], 0);
+    }
+    if (name_bytes == 7 && !memcmp(name, "IPL.LNG", 7)) {
+      found++;
+      CHECK_EQ(data[value], 1);
+    }
+    if (name_bytes == 8 && !memcmp(name, "IPL.SADR", 8)) {
+      found++;
+      CHECK_EQ(size, 0x1008);
+      CHECK_EQ(data[value], 0x6c);
+    }
+    if (name_bytes == 7 && !memcmp(name, "IPL.NIK", 7)) {
+      found++;
+      CHECK_EQ(size, 22);
+      CHECK_EQ(data[value + 1], 'W');
+      CHECK_EQ(data[value + 21], 3);
+    }
+  }
+  CHECK_EQ(found, 4);
+  // A game opening them finds the console's remotes listed.
+  CHECK(files_open("/shared2/sys/SYSCONF", 1) >= 0);
+  CHECK_EQ(registered_bytes, 0x4000);
 
   // A file the game has since changed is kept on the next start.
   char full[1024];

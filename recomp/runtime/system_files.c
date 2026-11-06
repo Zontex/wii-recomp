@@ -1,5 +1,5 @@
-// Files the Wii Menu makes when a new Wii first starts, which games expect to find:
-// WiiConnect24's settings, lists and mailboxes, and the Mii database. A game such as
+// Files the Wii Menu makes when a new Wii first starts, which games expect to find: the
+// system settings, WiiConnect24's settings, lists and mailboxes, and the Mii database. A game such as
 // Mario Kart Wii stops at "Could not write to/read from Wii system memory" without
 // them. Any that neither the save folder nor the Wii storage folder has are made here,
 // empty, in the save folder, so the storage folder is never written to.
@@ -134,6 +134,73 @@ static void fill_miis(uint8_t *data, uint32_t bytes) {
   put16(data + bytes - 2, crc);
 }
 
+// The system settings, as Dolphin's SysConf.cpp writes for a new Wii: "SCv0", how many
+// items, an offset for each and one past the last, then each item, and "SCed" at the
+// end. An item is a byte of type and name length, the name, and for an array its size
+// less one (two bytes for a big array, one for a small) before the value. A new Wii has
+// paired no remotes yet; the console lists its own when a game opens the file
+// (bluetooth.c). Without this file a game makes one itself, with nobody paired, and hangs
+// up on every remote that calls.
+enum { BIG_ARRAY = 1, SMALL_ARRAY = 2, BYTE = 3, LONG = 5, BOOL = 7, NAME_BYTES = 10 };
+typedef struct {
+  uint8_t type;
+  const char *name;
+  uint16_t bytes;
+  uint8_t value[NAME_BYTES * 2 + 2];  // Leading bytes of the value; the rest are zero.
+} Setting;
+
+static const Setting new_wii_settings[] = {
+    {BIG_ARRAY, "BT.DINF", 0x461},  // How many remotes are paired, then their records.
+    {BIG_ARRAY, "BT.CDIF", 0x205},
+    {LONG, "BT.SENS", 4, {0, 0, 0, 3}},  // The pointer's sensitivity.
+    {BYTE, "BT.BAR", 1, {1}},            // The sensor bar sits above the screen.
+    {BYTE, "BT.SPKV", 1, {0x58}},        // The remote speaker's volume.
+    {BYTE, "BT.MOT", 1, {1}},            // The remote rumbles.
+    // The console's name: up to ten UTF-16 characters, an end, and their count.
+    {SMALL_ARRAY, "IPL.NIK", 22, {0, 'W', 0, 'i', 0, 'i', [21] = 3}},
+    {BYTE, "IPL.LNG", 1, {1}},                 // English.
+    {BIG_ARRAY, "IPL.SADR", 0x1008, {0x6c}},  // The country: the United States.
+    {SMALL_ARRAY, "IPL.PC", 0x4a, {0, 4, 0x14}},  // Parental controls, off.
+    {LONG, "IPL.CB", 4},
+    {BYTE, "IPL.AR", 1, {1}},   // A 16:9 screen.
+    {BYTE, "IPL.SSV", 1, {1}},  // The screen dims when nothing happens.
+    {BOOL, "IPL.CD", 1},
+    {BOOL, "IPL.CD2", 1},
+    {BOOL, "IPL.EULA", 1, {1}},
+    {BYTE, "IPL.UPT", 1, {2}},
+    {BYTE, "IPL.PGS", 1},  // Not progressive scan.
+    {BYTE, "IPL.E60", 1, {1}},  // 60 Hz in PAL games.
+    {BYTE, "IPL.DH", 1},
+    {LONG, "IPL.INC", 4, {0, 0, 0, 8}},
+    {LONG, "IPL.FRC", 4, {0, 0, 0, 0x28}},
+    {SMALL_ARRAY, "IPL.IDL", 2, {0, 1}},
+    {LONG, "NET.WCFG", 4, {0, 0, 0, 1}},
+    {LONG, "NET.CTPC", 4},
+    {BYTE, "WWW.RST", 1},
+    {BOOL, "MPLS.MOVIE", 1, {1}},
+};
+
+static void fill_system_settings(uint8_t *data, uint32_t bytes) {
+  enum { COUNT = sizeof new_wii_settings / sizeof *new_wii_settings, FIRST_OFFSET = 6 };
+  memcpy(data, "SCv0", 4);
+  put16(data + 4, COUNT);
+  uint32_t at = FIRST_OFFSET + (COUNT + 1) * 2;
+  for (int i = 0; i < COUNT; i++) {
+    const Setting *setting = &new_wii_settings[i];
+    uint32_t name_bytes = (uint32_t)strlen(setting->name);
+    put16(data + FIRST_OFFSET + i * 2, (uint16_t)at);
+    data[at++] = (uint8_t)(setting->type << 5 | (name_bytes - 1));
+    memcpy(data + at, setting->name, name_bytes);
+    at += name_bytes;
+    if (setting->type == BIG_ARRAY) put16(data + at, setting->bytes - 1), at += 2;
+    if (setting->type == SMALL_ARRAY) data[at++] = (uint8_t)(setting->bytes - 1);
+    memcpy(data + at, setting->value, setting->bytes < sizeof setting->value ? setting->bytes : sizeof setting->value);
+    at += setting->bytes;
+  }
+  put16(data + FIRST_OFFSET + COUNT * 2, (uint16_t)at);
+  memcpy(data + bytes - 4, "SCed", 4);
+}
+
 typedef struct {
   const char *path;
   uint32_t bytes;
@@ -141,6 +208,7 @@ typedef struct {
 } SystemFile;
 
 static const SystemFile system_files[] = {
+    {"/shared2/sys/SYSCONF", 0x4000, fill_system_settings},
     {"/shared2/wc24/nwc24msg.cfg", CONFIG_BYTES, fill_settings},
     {"/shared2/wc24/nwc24msg.cbk", CONFIG_BYTES, fill_settings},  // The settings' backup copy.
     {"/shared2/wc24/nwc24fl.bin", 32864, fill_friends},
