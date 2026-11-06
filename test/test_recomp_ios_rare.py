@@ -31,10 +31,13 @@ class RareRequests(unittest.TestCase):
     def test_replies_crypto_usb_and_cover_status(self):
         self.build_and_run([HERE / "c/test_ios_rare.c"] + [RUNTIME / name for name in ("ios.c", "usb.c", "crypto.c", "dvd.c", "gaps.c")])
 
+    def test_power_and_reset_controller(self):
+        self.build_and_run([HERE / "c/test_stm.c", RUNTIME / "stm.c"])
+
     def test_attributes_open_modes_and_shutdown(self):
         saves = self.folder / "saves"
         saves.mkdir()
-        self.build_and_run([HERE / "c/test_storage_rare.c", RUNTIME / "fs.c", RUNTIME / "files.c"], saves)
+        self.build_and_run([HERE / "c/test_storage_rare.c", RUNTIME / "fs.c", RUNTIME / "files.c", RUNTIME / "gaps.c"], saves)
         self.assertEqual((saves / "title/b").read_bytes(), b"yes!")
 
     def test_bluetooth_rare_commands_and_channels(self):

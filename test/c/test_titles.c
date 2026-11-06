@@ -58,16 +58,14 @@ int main(int count, char **arguments) {
   CHECK_EQ(tmd_view_bytes(tmd, (size_t)size), TMD_VIEW_HEADER_BYTES + 2 * TMD_VIEW_CONTENT_BYTES);
   CHECK_EQ(tmd_view(tmd, (size_t)size, view, 8), 0);  // No room.
   size_t view_size = tmd_view(tmd, (size_t)size, view, sizeof view);
-  CHECK_EQ(view_size, 0x80);
+  CHECK_EQ(view_size, 0x7c);
   CHECK_EQ(view[0], 1);                                  // TMD format version.
   CHECK(!memcmp(view + 4, tmd + 0x184, 8));             // Required IOS.
   CHECK(!memcmp(view + 0x0c, tmd + 0x18c, 8));          // Title.
   CHECK_EQ(view[0x58] << 8 | view[0x59], 0x1234);       // Title version.
   CHECK_EQ(view[0x5a] << 8 | view[0x5b], 2);            // Contents.
-  CHECK_EQ(view[0x5c] | view[0x5d] | view[0x5e], 0);    // Boot index, widened.
-  CHECK_EQ(view[0x5f], 1);
-  CHECK(!memcmp(view + 0x60, tmd + 0x1e4, 16));
-  CHECK(!memcmp(view + 0x70, tmd + 0x1e4 + 36, 16));
+  CHECK(!memcmp(view + 0x5c, tmd + 0x1e4, 16));        // Contents right after, as libogc's tmd_view.
+  CHECK(!memcmp(view + 0x6c, tmd + 0x1e4 + 36, 16));
 
   long ticket_size = title_tickets(MENU, tickets, sizeof tickets);
   CHECK_EQ(ticket_size, TICKET_BYTES);

@@ -7,12 +7,16 @@
 #include <unistd.h>
 
 #include "cpu.h"
+#include "gaps.h"
 #include "ios.h"
 
 enum {
   GET_STATS = 2, CREATE_DIR = 3, READ_DIR = 4, SET_ATTR = 5, GET_ATTR = 6, DELETE = 7, RENAME = 8, CREATE_FILE = 9,
   GET_USAGE = 12, SHUTDOWN = 13, PATH_BYTES = 64, ATTR_PATH = 6, ATTR_BYTES = 0x4c, MAX_PATH = 1024, VECTOR_BYTES = 8,
-  INVALID = -101, NOT_FOUND = -106, ALREADY_EXISTS = -105, BLOCK_BYTES = 0x4000, FREE_BLOCKS = 0x4000, FREE_INODES = 0x4000,
+  INVALID = -101, NOT_FOUND = -106, ALREADY_EXISTS = -105,
+  // The storage's size, as Dolphin's FileSystem.h gives it: 16 KiB clusters, some kept for IOS.
+  CLUSTER_BYTES = 0x4000, TOTAL_CLUSTERS = 0x7ec0, RESERVED_CLUSTERS = 0x300, USABLE_CLUSTERS = TOTAL_CLUSTERS - RESERVED_CLUSTERS,
+  TOTAL_INODES = 0x17ff,
   NAME_BYTES = 13, READ_WRITE = 3, FILE_NOT_EMPTY = -115,
   // Where owner, group, permissions and attribute sit in a request's parameters (Dolphin's ISFSParams).
   ATTR_OWNER = 0, ATTR_GROUP = 4, ATTR_MODES = ATTR_PATH + PATH_BYTES, ATTR_FLAGS = ATTR_MODES + 3,
@@ -87,9 +91,17 @@ static Attributes read_attributes(uint32_t in) {
   return (Attributes){rd32(in + ATTR_OWNER), rd16(in + ATTR_GROUP), {rd8(in + ATTR_MODES), rd8(in + ATTR_MODES + 1), rd8(in + ATTR_MODES + 2)}, rd8(in + ATTR_FLAGS)};
 }
 
+static int kind_of(const char *path);
+static int parent_there(const char *path);
+static int valid_path(const char *path);
+
+// CREATEFILE and CREATEDIR: the name must be valid and its folder there, as on a Wii. The
+// folder may be only in the Wii storage folder, so the save folder gets its copy of it.
 static int create(const char *path, int folder) {
   char full[MAX_PATH], found[MAX_PATH];
+  if (!valid_path(path)) return INVALID;
   if (files_find(path, found, sizeof found)) return ALREADY_EXISTS;
+  if (!parent_there(path)) return NOT_FOUND;
   files_save_path(path, full, sizeof full);
   files_make_parents(full);
   if (folder) return mkdir(full, 0700) ? NOT_FOUND : 0;
@@ -126,19 +138,59 @@ static int erase(const char *path) {
   return 0;
 }
 
+// A file from the Wii storage folder copied into the save folder, written whole.
 static int copy_file(const char *from, const char *to) {
-  FILE *in = fopen(from, "rb"), *out = in ? fopen(to, "wb") : 0;
-  char block[BLOCK_BYTES];
-  size_t bytes;
-  while (out && (bytes = fread(block, 1, sizeof block, in)) > 0) fwrite(block, 1, bytes, out);
-  if (in) fclose(in);
-  if (out) fclose(out);
-  return in && out ? 0 : NOT_FOUND;
+  FILE *in = fopen(from, "rb");
+  if (!in) return NOT_FOUND;
+  fseek(in, 0, SEEK_END);
+  long size = ftell(in);
+  rewind(in);
+  uint8_t *data = malloc(size > 0 ? (size_t)size : 1);
+  int ok = data && fread(data, 1, (size_t)size, in) == (size_t)size && files_write_whole(to, data, (size_t)size);
+  fclose(in);
+  free(data);
+  return ok ? 0 : NOT_FOUND;
 }
 
+// The type of what's at a Wii path, through both folders: 1 a file, 2 a folder, 0 nothing.
+static int kind_of(const char *path) {
+  char found[MAX_PATH];
+  struct stat info;
+  if (!files_find(path, found, sizeof found) || stat(found, &info)) return 0;
+  return S_ISDIR(info.st_mode) ? 2 : 1;
+}
+
+// Whether the folder a path would go in is there, as IOS needs it to be.
+static int parent_there(const char *path) {
+  char parent[PATH_BYTES];
+  snprintf(parent, sizeof parent, "%s", path);
+  char *last = strrchr(parent, '/');
+  if (!last) return 0;
+  if (last == parent) return 1;  // The top folder.
+  *last = 0;
+  return kind_of(parent) == 2;
+}
+
+// A name IOS takes: a path from the top, each part at most 12 characters.
+static int valid_path(const char *path) {
+  if (path[0] != '/') return 0;
+  const char *last = strrchr(path, '/') + 1;
+  return *last && strlen(last) < NAME_BYTES;
+}
+
+// RENAME, as Dolphin's FS answers it: both names must be valid, the new one's folder there,
+// and anything already there of the same type, which it replaces.
 static int move(const char *from, const char *to) {
   char source[MAX_PATH], target[MAX_PATH], saved[MAX_PATH];
+  if (!valid_path(from) || !valid_path(to)) return INVALID;
   if (!files_find(from, source, sizeof source)) return NOT_FOUND;
+  if (!parent_there(to)) return NOT_FOUND;
+  int kind = kind_of(from), there = kind_of(to);
+  if (there && there != kind) return INVALID;
+  if (kind == 2 && strcmp(source, (files_save_path(from, saved, sizeof saved), saved))) {
+    gap_hit("ios.rename_folder_from_storage", 0);  // A folder only in the Wii storage folder: not copied.
+    return INVALID;
+  }
   files_save_path(to, target, sizeof target);
   files_save_path(from, saved, sizeof saved);
   files_make_parents(target);
@@ -195,11 +247,17 @@ static int get_attributes(const char *path, uint32_t out, uint32_t bytes) {
   return 0;
 }
 
+// Dolphin keeps its own record of owners and permissions in the storage's top folder, as
+// fst.bin. It isn't one of the Wii's files, so it's left out there.
+static int host_only(const char *wii_folder, const char *name) {
+  return name[0] == '.' || (!strcmp(wii_folder, "/") && !strcmp(name, "fst.bin"));
+}
+
 // Adds a folder's names to `names`, skipping any already listed. Returns the new count.
-static uint32_t list_folder(const char *full, char (*names)[NAME_BYTES], uint32_t count, uint32_t limit) {
+static uint32_t list_folder(const char *wii_folder, const char *full, char (*names)[NAME_BYTES], uint32_t count, uint32_t limit) {
   DIR *folder = opendir(full);
   for (struct dirent *entry = folder ? readdir(folder) : 0; entry && count < limit; entry = readdir(folder)) {
-    if (entry->d_name[0] == '.') continue;
+    if (host_only(wii_folder, entry->d_name)) continue;
     int seen = 0;
     for (uint32_t i = 0; i < count; i++) seen |= !strncmp(names[i], entry->d_name, NAME_BYTES - 1);
     if (seen) continue;
@@ -222,8 +280,8 @@ static int read_folder(uint32_t request) {
   uint32_t limit = with_names ? rd32(guest(rd32(vectors + VECTOR_BYTES))) : 4096;
   char (*names)[NAME_BYTES] = calloc(limit ? limit : 1, NAME_BYTES);
   files_save_path(path, saved, sizeof saved);
-  uint32_t count = list_folder(saved, names, 0, limit);
-  if (files_storage_path(path, found, sizeof found)) count = list_folder(found, names, count, limit);
+  uint32_t count = list_folder(path, saved, names, 0, limit);
+  if (files_storage_path(path, found, sizeof found)) count = list_folder(path, found, names, count, limit);
   uint32_t count_vector = vectors + (with_names ? 3 : 1) * VECTOR_BYTES;
   wr32(guest(rd32(count_vector)), count);
   if (with_names) {
@@ -238,21 +296,63 @@ static int read_folder(uint32_t request) {
   return 0;
 }
 
+// What a folder and everything in it take: an inode each, and each file's size in whole
+// clusters, as Dolphin's host file system counts them.
+static void folder_usage(const char *path, uint64_t *clusters, uint64_t *inodes) {
+  enum { MOST_NAMES = 4096 };
+  char saved[MAX_PATH], stored[MAX_PATH], child[PATH_BYTES * 2], found[MAX_PATH];
+  char (*names)[NAME_BYTES] = calloc(MOST_NAMES, NAME_BYTES);
+  files_save_path(path, saved, sizeof saved);
+  uint32_t count = list_folder(path, saved, names, 0, MOST_NAMES);
+  if (files_storage_path(path, stored, sizeof stored)) count = list_folder(path, stored, names, count, MOST_NAMES);
+  *inodes += 1;  // The folder itself.
+  for (uint32_t i = 0; i < count; i++) {
+    snprintf(child, sizeof child, "%s/%s", strcmp(path, "/") ? path : "", names[i]);
+    struct stat info;
+    if (!files_find(child, found, sizeof found) || stat(found, &info)) continue;
+    if (S_ISDIR(info.st_mode)) {
+      folder_usage(child, clusters, inodes);
+    } else {
+      *inodes += 1;
+      *clusters += ((uint64_t)info.st_size + CLUSTER_BYTES - 1) / CLUSTER_BYTES;
+    }
+  }
+  free(names);
+}
+
+// The whole storage's numbers: its clusters and inodes, used and free, as IOS reports them.
 static void write_stats(uint32_t out) {
-  static const uint32_t stats[7] = {BLOCK_BYTES, FREE_BLOCKS, 0, 0, 0, FREE_INODES, 0};
+  uint64_t clusters = 0, inodes = 0;
+  folder_usage("/", &clusters, &inodes);
+  if (clusters > USABLE_CLUSTERS) clusters = USABLE_CLUSTERS;
+  if (inodes > TOTAL_INODES) inodes = TOTAL_INODES;
+  const uint32_t stats[7] = {CLUSTER_BYTES, (uint32_t)(USABLE_CLUSTERS - clusters), (uint32_t)clusters, 0, RESERVED_CLUSTERS,
+                             (uint32_t)(TOTAL_INODES - inodes), (uint32_t)inodes};
   for (uint32_t i = 0; i < 7; i++) wr32(out + i * 4, stats[i]);
+}
+
+// One folder's numbers: the clusters and inodes it and everything in it take.
+static int get_usage(uint32_t request) {
+  uint32_t vectors = guest(rd32(request + 24));
+  if (rd32(request + 16) != 1 || rd32(request + 20) != 2) return INVALID;
+  char path[PATH_BYTES], found[MAX_PATH];
+  read_path(guest(rd32(vectors)), path);
+  struct stat info;
+  if (path[0] != '/') return INVALID;
+  if (!files_find(path, found, sizeof found) || stat(found, &info)) return NOT_FOUND;
+  if (!S_ISDIR(info.st_mode)) return INVALID;
+  uint64_t clusters = 0, inodes = 0;
+  folder_usage(path, &clusters, &inodes);
+  wr32(guest(rd32(vectors + VECTOR_BYTES)), (uint32_t)clusters);
+  wr32(guest(rd32(vectors + 2 * VECTOR_BYTES)), (uint32_t)inodes);
+  return 0;
 }
 
 int fs_request(uint32_t command, uint32_t request) {
   uint32_t code = rd32(request + 12);
   if (command == IOS_IOCTLV) {
     if (code == READ_DIR) return read_folder(request);
-    if (code == GET_USAGE) {
-      uint32_t vectors = guest(rd32(request + 24));
-      wr32(guest(rd32(vectors + VECTOR_BYTES)), 0);
-      wr32(guest(rd32(vectors + 2 * VECTOR_BYTES)), 0);
-      return 0;
-    }
+    if (code == GET_USAGE) return get_usage(request);
     return IOS_UNHANDLED;
   }
   if (command != IOS_IOCTL) return IOS_UNHANDLED;

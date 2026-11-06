@@ -76,6 +76,14 @@ void ios_trace(const char *device, uint32_t command, uint32_t request, int resul
     fprintf(stderr, "ios %s ioctl %x: unhandled, %u bytes in, %u out\n", device, code, rd32(request + 20), rd32(request + 28));
   } else if (unhandled) fprintf(stderr, "ios %s %s %x: unhandled\n", device, command_name(command), code);
   else if (result == IOS_NO_REPLY) fprintf(stderr, "ios %s %s %x: held\n", device, command_name(command), code);
+  else if (!strcmp(device, "/dev/fs") && ios_trace_all()) {
+    // The storage's requests name a path: in the first input, or the first vector's.
+    uint32_t in = command == IOS_IOCTLV ? rd32((rd32(request + 24) | 0x80000000u)) : rd32(request + 16);
+    uint32_t at = (in | 0x80000000u) + (command == IOS_IOCTL && (code == 3 || code == 5 || code == 9) ? 6 : 0);
+    char path[65] = {0};
+    for (int i = 0; in && i < 64 && (path[i] = (char)rd8(at + i)); i++) {}
+    fprintf(stderr, "ios %s %s %x %s: %d\n", device, command_name(command), code, path, result);
+  }
   else fprintf(stderr, "ios %s %s %x: %d\n", device, command_name(command), code, result);
   if (unhandled && getenv("WII_RECOMP_IOS_STRICT")) {
     fprintf(stderr, "stop: IOS can't answer %s %s %x yet\n", device, command_name(command), code);

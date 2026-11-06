@@ -5,6 +5,7 @@
 #include <string.h>
 
 #include "cpu.h"
+#include "console.h"
 #include "drive.h"
 #include "hardware.h"
 #include "ios.h"
@@ -96,6 +97,7 @@ static void handle(uint32_t physical) {
     int device = open_device[fd] - 1;
     if (command == IOS_CLOSE) {
       open_device[fd] = 0;
+      ios_device_closed(device);
     } else {
       result = ios_device_request(device, command, request);
       ios_trace(ios_device_name(device), command, request, result);
@@ -119,6 +121,11 @@ void ios_complete(uint32_t request, int result) {
     if (!queue) { fprintf(stderr, "stop: no memory for IOS replies\n"); exit(9); }
   }
   queue[queued++] = request & ~0x80000000u;
+}
+
+void ipc_describe(void) {
+  fprintf(stderr, "state: IPC reply %u ack %u, %zu replies waiting, enabled reply %u ack %u, Hollywood mask %08x\n",
+          reply, ack, queued, enable_reply, enable_ack, irq_mask);
 }
 
 // One reply at a time, once the game has finished with the last one.
@@ -185,10 +192,12 @@ int ipc_write(uint32_t address, uint32_t value) {
       vi_solid = value;
       if (value & VI_SOLID_ENABLE) gap_hit("hw.vi_solid_color_hollywood_0x24", value);
       break;
-    case GPIO_OUT:
+    case GPIO_OUT: {
+      uint32_t gpio_out_before = gpio_out;
       gpio_out = (value & GPIO_OWNED) | (gpio_out & ~GPIO_OWNED);
-      if (value & GPIO_EJECT) gap_hit("hw.second_disc_layer_disc_swap", value);
+      if (value & GPIO_EJECT & ~gpio_out_before) console_eject();  // The pin going up throws the disc out.
       break;
+    }
     case GPIO_DIRECTION: gpio_direction = (value & GPIO_OWNED) | (gpio_direction & ~GPIO_OWNED); break;
     case GPIO_IN: break;  // Read only.
     default: return 0;

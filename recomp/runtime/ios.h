@@ -13,6 +13,7 @@ enum { IOS_DEVICE_ID = 0x0403ac68 };
 int ios_find_device(const char *path);
 const char *ios_device_name(int device);
 int ios_device_request(int device, uint32_t command, uint32_t request);
+void ios_device_closed(int device);  // Its handle closed.
 void ios_complete(uint32_t request, int result);
 
 // A device answer meaning "no reply yet": the request stays pending.
@@ -28,6 +29,9 @@ int es_request(uint32_t command, uint32_t request);
 int stm_immediate(uint32_t command, uint32_t request);
 int stm_event_hook(uint32_t command, uint32_t request);
 void stm_reset_button(void);
+void stm_power_button(void);
+void stm_event_hook_closed(void);
+int stm_listening(void);  // Any thread: whether the program waits on the buttons.
 int net_kd_request(uint32_t command, uint32_t request);
 int net_kd_time(uint32_t command, uint32_t request);
 int net_ncd_manage(uint32_t command, uint32_t request);
@@ -45,6 +49,10 @@ void files_start(const char *folder);
 void files_save_path(const char *path, char *out, unsigned long size);
 int files_storage_path(const char *path, char *out, unsigned long size);
 void files_make_parents(const char *full);
+// Writes a whole host file so a power cut leaves the old one or the new one. 1 if written.
+int files_write_whole(const char *full, const void *data, size_t bytes);
+// A fixed-size value from the console settings (SYSCONF), such as IPL.CB. Its size, or 0.
+int files_system_setting(const char *name, uint8_t *out, size_t limit);
 int files_find(const char *path, char *out, unsigned long size);
 void system_files_make(void);  // What the Wii Menu makes on a new Wii, where storage lacks it.
 int fs_request(uint32_t command, uint32_t request);

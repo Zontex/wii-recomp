@@ -9,6 +9,12 @@ void clear_irq(int bit) { (void)bit; irq_up = 0; }
 void gap_hit(const char *id, uint32_t detail) { (void)id; (void)detail; gaps++; }
 static uint64_t now_ticks = 60750000ull * 1000000;  // A million seconds after 2000.
 uint64_t time_base(void) { return now_ticks; }
+static int32_t counter_bias;  // The settings' IPL.CB, or none when 0.
+int files_system_setting(const char *name, uint8_t *out, size_t limit) {
+  if (!counter_bias || strcmp(name, "IPL.CB") || limit < 4) return 0;
+  for (int i = 0; i < 4; i++) out[i] = (uint8_t)((uint32_t)counter_bias >> (24 - i * 8));
+  return 4;
+}
 
 #include "exi.c"
 
@@ -59,6 +65,11 @@ static void test_clock(void) {
   CHECK_EQ(read_clock(), 1000105);
   now_ticks += 60750000ull;
   CHECK_EQ(read_clock(), 1000106);  // It keeps running from where it was set.
+  // The menu adds the settings' counter bias to the count, so the count leaves it out,
+  // and the menu shows the same time whatever bias its date setting stored.
+  counter_bias = -500000;
+  CHECK_EQ(read_clock(), 1500106);
+  counter_bias = 0;
 }
 
 static void test_interrupt(void) {

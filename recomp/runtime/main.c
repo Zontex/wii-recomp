@@ -132,6 +132,20 @@ static int is_folder(const char *path) {
   return S_ISDIR(info.st_mode);
 }
 
+// What a console starts with: the Wii Menu, the disc (--boot-disc) or a title (--title).
+static uint64_t console_start_argument(int count, char **arguments) {
+  unsigned high, low;
+  if (count >= 1 && !strcmp(arguments[0], "--boot-disc")) return CONSOLE_DISC;
+  if (count >= 2 && !strcmp(arguments[0], "--title") && sscanf(arguments[1], "%8x-%8x", &high, &low) == 2) {
+    return (uint64_t)high << 32 | low;
+  }
+  if (count >= 1) {
+    fprintf(stderr, "stop: a console starts with nothing, --boot-disc or --title <high>-<low>, not %s\n", arguments[0]);
+    exit(1);
+  }
+  return CONSOLE_MENU;
+}
+
 int main(int count, char **arguments) {
   // On the Mac, submitting can wait up to a second for the window to free a picture.
   // MoltenVK does that on its own thread with this off, so the game never stalls on it.
@@ -142,11 +156,12 @@ int main(int count, char **arguments) {
   setenv("MVK_CONFIG_SPECIALIZED_QUEUE_FAMILIES", "1", 0);
   if (count < 2 || (!strcmp(arguments[1], "--console") && count < 3)) {
     fprintf(stderr, "usage: wii-recomp <disc image, or folder holding main.dol, boot.bin and fst.bin> [Wii storage folder, wii/nand by default]\n"
-                    "       wii-recomp --console <console folder> [--boot-disc]\n");
+                    "       wii-recomp --console <console folder> [--boot-disc | --title <high>-<low>]\n");
     return 1;
   }
+  console_remember(arguments);
   if (!strcmp(arguments[1], "--console")) {
-    console_start(arguments[0], arguments[2], count > 3 && !strcmp(arguments[3], "--boot-disc"), &boot);
+    console_start(arguments[0], arguments[2], console_start_argument(count - 3, arguments + 3), &boot);
     count = 1;  // The console's storage is its own, never a separate folder.
   } else {
     use_folders_beside(arguments[0]);  // Before the title loads, as a disc image's native code goes to the cache.

@@ -14,12 +14,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "console.h"
 #include "controllers.h"
 #include "gx_backend.h"
+#include "hardware.h"
 #include "pads.h"
 #include "input.h"
 
-enum { WINDOW_WIDTH = 1280, WINDOW_HEIGHT = 720 };
+enum { WINDOW_WIDTH = 1280, WINDOW_HEIGHT = 720, POWER_OFF_SECONDS = 5 };
 
 static GLFWwindow *window;
 static int frame_width, frame_height;
@@ -134,10 +136,21 @@ void window_size(int *width, int *height) {
   *height = frame_height;
 }
 
+// Closing the window is pressing the power button: the program turns the console off
+// its own way, writing what it needs to. One that doesn't listen, or takes too long,
+// has its power cut, with open files written out as IOS would.
 void window_run(void) {
   while (!glfwWindowShouldClose(window)) {
     glfwWaitEventsTimeout(pads_wait_seconds());
     pads_poll();
   }
-  exit(0);
+  if (power_button_press()) {
+    fprintf(stderr, "console: the power button is pressed\n");
+    for (double until = glfwGetTime() + POWER_OFF_SECONDS; glfwGetTime() < until;) {
+      glfwWaitEventsTimeout(0.05);
+      pads_poll();
+    }
+    fprintf(stderr, "console: the program didn't turn off within %d seconds\n", POWER_OFF_SECONDS);
+  }
+  console_power_off("off");
 }

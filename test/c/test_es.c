@@ -7,7 +7,9 @@
 #include <stddef.h>
 #include <string.h>
 int console_running(void) { return 0; }
-void console_restart(int boot_disc) { exit(99); }
+void console_restart(uint64_t start) { exit(99); }
+int console_has_title(uint64_t title) { return 0; }
+void gap_hit(const char *id, uint32_t detail) {}
 static Title test_title = {.title_high = 1, .title_low = 2};  // title.c holds `title`, linked in.
 void bluetooth_register_remote(uint8_t *settings, size_t bytes) {}
 void camera_set_bar_above(int above) {}
@@ -61,7 +63,7 @@ int main(int count, char **arguments) {
   CHECK_EQ(ioctlv(0x10, 1, 1, (uint32_t[]){8, 4}), 0);
   CHECK_EQ(rd32(buffer(1)), 2);
   CHECK_EQ(ioctlv(0x14, 1, 1, (uint32_t[]){8, 4}), 0);
-  CHECK_EQ(rd32(buffer(1)), 0x80);
+  CHECK_EQ(rd32(buffer(1)), 0x7c);  // The TMD view: 0x5c of header, then 16 bytes a content.
   CHECK_EQ(ioctlv(0x12, 1, 1, (uint32_t[]){8, 4}), 0);
   CHECK_EQ(rd32(buffer(1)), 1);
   wr32(buffer(1), 1);

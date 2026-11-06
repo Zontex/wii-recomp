@@ -3,6 +3,7 @@
 
     python3 recomp/tools/autoplay/autoplay.py <session> [--disc extracted/sys] [--keep FOLDER]
         [--build recomp/build] [--saves FOLDER] [--storage FOLDER] [--env KEY=VALUE]...
+    python3 recomp/tools/autoplay/autoplay.py <session> --console FOLDER [--saves FOLDER] ...
 
 It starts the game, presses buttons, moves the pointer and stands on the Balance Board
 through the control pipe, saves the game's own pictures, and can read the text on them
@@ -17,14 +18,19 @@ boot.bin, picks where to look first:
     sessions/<session>.py          sessions for any game: look (pictures every few
                                    seconds), explore (reads the screen and presses on)
 
-or give a session's path. To add a game, make games/<its ID>/ and write sessions there;
+or give a session's path. With --console, the console starts from its Wii Menu, and
+sessions come from games/00000001-00000002/, the menu's title ID. The console is
+copied first: its storage (from --saves when given), with its titles, drive and caches
+linked, so a session never changes the real console's saves either. To add a game, make games/<its ID>/ and write sessions there;
 player.py has the reading and clicking they can build on.
 
 The game runs on a copy of its starting saves, so a session never changes real ones. A
 session can name where it starts with SAVES = "<name>", meaning
 <build>/session-saves/<game ID>/<name>. Without one it starts from <build>/saves; --saves
 overrides both. Pictures and saves are the game's, so they go to --keep or a temporary
-folder, never into the repository. Exit status is 0 when every step passed.
+folder, never into the repository. Exit status is 0 when every step passed. With
+AUTOPLAY_LEAVE_RUNNING=1, a game still running when the session ends is left running,
+to look into one that's stuck.
 """
 import argparse
 import importlib.util
@@ -40,6 +46,7 @@ import time
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 MOLTENVK = "/usr/local/etc/vulkan/icd.d/MoltenVK_icd.json"
+MENU_TITLE = "00000001-00000002"  # The Wii Menu's title ID names its sessions' folder.
 
 
 # Letters text recognition sometimes reads from another alphabet: Cyrillic that looks Latin.
@@ -51,23 +58,30 @@ class StepFailed(Exception):
 
 
 class Game:
-    def __init__(self, build, folder, starting_saves, disc, game_id, storage=None, env=()):
+    def __init__(self, build, folder, starting_saves, disc, game_id, storage=None, env=(), console=None):
         self.build = build
         self.game_id = game_id
         self.folder = folder
-        self.saves = os.path.join(folder, "saves")
-        shutil.copytree(starting_saves, self.saves)
         self.pipe = os.path.join(folder, "control")
         self.log_path = os.path.join(folder, "game.log")
-        environment = dict(os.environ, WII_RECOMP_SAVES=self.saves, WII_RECOMP_CONTROL=self.pipe, WII_RECOMP_ACTIVITY="1")
+        environment = dict(os.environ, WII_RECOMP_CONTROL=self.pipe, WII_RECOMP_ACTIVITY="1")
+        if console:
+            self.console = copy_console(console, os.path.join(folder, "console"), starting_saves)
+            self.saves = os.path.join(self.console, "nand")
+            command = [os.path.join(build, "wii-recomp"), "--console", self.console]
+        else:
+            self.console = None
+            self.saves = os.path.join(folder, "saves")
+            shutil.copytree(starting_saves, self.saves)
+            environment["WII_RECOMP_SAVES"] = self.saves
+            command = [os.path.join(build, "wii-recomp"), disc] + ([storage] if storage else [])
         environment.setdefault("WII_RECOMP_RENDERER", "vulkan")  # Pictures for shot() come from Vulkan.
         if sys.platform == "darwin" and os.path.exists(MOLTENVK):
             environment.setdefault("VK_DRIVER_FILES", MOLTENVK)
         environment.update(pair.split("=", 1) for pair in env)
         self.log = open(self.log_path, "w")
         self.started = time.time()
-        self.process = subprocess.Popen([os.path.join(build, "wii-recomp"), disc] + ([storage] if storage else []),
-                                        stdout=self.log, stderr=subprocess.STDOUT, env=environment, cwd=ROOT)
+        self.process = subprocess.Popen(command, stdout=self.log, stderr=subprocess.STDOUT, env=environment, cwd=ROOT)
         self.read_at = 0
         self.shots = 0
         self.wait_for(r"^second 1:", 60, "the game to start drawing")
@@ -144,12 +158,16 @@ class Game:
         """Saves the next picture as <folder>/<number>-<name>.png, and returns its path."""
         self.shots += 1
         ppm = os.path.join(self.folder, f"{self.shots:02}-{name}.ppm")
-        self.send(f"shot {ppm}")
-        deadline = time.time() + 10
+        # Asked again now and then: a console starting another title makes its pipe anew,
+        # and a request sent as it does is lost.
+        deadline, again = time.time() + 15, 0
         while not os.path.exists(ppm):
             self.check_running()
             if time.time() > deadline:
                 raise StepFailed(f"the picture {name} was never saved")
+            if time.time() > again:
+                self.send(f"shot {ppm}")
+                again = time.time() + 4
             time.sleep(0.1)
         png = ppm[:-4] + ".png"
         if sys.platform == "darwin":
@@ -181,6 +199,21 @@ class Game:
             self.process.kill()
         self.process.wait()
         self.log.close()
+
+
+def copy_console(source, target, nand=None):
+    """A console folder of its own: copied storage and settings, the rest linked."""
+    os.makedirs(target)
+    shutil.copytree(nand or os.path.join(source, "nand"), os.path.join(target, "nand"), symlinks=True)
+    for name in os.listdir(source):
+        if name == "nand":
+            continue
+        path = os.path.join(source, name)
+        if os.path.isdir(path):
+            os.symlink(os.path.abspath(path), os.path.join(target, name))
+        else:
+            shutil.copy2(path, os.path.join(target, name))
+    return target
 
 
 def screen_reader():
@@ -226,8 +259,12 @@ def main():
     parser.add_argument("--storage", default=os.environ.get("WII_RECOMP_NAND"),
                         help="a Wii storage folder; wii/nand/ when not given (see wii/README.md)")
     parser.add_argument("--env", action="append", default=[])
+    parser.add_argument("--console", help="start this console folder from its Wii Menu")
     options = parser.parse_args()
-    game_id = options.game or game_id_of(os.path.join(ROOT, options.disc) if not os.path.isabs(options.disc) else options.disc)
+    if options.console:
+        game_id = options.game or MENU_TITLE
+    else:
+        game_id = options.game or game_id_of(os.path.join(ROOT, options.disc) if not os.path.isabs(options.disc) else options.disc)
     try:
         path = find_session(options.session, game_id)
     except StepFailed as failure:
@@ -245,6 +282,14 @@ def main():
     game = None
     try:
         named = getattr(session, "SAVES", None)
+        if options.console:
+            starting = options.saves or (os.path.join(options.build, "session-saves", game_id, named) if named else None)
+            if starting and not os.path.isdir(starting):
+                raise StepFailed(f"no starting storage at {starting}: run the session that makes it first")
+            game = Game(options.build, folder, starting, None, game_id, env=options.env, console=options.console)
+            session.run(game)
+            print(f"PASSED in {game.seconds():.0f} s")
+            return 0
         starting = options.saves or (os.path.join(options.build, "session-saves", game_id or "unknown", named) if named
                                      else os.path.join(options.build, "saves"))
         if named and not options.saves and not os.path.isdir(starting):
@@ -262,7 +307,9 @@ def main():
             print(f"the game's log is {game.log_path}")
         return 1
     finally:
-        if game:
+        if game and os.environ.get("AUTOPLAY_LEAVE_RUNNING") and game.process.poll() is None:
+            print(f"left the game running, as pid {game.process.pid}, for a look inside (peek through {game.pipe})")
+        elif game:
             game.stop()
 
 

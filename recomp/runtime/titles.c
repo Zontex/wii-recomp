@@ -143,16 +143,15 @@ size_t tmd_view_bytes(const uint8_t *tmd, size_t bytes) {
   return count < 0 ? 0 : TMD_VIEW_HEADER_BYTES + (size_t)count * TMD_VIEW_CONTENT_BYTES;
 }
 
-// The header from the TMD's version to its access rights, then its title version,
-// content count and boot index widened to 32 bits, then each content without its hash.
+// The header from the TMD's version to its access rights, then its title version and
+// content count, then each content without its hash, as Dolphin's GetRawView and
+// libogc's tmd_view lay it out: the contents start at 0x5c.
 size_t tmd_view(const uint8_t *tmd, size_t bytes, uint8_t *out, size_t limit) {
   size_t size = tmd_view_bytes(tmd, bytes);
   if (!size || size > limit) return 0;
   size_t at = TMD_ACCESS_RIGHTS - TMD_VIEW_FROM;
   memcpy(out, tmd + TMD_VIEW_FROM, at);
   memcpy(out + at, tmd + TMD_TITLE_VERSION, 4);  // Title version and content count.
-  out[at + 4] = out[at + 5] = 0;
-  memcpy(out + at + 6, tmd + TMD_BOOT_INDEX, 2);
   int count = tmd_check(tmd, bytes);
   for (int i = 0; i < count; i++) {
     const uint8_t *record = tmd + TMD_HEADER_BYTES + i * TMD_CONTENT_BYTES;

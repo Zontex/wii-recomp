@@ -54,6 +54,27 @@ int main(int count, char **arguments) {
   files_start(storage);
   char full[1024];
 
+  // Usage counts each file's clusters and every inode, through both folders.
+  wr32(REQUEST + 12, 2);  // GETSTATS.
+  wr32(REQUEST + 24, OUT & 0x7fffffff);
+  wr32(REQUEST + 28, 0x1c);
+  CHECK_EQ(fs_request(IOS_IOCTL, REQUEST), 0);
+  CHECK_EQ(rd32(OUT), 0x4000);           // Cluster size.
+  CHECK_EQ(rd32(OUT + 8), 2);            // Used clusters: two small files.
+  CHECK_EQ(rd32(OUT + 4), 0x7bc0 - 2);   // Free.
+  CHECK_EQ(rd32(OUT + 24), 4);           // Used inodes: the top, shared2 and the files.
+  strcpy((char *)host(IN), "/shared2");
+  wr32(REQUEST + 12, 12);  // GETUSAGE.
+  wr32(REQUEST + 16, 1);
+  wr32(REQUEST + 20, 2);
+  wr32(REQUEST + 24, VECTORS & 0x7fffffff);
+  wr32(VECTORS, IN & 0x7fffffff);
+  wr32(VECTORS + 8, OUT & 0x7fffffff);
+  wr32(VECTORS + 16, (OUT + 4) & 0x7fffffff);
+  CHECK_EQ(fs_request(IOS_IOCTLV, REQUEST), 0);
+  CHECK_EQ(rd32(OUT), 2);
+  CHECK_EQ(rd32(OUT + 4), 3);
+
   // Reads fall through to storage; saves win once they exist.
   CHECK(files_find("/shared2/only_storage", full, sizeof full));
   CHECK(strstr(full, storage) == full);
@@ -78,7 +99,12 @@ int main(int count, char **arguments) {
   CHECK_EQ(ioctl_path(CREATE_FILE, "/shared2/made", ATTR_PATH, 0), 0);
   CHECK_EQ((uint32_t)ioctl_path(CREATE_FILE, "/shared2/made", ATTR_PATH, 0), (uint32_t)-105);
   CHECK_EQ((uint32_t)ioctl_path(CREATE_FILE, "/shared2/read_only", ATTR_PATH, 0), (uint32_t)-105);
+  CHECK_EQ((uint32_t)ioctl_path(CREATE_DIR, "/new/folder", ATTR_PATH, 0), (uint32_t)-106);  // No /new yet.
+  CHECK_EQ(ioctl_path(CREATE_DIR, "/new", ATTR_PATH, 0), 0);
   CHECK_EQ(ioctl_path(CREATE_DIR, "/new/folder", ATTR_PATH, 0), 0);
+  CHECK_EQ((uint32_t)ioctl_path(CREATE_FILE, "/new/name_too_long", ATTR_PATH, 0), (uint32_t)-101);
+  CHECK_EQ((uint32_t)ioctl_path(RENAME, "/new/folder", 0, "/shared2/only_storage"), (uint32_t)-101);  // Not the same type.
+  CHECK_EQ((uint32_t)ioctl_path(RENAME, "/new/folder", 0, "/nowhere/folder"), (uint32_t)-106);
   CHECK(!exists(storage, "/shared2/made"));
   CHECK_EQ(ioctl_path(GET_ATTR, "/shared2/read_only", 0, 0), 0);
   CHECK_EQ((uint32_t)ioctl_path(GET_ATTR, "/missing", 0, 0), (uint32_t)-106);
@@ -94,6 +120,38 @@ int main(int count, char **arguments) {
   CHECK(exists(saves, "/shared2/moved2"));
   CHECK_EQ(ioctl_path(DELETE, "/shared2/made", 0, 0), 0);
   CHECK(!exists(saves, "/shared2/made"));
+
+  // Two handles on one file share it: what one writes, the other reads at once.
+  CHECK_EQ(ioctl_path(CREATE_FILE, "/shared2/both", ATTR_PATH, 0), 0);
+  int first = files_open("/shared2/both", 3), second = files_open("/shared2/both", 1);
+  CHECK(first >= 0 && second >= 0 && first != second);
+  CHECK_EQ(put_bytes(first, "abcd"), 4);
+  memset(host(DATA), 0, 8);
+  wr32(REQUEST + 12, DATA & 0x7fffffff);
+  wr32(REQUEST + 16, 8);
+  CHECK_EQ(files_request(second, IOS_READ, REQUEST), 4);
+  CHECK(!memcmp(host(DATA), "abcd", 4));
+
+  // A seek outside the file is refused and moves nothing; to the end is fine.
+  wr32(REQUEST + 12, 5);
+  wr32(REQUEST + 16, 0);
+  CHECK(files_request(first, IOS_SEEK, REQUEST) == -101);
+  wr32(REQUEST + 12, (uint32_t)-1);
+  wr32(REQUEST + 16, 0);
+  CHECK(files_request(first, IOS_SEEK, REQUEST) == -101);
+  wr32(REQUEST + 12, 0);
+  wr32(REQUEST + 16, 2);
+  CHECK_EQ(files_request(first, IOS_SEEK, REQUEST), 4);
+  wr32(REQUEST + 12, DATA & 0x7fffffff);
+  wr32(REQUEST + 16, 8);
+  CHECK_EQ(files_request(first, IOS_READ, REQUEST), 0);  // At the end, nothing more to read.
+
+  // A request a file doesn't take is refused.
+  wr32(REQUEST + 12, 0x55);
+  CHECK(files_request(first, IOS_IOCTL, REQUEST) == -101);
+  files_close(first);
+  CHECK(exists(saves, "/shared2/both"));  // Written once the writer closed, whole.
+  files_close(second);
 
   // No storage folder at all, as when none is given on the command line.
   files_start(0);

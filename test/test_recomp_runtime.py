@@ -155,7 +155,7 @@ class Runtime(unittest.TestCase):
         storage, saves = self.folder / "storage", self.folder / "saves"
         make_storage(storage)
         saves.mkdir()
-        self.build_and_run([HERE / "c/test_titles.c", RUNTIME / "titles.c", RUNTIME / "files.c"], storage, saves)
+        self.build_and_run([HERE / "c/test_titles.c", RUNTIME / "titles.c", RUNTIME / "files.c", RUNTIME / "gaps.c"], storage, saves)
 
     def test_es_requests(self):
         storage, saves, disc = self.folder / "storage", self.folder / "saves", self.folder / "disc"

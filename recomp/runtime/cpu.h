@@ -52,6 +52,10 @@ void enter_exception(uint32_t kind, uint32_t handler);
 // Interrupts (interrupts.c). Translated code counts down and checks in here.
 extern int interrupt_budget;
 void poll_interrupts(void);
+// The program turned external interrupts on (mtmsr). One already waiting is taken at the
+// next check, as the processor takes it at once, rather than when the count runs out:
+// a program that turns them on only for a moment would otherwise almost never see one.
+void interrupts_turned_on(void);
 void decrementer_set(uint32_t value);
 uint32_t decrementer_get(void);
 void locked_cache_transfer(void);

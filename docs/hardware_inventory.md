@@ -619,7 +619,7 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 | `hw.control_busy_bit` | Control busy bit | done | `runtime/exi.c` | Transfers finish at once. |
 | `hw.status_dma_address_length_immediate_data` | Status, DMA address, length, immediate data | done | `runtime/exi.c` | Immediate and DMA transfers, both directions. Devices other than the clock chip are empty. |
 | `hw.exi_interrupt` | EXI interrupt | done | `runtime/exi.c` | Transfer done, EXI and insert interrupts, each behind its mask. |
-| `hw.rtc_and_sram_channel_0` | RTC and SRAM (channel 0) | done | `runtime/exi.c` | The clock is local time since 2000, as the time base, and the game can move it. SRAM holds a new Wii's settings with correct checksums. |
+| `hw.rtc_and_sram_channel_0` | RTC and SRAM (channel 0) | done | `runtime/exi.c` | The clock is local time since 2000, as the time base, less the settings' counter bias (`IPL.CB`), as in Dolphin: a Wii adds the bias, so the Wii Menu shows the computer's time whatever its date setting stored. The game can move it. SRAM holds a new Wii's settings with correct checksums. |
 | `hw.gc_memory_card` | GC memory card | on demand |  | GameCube titles only. |
 | `hw.microphone` | Microphone | on demand |  | A handful of titles. |
 | `hw.ethernet_adapter` | Ethernet adapter | on demand |  | Online services the adapter reached are gone. |
@@ -632,7 +632,7 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 | `hw.registers_0xcd006000` | Registers 0xCD006000 | not needed |  | Wii games go through `/dev/di`. |
 | `hw.reads_through_extracted_files` | Reads through extracted files | done | `runtime/dvd.c:110-136` | See area 7. |
 | `hw.disc_image_files_iso_wbfs_rvz` | Disc image files (ISO, WBFS, RVZ) | partial | `runtime/drive.c:1-40`, `tools/make_disc.py` | Only this project's own `.wrd` image or an extracted folder. |
-| `hw.second_disc_layer_disc_swap` | Second disc layer, disc swap | partial | `runtime/drive.c:280`, `runtime/dvd.c:105`, `runtime/ios.c:193` | The second layer works, as offsets are 64-bit. Swapping discs isn't done, and ejecting is reported. |
+| `hw.second_disc_layer_disc_swap` | Second disc layer, disc swap | done | `runtime/console.c` (`console_update_drive`), `runtime/dvd.c`, `runtime/ios.c` | The second layer works, as offsets are 64-bit. The control pipe's `eject` and `insert <image>` change the disc as the game runs, between its reads; the cover reads open while the drive is empty. A program throwing the disc out (the eject pin, or stopping the motor with eject) empties the drive. In a console the image moves between `drive/` and `shelf/`, so a restart finds the same disc. |
 
 ### IPC and Hollywood
 
@@ -702,7 +702,8 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
 | `ios.open_close` | Open, close | done | `runtime/ios.c:34`, `:55-76` | Device names match by prefix (`devices.c:19`). 32 handles. |
-| `ios.read_write_seek` | Read, write, seek | done | `runtime/files.c:121-140` | Files only. Devices get "fine". |
+| `ios.read_write_seek` | Read, write, seek | done | `runtime/files.c` (`files_request`) | Every handle on a file shares its contents. A seek outside the file answers -101, as in Dolphin. Changed files are written whole and renamed into place, so a power cut can't leave half a file. |
+| `ios.file_handle_other_requests` | Other requests on a file handle | on demand | `runtime/files.c` | Only GETFILESTATS is a file's own ioctl; anything else answers -101 and is reported. |
 | `ios.ioctl_ioctlv_dispatch` | Ioctl, ioctlv dispatch | done | `runtime/devices.c:24` |  |
 | `ios.unknown_device` | Unknown device | done | `runtime/ios.c:44` | Returns not found. |
 | `ios.asynchronous_replies` | Asynchronous replies | done | `runtime/ios.c:101` | The reply queue grows as needed, so there's no limit. |
@@ -714,16 +715,17 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
 | `ios.format` | FORMAT | not needed |  | Only the system menu's reset. |
-| `ios.getstats` | GETSTATS | done | `runtime/fs.c:138` | Fixed free space. |
-| `ios.createdir_createfile` | CREATEDIR, CREATEFILE | done | `runtime/fs.c:26` |  |
+| `ios.getstats` | GETSTATS | done | `runtime/fs.c` (`write_stats`) | Clusters and inodes used and free, counted through the save and storage folders, with Dolphin's sizes: 16 KiB clusters, 0x7ec0 of them less 0x300 kept for IOS, and 0x17ff inodes. |
+| `ios.createdir_createfile` | CREATEDIR, CREATEFILE | done | `runtime/fs.c` (`create`) | A name must start at the top and each part be at most 12 characters (-101), and its folder must be there (-106). |
 | `ios.readdir` | READDIR | done | `runtime/fs.c:112` |  |
 | `ios.setattr` | SETATTR | done | `runtime/fs.c:157`, `:267` | Owner, group, permissions and flags kept in `saves/.attributes`, used by create, GETATTR, rename and delete. The caller always has full rights. |
 | `ios.getattr` | GETATTR | partial | `runtime/fs.c:85` | Fixed owner and read-write. |
 | `ios.delete` | DELETE | done | `runtime/fs.c:56` |  |
-| `ios.rename` | RENAME | done | `runtime/fs.c:74` |  |
+| `ios.rename` | RENAME | done | `runtime/fs.c` (`move`) | Valid names, the new name's folder there (-106), and anything already there of the same type, which it replaces (-101 otherwise). A file only in the Wii storage folder is copied into the save folder whole. |
+| `ios.rename_folder_from_storage` | RENAME of a folder only in the Wii storage folder | on demand | `runtime/fs.c` (`move`) | The storage folder is never written, and folders aren't copied out of it, so this answers -101 and is reported. A console has no separate storage folder. |
 | `ios.setfileverctrl` | SETFILEVERCTRL | on demand | `runtime/ios_trace.c:44` | No source says what it changes, so it answers an error and is reported. |
 | `ios.getfilestats` | GETFILESTATS | done | `runtime/files.c:141` |  |
-| `ios.getusage` | GETUSAGE | partial | `runtime/fs.c:147` | Always 0 used. |
+| `ios.getusage` | GETUSAGE | done | `runtime/fs.c` (`get_usage`) | A folder's clusters and inodes, itself included, as Dolphin counts them. A file answers -101. |
 | `ios.shutdown` | SHUTDOWN | done | `runtime/fs.c:268`, `runtime/files.c` | Every changed open file is written out, then 0 is answered. |
 | `ios.file_open_modes` | File open modes | done | `runtime/files.c:85`, `:165`, `:173`, `runtime/ios.c` | A forbidden read or write answers -102, a folder -101, a missing file -106, and no free handle -109. |
 | `ios.permissions_error_codes` | Permissions, error codes | partial | `runtime/fs.c:15` | Only not found and exists. |
@@ -739,7 +741,8 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | `ios.title_lists_and_counts` | Title lists and counts | done | `runtime/es_titles.c:166-169` | From the console's storage (`titles.c`). |
 | `ios.views_stored_tmd` | Views, stored TMD | done | `runtime/es_titles.c:172-181`, `runtime/es.c:44` | Ticket and TMD views. |
 | `ios.content_open_read_seek_close` | Content open, read, seek, close | done | `runtime/es_content.c:91-96` | No downloadable content or channels. |
-| `ios.launch_return_to_menu_start_title` | LAUNCH (return to menu, start title) | partial | `runtime/es.c:70-78` | Wii Menu to disc and back only. Other titles get an error. |
+| `ios.launch_return_to_menu_start_title` | LAUNCH (return to menu, start title) | partial | `runtime/es.c`, `runtime/console.c` | The Wii Menu, the disc and any title installed in the console with native code start, each in a fresh console. |
+| `ios.launch_untranslated_title` | LAUNCH of a title with no native code | on demand | `runtime/es.c` | A title in the storage but not built for the console (`add_game.py --nand`) can't run, so it's refused with an error and reported. |
 | `ios.title_install_delete` | Title install, delete | not needed |  | System tools only. |
 | `ios.encrypt_decrypt` | Encrypt, decrypt | on demand | `runtime/ios_trace.c:47` | Needs the console's own secret keys, which can't be shipped. Answers an error and is reported. |
 | `ios.set_uid` | Set UID | done | `runtime/es_titles.c:162` | Fine without permissions. |

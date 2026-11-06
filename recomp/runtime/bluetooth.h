@@ -10,6 +10,7 @@ enum { BLUETOOTH_DEVICES = 5, BLUETOOTH_BOARD = 4 };
 
 // bluetooth.c: USB requests and HCI.
 int bluetooth_request(uint32_t command, uint32_t request);
+void bluetooth_closed(void);  // The game closed its handle on the chip.
 void bluetooth_update(uint64_t now);
 void bluetooth_send_packet(const uint8_t *packet, uint32_t bytes);
 

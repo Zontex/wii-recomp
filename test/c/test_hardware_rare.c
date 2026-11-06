@@ -8,6 +8,8 @@
 static uint64_t now_ticks = 60750000ull * 1000;
 uint64_t time_base(void) { return now_ticks; }
 uint64_t audio_next_due(void) { return 0; }
+void console_update_drive(void) {}
+void ipc_describe(void) {}
 void dsp_update(uint64_t now) {}
 int dsp_read(uint32_t a, int n, uint32_t *v) { return 0; }
 int dsp_write(uint32_t a, uint32_t v, int n) { return 0; }
@@ -32,6 +34,8 @@ int gx_efb_read(uint32_t a, int n, uint32_t *v) { return 0; }
 int gx_efb_write(uint32_t a, uint32_t v, int n) { return 0; }
 static int resets_told, gaps;
 void stm_reset_button(void) { resets_told++; }
+void stm_power_button(void) {}
+int stm_listening(void) { return 0; }
 void gap_hit(const char *id, uint32_t detail) { gaps++; }
 static const char *game_setting = "JP";
 int console_setting(const char *name, char *out, size_t limit) {

@@ -573,6 +573,12 @@ void bluetooth_register_remote(uint8_t *settings, size_t bytes) {
   }
 }
 
+// The game closed the chip's handle. The transfers it held are dropped unanswered, as
+// Dolphin drops them, so no event is written into memory the game has moved on from.
+void bluetooth_closed(void) {
+  waiting_events = waiting_data = 0;
+}
+
 int bluetooth_request(uint32_t command, uint32_t request) {
   if (command != IOS_IOCTLV) return 0;
   uint32_t code = rd32(request + 12), address, bytes, endpoint_address, ignored;

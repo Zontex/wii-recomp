@@ -7,6 +7,7 @@
 
 #include "timeline.h"
 #include "audio.h"
+#include "console.h"
 #include "cpu.h"
 #include "dsp.h"
 #include "gaps.h"
@@ -73,7 +74,7 @@ static uint8_t *registers;  // Big-endian, as the game sees them, so any width w
 static uint8_t *seen;
 static uint32_t cause;
 static uint32_t audio_counter_start, audio_counter_last;  // In 48 kHz samples since the time base began.
-static atomic_int reset_pressed;  // From the control pipe's thread.
+static atomic_int reset_pressed, power_pressed;  // From the control pipe's or the window's thread.
 static uint64_t reset_up_at;
 
 static uint32_t offset_of(uint32_t address) { return address & (REGISTER_SPACE - 1); }
@@ -133,6 +134,11 @@ void raise_irq(int bit) {
 }
 void clear_irq(int bit) { cause &= ~(1u << bit); }
 int irq_pending(void) { return (cause & get(PI_MASK, 4)) != 0; }
+
+void hardware_describe(void) {
+  fprintf(stderr, "state: msr %08x, interrupts %s, cause %08x, mask %08x\n", cpu.msr, cpu.msr & 0x8000 ? "on" : "off", cause, get(PI_MASK, 4));
+  ipc_describe();
+}
 
 // The screen finished a frame: flag each enabled display interrupt.
 void video_retrace(void) {
@@ -268,7 +274,13 @@ static void audio_interface_update(void) {
 
 void reset_button_press(void) { atomic_store(&reset_pressed, 1); }
 
+int power_button_press(void) {
+  atomic_store(&power_pressed, 1);
+  return stm_listening();
+}
+
 void hardware_update(uint64_t now) {
+  console_update_drive();
   audio_interface_update();
   dsp_update(now);
   if (atomic_exchange(&reset_pressed, 0)) {
@@ -276,6 +288,7 @@ void hardware_update(uint64_t now) {
     raise_irq(IRQ_RESET_SWITCH);
     stm_reset_button();  // The other half of a press on a Wii, as Dolphin sends both.
   }
+  if (atomic_exchange(&power_pressed, 0)) stm_power_button();
 }
 
 static uint32_t interrupt_cause(void) { return cause | (time_base() >= reset_up_at ? PI_RESET_BUTTON_UP : 0); }

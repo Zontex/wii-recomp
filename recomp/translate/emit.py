@@ -417,7 +417,7 @@ def emit_any(address, word, name):
     if name == "mfmsr":
         return f"cpu.r[{d}] = cpu.msr;"
     if name == "mtmsr":
-        return f"cpu.msr = cpu.r[{d}];"
+        return f"cpu.msr = cpu.r[{d}]; if (cpu.msr & 0x8000u) interrupts_turned_on();"
     if name == "mfcr":
         return f"{{ uint32_t v = 0; for (int i = 0; i < 8; i++) v = (v << 4) | cpu.cr[i]; cpu.r[{d}] = v; }}"
     if name == "mtcrf":

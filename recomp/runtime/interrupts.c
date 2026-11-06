@@ -88,7 +88,18 @@ void decrementer_set(uint32_t value) {
 
 uint32_t decrementer_get(void) { return (uint32_t)(decrementer_deadline - time_base()); }
 
+void interrupts_turned_on(void) {
+  if (irq_pending()) interrupt_budget = 0;
+}
+
+static unsigned long long interrupts_taken, interrupt_polls, interrupt_polls_masked;
+
+void interrupts_describe(void) {
+  fprintf(stderr, "state: %llu checks, %llu with interrupts off, %llu interrupts taken\n", interrupt_polls, interrupt_polls_masked, interrupts_taken);
+}
+
 void poll_interrupts(void) {
+  interrupt_polls++;
   interrupt_budget = CHECK_EVERY;
   uint64_t now = time_base();
   static uint64_t started;
@@ -106,8 +117,9 @@ void poll_interrupts(void) {
   audio_update(now);
   hardware_update(now);
   floating_point_exceptions_check();
-  if (!(cpu.msr & INTERRUPTS_ENABLED)) return;
+  if (!(cpu.msr & INTERRUPTS_ENABLED)) { interrupt_polls_masked++; return; }
   if (irq_pending()) {
+    interrupts_taken++;
     uint32_t handler = rd32(EXCEPTION_TABLE + EXCEPTION_EXTERNAL * 4);
     TIMELINE_MOMENT("interrupt taken");
     if (handler) enter_exception(EXCEPTION_EXTERNAL, handler);

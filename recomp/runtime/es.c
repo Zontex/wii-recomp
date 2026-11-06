@@ -7,6 +7,7 @@
 #include "console.h"
 #include "cpu.h"
 #include "drive.h"
+#include "gaps.h"
 #include "es.h"
 #include "title.h"
 #include "ios.h"
@@ -64,8 +65,9 @@ static uint64_t disc_ios(void) {
 // Starting another title. The console starts afresh with it, as a real Wii does. The
 // Wii Menu starts a disc by loading it, then reloading the IOS its TMD asks for, then
 // jumping in: the reload is where the console hands over to the disc. Games go back to
-// the Wii Menu by launching it. Other titles can't be started yet, and without a console
-// a title started on its own has nothing to go to.
+// the Wii Menu by launching it, and the menu starts channels the same way. A title
+// that isn't installed with native code can't run, so it's refused, and reported.
+// Without a console, a title started on its own has nothing to go to.
 static int launch_title(const IosVectors *vectors) {
   uint32_t in = ios_in_sized(vectors, 0, TITLE_ID_BYTES);
   if (!in) return ES_EINVAL;
@@ -73,8 +75,9 @@ static int launch_title(const IosVectors *vectors) {
   fprintf(stderr, "es: launch %08x-%08x\n", (uint32_t)(id >> 32), (uint32_t)id);
   if (!console_running()) return ES_EINVAL;
   uint64_t running = (uint64_t)title->title_high << 32 | title->title_low;
-  if (id == MENU_TITLE) console_restart(0);
-  if (running == MENU_TITLE && drive_has_disc() && id == disc_ios()) console_restart(1);
+  if (id == MENU_TITLE || console_has_title(id)) console_restart(id);
+  if (running == MENU_TITLE && drive_has_disc() && id == disc_ios()) console_restart(CONSOLE_DISC);
+  gap_hit("ios.launch_untranslated_title", (uint32_t)id);
   return ES_EINVAL;
 }
 
@@ -107,7 +110,14 @@ int es_request(uint32_t command, uint32_t request) {
       fprintf(stderr, "es: request %x came with %u inputs and %u outputs\n", code, vectors.inputs, vectors.outputs);
       return ES_EINVAL;
     }
-    return found->run(&vectors);
+    int result = found->run(&vectors);
+    // With the full trace, the title each request names in its first input, if any.
+    uint32_t named = vectors.inputs ? ios_in_sized(&vectors, 0, TITLE_ID_BYTES) : 0;
+    if (named && ios_trace_all()) {
+      uint32_t word = vectors.outputs ? ios_out_sized(&vectors, 0, 4) : 0;
+      fprintf(stderr, "es: %x for %016llx -> %d, first word out %08x\n", code, (unsigned long long)es_read_title(named), result, word ? rd32(word) : 0);
+    }
+    return result;
   }
   return IOS_UNHANDLED;
 }
