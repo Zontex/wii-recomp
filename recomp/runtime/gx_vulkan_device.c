@@ -370,6 +370,10 @@ static VkSurfaceFormatKHR choose_surface_format(void) {
       score = found;
     }
   }
+  fprintf(stderr, "vulkan: window pictures as format %d, color space %s (of %u offered:", (int)chosen.format,
+          chosen.colorSpace == VK_COLOR_SPACE_PASS_THROUGH_EXT ? "passed through" : chosen.colorSpace == VK_COLOR_SPACE_SRGB_NONLINEAR_KHR ? "sRGB" : "other", count);
+  for (uint32_t i = 0; i < count; i++) fprintf(stderr, " %d/%d", (int)formats[i].format, (int)formats[i].colorSpace);
+  fprintf(stderr, ")\n");
   free(formats);
   return chosen;
 }
