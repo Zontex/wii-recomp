@@ -253,6 +253,7 @@ int gx_efb_read(uint32_t address, int bytes, uint32_t *value);
 int gx_efb_write(uint32_t address, uint32_t value, int bytes);
 void gx_efb_changed(void);
 void gx_efb_shown(void);  // A picture was shown: changed, with nothing drawn since.
+int gx_screen_copy_went_to(uint32_t address);  // A recent copy to the screen went there.
 int gx_draw_started(void);  // The backend has started, so it can be asked to read.
 void gx_draw_start(void);    // Starts the backend if nothing has yet: a program may copy before it draws.
 // The bounding box (gx_efb.c): on from a write to BP 0x55 or 0x56 until it's read or a

@@ -93,7 +93,16 @@ static uint32_t fifo_flags;  // Overflow and underflow, until the game clears th
 // every other retrace, at 30 fps. This chip is instant, so it pauses after each token
 // until the game has read it, or a few retraces pass if it never does.
 enum { HOLD_RETRACES_AT_MOST = 120 };  // A last resort: a retrace can pass while interrupts are off.
+enum { BP_COPY_ADDRESS = 0x4b };  // Where a copy goes, in 32-byte units.
 static int paces_by_token, held_at_token, token_seen, retraces_held;
+enum { SCREEN_COPIES_KEPT = 4 };  // Enough for triple buffering.
+static uint32_t screen_copies[SCREEN_COPIES_KEPT];  // Where the latest copies to the screen went.
+static unsigned screen_copy_count;
+
+int gx_screen_copy_went_to(uint32_t address) {
+  for (int i = 0; i < SCREEN_COPIES_KEPT; i++) if (screen_copies[i] && ((screen_copies[i] ^ address) & 0x1fffffff) == 0) return 1;
+  return 0;
+}
 static enum { RUNNING, WAITING_FOR_RETRACE, RESUME_DUE } resume_state;
 
 static uint32_t big32(const uint8_t *p) {
@@ -111,8 +120,11 @@ static void copy_gaps(uint32_t control) {
   int to_screen = (control >> COPY_TO_SCREEN_BIT) & 1;
   uint32_t gamma = (control >> 7) & 3, field = (control >> 12) & 3, y_scale = gx.bp[0x4e] & 0x1ff;
   if (to_screen && gamma) gap_hit("pixel.gamma_on_xfb_copy_1_0_1_7_2_2", gamma);
-  if (to_screen && ((control >> 10) & 1) && y_scale != 0x100) gap_hit("pixel.copy_y_scale", y_scale);
-  if (field) gap_hit("pixel.field_copy_frame_to_field", field);
+  // A copy to the screen fills the window whatever its height, so scaling it taller for a
+  // TV's lines, or copying half a picture for one field of it, shows the same: the field is
+  // stretched over the window. Copies anywhere else would come out the wrong height.
+  if (!to_screen && ((control >> 10) & 1) && y_scale != 0x100) gap_hit("pixel.copy_y_scale", y_scale);
+  if (!to_screen && field) gap_hit("pixel.field_copy_frame_to_field", field);
 }
 
 // Pixel settings we don't follow, named as the game sets them. Bits from Dolphin's BPMemory.h.
@@ -172,6 +184,7 @@ static void write_bp(uint32_t value) {
       last_frame = frame_time;
       stage_frame(gap);
       gx_stats.to_screen++;
+      screen_copies[screen_copy_count++ % SCREEN_COPIES_KEPT] = gx.bp[BP_COPY_ADDRESS] << 5;
     }
     // The chip copies the picture out first, then clears for the next frame.
     if (data & (1u << COPY_TO_SCREEN_BIT)) {

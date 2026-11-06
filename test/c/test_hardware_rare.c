@@ -151,7 +151,7 @@ static void test_serial_buffer(void) {
 }
 
 static void test_dtv_status(void) {
-  CHECK_EQ(hw_read(0xcc00206eu, 2), 2);  // A Japanese console, and no component cable.
+  CHECK_EQ(hw_read(0xcc00206eu, 2), 3);  // A Japanese console, with a component cable.
 }
 
 int main(void) {

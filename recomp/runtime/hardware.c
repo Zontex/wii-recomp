@@ -73,6 +73,7 @@
 // sets them (VideoInterface.cpp).
 #define VI_DTV_STATUS 0xcc00206eu
 #define DTV_NTSC_J 0x0002u
+#define DTV_COMPONENT 0x0001u  // A component cable is in, so 480p can be chosen (Dolphin's VideoInterface.h).
 
 static uint8_t *registers;  // Big-endian, as the game sees them, so any width works.
 static uint8_t *seen;
@@ -298,6 +299,10 @@ static uint32_t dtv_status(void) {
   if (!looked) {
     looked = 1;
     if (console_setting("GAME", region, sizeof region) && !strcmp(region, "JP")) status |= DTV_NTSC_J;
+    // The window shows progressive pictures as well as any, so the cable is a component one,
+    // unless WII_RECOMP_CABLE=composite asks for the plain cable most Wiis came with.
+    const char *cable = getenv("WII_RECOMP_CABLE");
+    if (!cable || strcmp(cable, "composite")) status |= DTV_COMPONENT;
   }
   return status;
 }

@@ -23,13 +23,13 @@ Statuses:
 |---|---|---|---|---|---|---|---|
 | 1. CPU | 73 | 21 | 5 | 1 | 4 | 16 | 120 |
 | 2. Graphics commands and registers | 65 | 22 | 4 | 0 | 9 | 10 | 110 |
-| 3. TEV and pixel features | 51 | 17 | 3 | 0 | 4 | 1 | 76 |
+| 3. TEV and pixel features | 51 | 19 | 1 | 0 | 4 | 1 | 76 |
 | 4. Vertex and texture | 50 | 10 | 0 | 3 | 1 | 2 | 66 |
-| 5. Hardware blocks | 35 | 6 | 5 | 0 | 5 | 14 | 65 |
+| 5. Hardware blocks | 36 | 7 | 3 | 0 | 5 | 14 | 65 |
 | 6. Audio microcodes | 21 | 2 | 12 | 0 | 5 | 1 | 41 |
 | 7. IOS | 36 | 13 | 3 | 0 | 10 | 6 | 68 |
 | 8. Controllers | 50 | 8 | 3 | 0 | 6 | 2 | 69 |
-| **All** | **381** | **99** | **35** | **4** | **44** | **52** | **615** |
+| **All** | **382** | **102** | **31** | **4** | **44** | **52** | **615** |
 
 ## Biggest gaps
 
@@ -433,14 +433,14 @@ Dolphin lists 223 instruction handlers in `Interpreter_Tables.cpp`. Every one is
 | `pixel.copy_formats_rg8_gb8` | Copy formats RG8, GB8 | done | `runtime/gx_encode.c:130`, `gx_copy.c:204` | RG8 is green then red, GB8 blue then green, in memory and in the card's copy. |
 | `pixel.depth_copy` | Depth copy | partial | `runtime/gx_encode.c:36`, `gx_copy.c:274` | In memory, depth's three bytes read as red, green and blue, for Z4, Z8, Z8M, Z8L, Z16, Z16L and Z24X8. RA4, RA8, RGB565, RGB5A3 and A8 from depth, which Dolphin's software encoder has no answer for, name this row. Drawn from the card, depth reads as one value. |
 | `pixel.copy_half_size` | Copy half size | done | `runtime/gx_copy.c:316`, `gx_encode.c:52` | In memory each texel is the mean of its 2 by 2 box. |
-| `pixel.copy_y_scale` | Copy Y scale | missing |  |  |
+| `pixel.copy_y_scale` | Copy Y scale | partial | `runtime/gx_fifo.c` (`copy_gaps`) | A copy to the screen fills the window at any height, so its Y scale shows as it would on a TV. A texture copy that asks for one is reported. |
 | `pixel.copy_clear` | Copy clear | done | `runtime/gx_fifo.c:124` |  |
 | `pixel.copy_intensity_rgb_to_yuv` | Copy intensity (RGB to YUV) | partial | `runtime/gx_copy.c:274`, `gx_encode.c:72` | Bits 15 and 16. In memory, Y, U and V from Dolphin's constants, which it found by testing hardware, rounding a half up, for the intensity formats. The card's copy, drawn as a texture, reads red and says so. Other formats asking for it name this row, as Dolphin's two encoders disagree there. |
 | `pixel.copy_clamp_top_and_bottom` | Copy clamp top and bottom | partial | `runtime/gx_encode.c:52` | In memory the filter's rows above and below stop at the copy's edge when asked. A copy read back from the card has no rows beyond its own, so both edges stop there. |
 | `pixel.copy_filter_aa_and_deflicker` | Copy filter (AA and deflicker) | partial | `runtime/gx_encode.c:72` | The vertical filter applies in memory (`gx.0x53_0x54_vertical_copy_filter`). Anti-aliasing doesn't (`pixel.multisample_and_aa_modes`). |
 | `pixel.gamma_on_xfb_copy_1_0_1_7_2_2` | Gamma on XFB copy (1.0, 1.7, 2.2) | partial | `runtime/gx_encode.c:72` | Texture copies in memory follow it, as Dolphin's encoder does. Copies to the screen and the card's copy drawn as a texture don't, and say so. |
 | `pixel.copy_to_xfb` | Copy to XFB | partial | `runtime/gx_fifo.c:118`, `gx_draw.c:216` | Present directly. XFB memory unused. |
-| `pixel.field_copy_frame_to_field` | Field copy (frame to field) | missing |  |  |
+| `pixel.field_copy_frame_to_field` | Field copy (frame to field) | partial | `runtime/gx_fifo.c` (`copy_gaps`) | A field copied to the screen is shown stretched over the window, each field in turn. A texture copy that asks for one is reported. |
 | `pixel.scissor` | Scissor | done | `runtime/gx_draw.c:142-149` |  |
 | `pixel.cull_none_front_back_all` | Cull none, front, back, all | done | `runtime/gx_draw.c:125`, `gx_gl.c:212` |  |
 | `pixel.vulkan_draw_shortcuts` | Vulkan draw shortcuts | partial | `runtime/gx_vulkan.c:117`, `:662`, `:689` | Tuned on Wii Fit. Anything landing at y >= 456 runs before the scene, which is wrong for a game drawing real picture there. Cover skipping needs `WII_RECOMP_COVER`. |
@@ -545,12 +545,12 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 | `hw.display_interrupts_0_3` | Display interrupts 0-3 | done | `runtime/vi.c`, `runtime/hardware.c` (`vi_display_interrupt`) | Each fires as the beam reaches its line, and its half-line when its horizontal count is past the middle. |
 | `hw.interrupt_clear` | Interrupt clear | done | `runtime/hardware.c:87-92` |  |
 | `hw.beam_position_0x2c_0x2e` | Beam position (0x2C, 0x2E) | done | `runtime/vi.c` (`vi_read`) | The line and the sample within it, from the time since the frame began. |
-| `hw.framebuffer_addresses_0x1c_0x2a` | Framebuffer addresses (0x1C-0x2A) | missing |  | Picture comes from EFB copy (`gx_fifo.c:118`). A game writing XFB by CPU shows nothing. |
+| `hw.framebuffer_addresses_0x1c_0x2a` | Framebuffer addresses (0x1C-0x2A) | partial | `runtime/vi.c` (`check_shown_picture`), `runtime/gx_fifo.c` | The picture comes from the graphics chip's copies to the screen, shown as they're made. A framebuffer the program fills itself, which no recent copy went to, isn't shown, and is reported after two seconds of showing it. |
 | `hw.timing_registers_0x00_0x04_0x1a` | Timing registers (0x00, 0x04-0x1A) | done | `runtime/vi.c` | Set the field's length and the beam's pace. The window's size stays the host's. |
-| `hw.interlace_progressive_field_order` | Interlace, progressive, field order | missing |  |  |
+| `hw.interlace_progressive_field_order` | Interlace, progressive, field order | done | `runtime/vi.c` | Interlaced frames are two fields, each its own retrace and half the frame's lines; progressive ones one field at the 54 MHz clock. The window is progressive, so either is shown whole. |
 | `hw.horizontal_scaler_filter_0x48_0x6c` | Horizontal scaler, filter (0x48-0x6C) | missing |  | Stored only. |
 | `hw.display_latch_0x40_0x46` | Display latch (0x40-0x46) | missing |  | Light gun only. |
-| `hw.clock_select_dtv_status` | Clock select, DTV status | done | `runtime/hardware.c:295`, `:312` | No component cable, and the NTSC-J bit on a Japanese console, as Dolphin answers without progressive scan. Clock select only times a signal the window replaces. |
+| `hw.clock_select_dtv_status` | Clock select, DTV status | done | `runtime/hardware.c` (`dtv_status`), `runtime/vi.c` | A component cable is in, so 480p can be chosen (`WII_RECOMP_CABLE=composite` takes it out), and the NTSC-J bit on a Japanese console. Clock select sets the beam's pace (`vi.c`). |
 | `hw.vi_solid_color_hollywood_0x24` | VI solid color (Hollywood 0x24) | on demand | `runtime/ios.c:189` | Only system software blanks the screen this way, and Dolphin ignores it. Reported when turned on. |
 
 ### PI (processor interface)

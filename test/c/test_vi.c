@@ -23,6 +23,8 @@ static void set(uint32_t address, uint32_t value, int bytes) {
 uint64_t time_base(void) { return now; }
 void graphics_retrace(void) { retraces++; }
 void vi_display_interrupt(int i) { fired[i]++; }
+int gx_screen_copy_went_to(uint32_t address) { return 1; }
+void gap_hit(const char *id, uint32_t detail) {}
 
 // NTSC interlaced and PAL interlaced, as the SDK's timing tables set them.
 static void ntsc(void) {

@@ -20,8 +20,9 @@
 #include "hardware.h"
 #include "pads.h"
 #include "input.h"
+#include "ios.h"
 
-enum { WINDOW_WIDTH = 1280, WINDOW_HEIGHT = 720, POWER_OFF_SECONDS = 5 };
+enum { WINDOW_HEIGHT = 720, POWER_OFF_SECONDS = 5 };
 
 static GLFWwindow *window;
 static int frame_width, frame_height;
@@ -118,8 +119,14 @@ void window_create(void) {
   gx_backend_choose();
   gx_backend->window_prepare();
   glfwWindowHint(GLFW_COCOA_RETINA_FRAMEBUFFER, GLFW_FALSE);  // The game draws 640x456; 4x the pixels adds cost, not detail.
-  window = glfwCreateWindow(WINDOW_WIDTH, WINDOW_HEIGHT, "Wii Recomp", 0, 0);
+  // The console's own setting says whether the TV is widescreen (IPL.AR), and games draw
+  // for it, so the window has that shape and keeps it when resized.
+  uint8_t widescreen = 0;
+  files_system_setting("IPL.AR", &widescreen, 1);
+  int aspect_width = widescreen ? 16 : 4, aspect_height = widescreen ? 9 : 3;
+  window = glfwCreateWindow(WINDOW_HEIGHT * aspect_width / aspect_height, WINDOW_HEIGHT, "Wii Recomp", 0, 0);
   if (!window) { fprintf(stderr, "stop: no window\n"); exit(10); }
+  glfwSetWindowAspectRatio(window, aspect_width, aspect_height);
   glfwSetKeyCallback(window, on_key);
   glfwSetCursorPosCallback(window, on_mouse_move);
   glfwSetMouseButtonCallback(window, on_mouse_button);

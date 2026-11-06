@@ -16,6 +16,8 @@
 #include <stdio.h>
 
 #include "cpu.h"
+#include "gaps.h"
+#include "gx.h"
 #include "hardware.h"
 #include "vi.h"
 
@@ -23,7 +25,8 @@ enum {
   VI_VERTICAL = 0xcc002000u, VI_CONTROL = 0xcc002002u, VI_HORIZONTAL_0 = 0xcc002004u,
   VI_ODD_BLANKING = 0xcc00200cu, VI_EVEN_BLANKING = 0xcc002010u,
   VI_BEAM_VERTICAL = 0xcc00202cu, VI_BEAM_HORIZONTAL = 0xcc00202eu,
-  VI_INTERRUPTS = 0xcc002030u, VI_CLOCK = 0xcc00206cu,
+  VI_INTERRUPTS = 0xcc002030u, VI_CLOCK = 0xcc00206cu, VI_TOP_FRAMEBUFFER = 0xcc00201cu, PAGE_OFFSET = 1 << 28,
+  CPU_PICTURE_FIELDS = 120,  // Two seconds showing a framebuffer no copy filled.
   INTERRUPT_COUNT = 4, INTERRUPT_ENABLE = 0x10000000u, INTERRUPT_FLAG = 0x80000000u,
   CONTROL_PROGRESSIVE = 1 << 2, FORMAT_SHIFT = 8, FORMAT_PAL = 1,
 };
@@ -97,6 +100,18 @@ static uint32_t interrupt_half_line(uint32_t value) {
   return (line ? line - 1 : 0) * 2 + (horizontal > timing.half_line_width ? 1 : 0);
 }
 
+// The picture the interface shows is the top field's framebuffer. Pictures come from the
+// graphics chip's copies to the screen, which are shown as they're made. A program that
+// writes its framebuffer itself, with no copy there, isn't shown yet, and is reported.
+static void check_shown_picture(void) {
+  static unsigned fields_without;
+  uint32_t top = reg32(VI_TOP_FRAMEBUFFER);
+  uint32_t address = (top & PAGE_OFFSET ? (top & 0xffffff) << 5 : top & 0xffffff) & 0x1fffffff;
+  if (!address || !(reg16(VI_CONTROL) & 1)) return;
+  fields_without = gx_screen_copy_went_to(address) ? 0 : fields_without + 1;
+  if (fields_without == CPU_PICTURE_FIELDS) gap_hit("hw.framebuffer_addresses_0x1c_0x2a", address);
+}
+
 void vi_update(uint64_t now) {
   ensure_timing();
   uint64_t passed = half_lines_at(now) + 1;  // Half-lines up to and including now's.
@@ -108,7 +123,10 @@ void vi_update(uint64_t now) {
   // Whether a half-line of the frame comes in [from, passed).
   uint64_t frame = timing.frame_half_lines;
   #define COMES(half_line) (from + ((half_line) + frame - from % frame) % frame < passed)
-  if (COMES(0) || COMES(timing.odd_half_lines)) graphics_retrace();
+  if (COMES(0) || COMES(timing.odd_half_lines)) {
+    graphics_retrace();
+    check_shown_picture();
+  }
   for (int i = 0; i < INTERRUPT_COUNT; i++) {
     uint32_t value = reg32(VI_INTERRUPTS + (uint32_t)i * 4);
     if ((value & INTERRUPT_ENABLE) && COMES(interrupt_half_line(value) % frame)) vi_display_interrupt(i);
