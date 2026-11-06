@@ -15,6 +15,7 @@
 #include "debug.h"
 #include "dsp.h"
 #include "hardware.h"
+#include "vi.h"
 
 #define CHECK_EVERY 2000
 #define INTERRUPTS_ENABLED 0x8000u
@@ -22,7 +23,6 @@
 #define EXCEPTION_EXTERNAL 4
 #define EXCEPTION_DECREMENTER 8
 #define TIME_BASE_HZ 60750000ull
-#define RETRACE_TICKS (TIME_BASE_HZ / 60)
 #define IDLE_SLEEP_TICKS (TIME_BASE_HZ / 250)  // 4 ms, the longest sleep with nothing due.
 #define NANOSECONDS 1000000000ull
 #define BUSY_SLEEP_TICKS (TIME_BASE_HZ / 10000)  // 100 microseconds.
@@ -32,7 +32,6 @@ int interrupt_budget = CHECK_EVERY;
 
 static uint64_t decrementer_deadline;
 static int decrementer_armed;
-static uint64_t next_retrace;
 static uint64_t time_base_offset;
 static uint64_t guest_time_offset;
 
@@ -105,12 +104,7 @@ void poll_interrupts(void) {
   static uint64_t started;
   if (!started) started = now;
   debug_poll((now - started) / TIME_BASE_HZ);
-  if (now >= next_retrace) {
-    // Counted from the last retrace, so a late check doesn't push every later one back.
-    next_retrace += RETRACE_TICKS;
-    if (now >= next_retrace) next_retrace = now + RETRACE_TICKS;
-    video_retrace();
-  }
+  vi_update(now);  // Display interrupts and retraces, as the beam passes them.
   if (title->virtual_bluetooth) bluetooth_update(now);
   ipc_update();
   graphics_update();
@@ -142,7 +136,7 @@ void idle_wait(void) {
   if (spin < 0) spin = getenv("WII_RECOMP_IDLE_SPIN") != 0;
   if (spin) { POLL(); return; }
   uint64_t now = time_base(), wait = IDLE_SLEEP_TICKS;
-  wait = sooner(wait, now, next_retrace);
+  wait = sooner(wait, now, vi_next_due(now));
   if (decrementer_armed) wait = sooner(wait, now, decrementer_deadline);
   wait = sooner(wait, now, graphics_next_due());
   wait = sooner(wait, now, audio_next_due());

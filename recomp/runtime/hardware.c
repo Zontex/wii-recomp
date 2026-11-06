@@ -13,6 +13,7 @@
 #include "gaps.h"
 #include "gx.h"
 #include "hardware.h"
+#include "vi.h"
 #include "ios.h"
 
 #define REGISTER_SPACE 0x01000000u
@@ -25,6 +26,9 @@
 #define PI_CAUSE 0xcc003000u
 #define PI_MASK 0xcc003004u
 #define VI_DISPLAY_INTERRUPT 0xcc002030u
+#define VI_TIMING_FIRST 0xcc002000u  // Vertical and horizontal timing, and the blanking intervals.
+#define VI_TIMING_END 0xcc002014u
+#define VI_CLOCK_SELECT 0xcc00206cu
 #define VI_INTERRUPT_COUNT 4
 #define VI_INTERRUPT_FLAG 0x80000000u
 #define VI_INTERRUPT_ENABLE 0x10000000u
@@ -107,7 +111,6 @@ static int first_touch(const char *kind, uint32_t address, uint32_t value) {
 enum { READS = 1, WRITES = 2 };
 static const struct { uint32_t start, end; int on; const char *id; } unmodelled[] = {
   {0xcc001018u, 0xcc001030u, READS, "gx.pe_performance_counters"},
-  {0xcc00202cu, 0xcc002030u, READS, "hw.beam_position_0x2c_0x2e"},
 };
 
 static void note_unmodelled(uint32_t address, int on, int first) {
@@ -141,17 +144,12 @@ void hardware_describe(void) {
 }
 
 // The screen finished a frame: flag each enabled display interrupt.
-void video_retrace(void) {
-  TIMELINE_MOMENT("retrace");
-  graphics_retrace();
-  for (int i = 0; i < VI_INTERRUPT_COUNT; i++) {
-    uint32_t address = VI_DISPLAY_INTERRUPT + (uint32_t)i * 4;
-    uint32_t value = get(address, 4);
-    if (value & VI_INTERRUPT_ENABLE) {
-      put(address, value | VI_INTERRUPT_FLAG, 4);
-      raise_irq(IRQ_VI);
-    }
-  }
+// The beam reached a display interrupt's line (vi.c).
+void vi_display_interrupt(int i) {
+  TIMELINE_MOMENT("display interrupt");
+  uint32_t address = VI_DISPLAY_INTERRUPT + (uint32_t)i * 4;
+  put(address, get(address, 4) | VI_INTERRUPT_FLAG, 4);
+  raise_irq(IRQ_VI);
 }
 
 static void update_video_interrupt(void) {
@@ -311,6 +309,7 @@ uint32_t hw_read(uint32_t address, int bytes) {
   if (address == PI_CAUSE) value = interrupt_cause();
   else if (is_register(address, AI_SAMPLE_COUNT)) value = audio_samples();
   else if (is_register(address, VI_DTV_STATUS)) value = dtv_status();
+  else if (vi_read(address, &value)) {}
   else if (address == PI_HARDWARE_REVISION) value = HARDWARE_REVISION;
   else if (address == DSP_CONTROL) value = (value & ~DSP_CONTROL_OWN) | (dsp_control_read() & DSP_CONTROL_OWN);
   else if (dsp_read(address, bytes, &value) || audio_dma_read(address, bytes, &value)) {}
@@ -352,4 +351,5 @@ void hw_write(uint32_t address, uint32_t value, int bytes) {
   if (address >= VI_DISPLAY_INTERRUPT && address < VI_DISPLAY_INTERRUPT + VI_INTERRUPT_COUNT * 4) {
     update_video_interrupt();
   }
+  if (address - VI_TIMING_FIRST < VI_TIMING_END - VI_TIMING_FIRST || is_register(address, VI_CLOCK_SELECT)) vi_timing_changed();
 }

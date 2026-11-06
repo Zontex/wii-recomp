@@ -25,11 +25,11 @@ Statuses:
 | 2. Graphics commands and registers | 65 | 22 | 4 | 0 | 9 | 10 | 110 |
 | 3. TEV and pixel features | 51 | 17 | 3 | 0 | 4 | 1 | 76 |
 | 4. Vertex and texture | 50 | 10 | 0 | 3 | 1 | 2 | 66 |
-| 5. Hardware blocks | 31 | 8 | 6 | 0 | 5 | 15 | 65 |
+| 5. Hardware blocks | 35 | 6 | 5 | 0 | 5 | 14 | 65 |
 | 6. Audio microcodes | 21 | 2 | 12 | 0 | 5 | 1 | 41 |
 | 7. IOS | 36 | 13 | 3 | 0 | 10 | 6 | 68 |
 | 8. Controllers | 50 | 8 | 3 | 0 | 6 | 2 | 69 |
-| **All** | **377** | **101** | **36** | **4** | **44** | **53** | **615** |
+| **All** | **381** | **99** | **35** | **4** | **44** | **52** | **615** |
 
 ## Biggest gaps
 
@@ -541,12 +541,12 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
-| `hw.retrace_timing` | Retrace timing | partial | `runtime/interrupts.c:23`, `:84-89` | Fixed 60 Hz. PAL 50 Hz games run at the wrong rate. |
-| `hw.display_interrupts_0_3` | Display interrupts 0-3 | partial | `runtime/hardware.c:75-85` | All enabled ones fire together at retrace, ignoring their line settings. |
+| `hw.retrace_timing` | Retrace timing | done | `runtime/vi.c` | From the program's timing registers and clock select, with Dolphin's sums: PAL at 50 fields a second, NTSC, EURGB60 and progressive at 60. The 60 Hz modes are shown at the display's 60 rather than 59.94, so the window and the game keep in step. |
+| `hw.display_interrupts_0_3` | Display interrupts 0-3 | done | `runtime/vi.c`, `runtime/hardware.c` (`vi_display_interrupt`) | Each fires as the beam reaches its line, and its half-line when its horizontal count is past the middle. |
 | `hw.interrupt_clear` | Interrupt clear | done | `runtime/hardware.c:87-92` |  |
-| `hw.beam_position_0x2c_0x2e` | Beam position (0x2C, 0x2E) | missing |  | Reads 0. |
+| `hw.beam_position_0x2c_0x2e` | Beam position (0x2C, 0x2E) | done | `runtime/vi.c` (`vi_read`) | The line and the sample within it, from the time since the frame began. |
 | `hw.framebuffer_addresses_0x1c_0x2a` | Framebuffer addresses (0x1C-0x2A) | missing |  | Picture comes from EFB copy (`gx_fifo.c:118`). A game writing XFB by CPU shows nothing. |
-| `hw.timing_registers_0x00_0x04_0x1a` | Timing registers (0x00, 0x04-0x1A) | not needed |  | Host window sets the output. |
+| `hw.timing_registers_0x00_0x04_0x1a` | Timing registers (0x00, 0x04-0x1A) | done | `runtime/vi.c` | Set the field's length and the beam's pace. The window's size stays the host's. |
 | `hw.interlace_progressive_field_order` | Interlace, progressive, field order | missing |  |  |
 | `hw.horizontal_scaler_filter_0x48_0x6c` | Horizontal scaler, filter (0x48-0x6C) | missing |  | Stored only. |
 | `hw.display_latch_0x40_0x46` | Display latch (0x40-0x46) | missing |  | Light gun only. |

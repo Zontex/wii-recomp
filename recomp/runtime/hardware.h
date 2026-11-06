@@ -12,7 +12,7 @@ void clear_irq(int bit);
 int irq_pending(void);
 void hardware_describe(void);  // Prints the interrupt and IPC state, for a program that seems stuck.
 void interrupts_describe(void);  // How often interrupts were checked for and taken (interrupts.c).
-void video_retrace(void);
+void vi_display_interrupt(int i);  // From vi.c, as the beam reaches its line.
 void audio_dma_interrupt(void);
 int audio_dma_interrupt_unanswered(void);
 void hardware_update(uint64_t now);  // Timed signals: the audio interface's interrupt, and button presses.

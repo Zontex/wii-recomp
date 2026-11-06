@@ -93,6 +93,9 @@ class Runtime(unittest.TestCase):
         self.assertIn("stop: ios.setattr isn't done yet", result.stderr)
         self.assertEqual(listing.read_text().splitlines()[1:], ["ios.setattr 0x0 1 0x80001234"])
 
+    def test_video_interface_timing(self):
+        self.build_and_run([HERE / "c/test_vi.c", RUNTIME / "vi.c"])
+
     def test_clock_chip_on_the_expansion_bus(self):
         self.build_and_run([HERE / "c/test_exi.c"])
 
