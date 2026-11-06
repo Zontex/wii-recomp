@@ -90,18 +90,31 @@ class CopiesInMemory(Played):
         self.assertEqual(data[:2], bytes([0xff, 0x12]))
         self.assertEqual(data[32:34], bytes([0x34, 0x56]))
 
-    def test_a_late_copy_leaves_what_was_written_after_it(self):
+    def test_a_late_copy_stays_off_a_page_written_after_it(self):
         # Data just past the copy, on its last page, is touched, so that page is let go and
         # the copy lands a frame later. A write into the copy's bytes there in the meantime
-        # came after the copy, and stays; the rest of the page takes the copy's bytes.
+        # means the game put that memory to another use, so the whole page keeps what the
+        # game left: a byte that only looks unchanged may be one it just set (Mario Kart
+        # keeps objects beside its copies and crashed when one took a copy's pixels).
         target = TARGET + 0x100
         made = flat_quad(RED, 0, 0, 64, 64) + copy_picture(target, COPY_RGB565)
         end = target + 64 * 64 * 2
         updates = [(len(made), end + 0x40, b"\x01\x02\x03\x04"), (len(made), end - 0x80, b"\x11\x22\x33\x44")]
         data = self.memory([(made, updates), b"", b""], end - 0x100, 0x100)
         self.assertEqual(data[0x80:0x84], b"\x11\x22\x33\x44")
-        self.assertEqual(data[:0x80], bytes([0xc8, 0xe7]) * 0x40)
-        self.assertEqual(data[0x84:], bytes([0xc8, 0xe7]) * 0x3e)
+        self.assertEqual(data[:0x80] + data[0x84:], bytes(0xfc))
+        self.assertIn("1 pages kept from a copy as the game wrote into them", self.log)
+        # The copy's other pages, still held, take it whole.
+        self.assertEqual(self.memory([(made, updates), b"", b""], target, 2), bytes([0xc8, 0xe7]))
+
+    def test_a_late_copy_lands_on_a_page_only_beside_it_written(self):
+        # Only data beside the copy on its last page is written: the copy lands there whole.
+        target = TARGET + 0x100
+        made = flat_quad(RED, 0, 0, 64, 64) + copy_picture(target, COPY_RGB565)
+        end = target + 64 * 64 * 2
+        data = self.memory([(made, [(len(made), end + 0x40, b"\x01\x02\x03\x04")]), b"", b""], end - 0x100, 0x144)
+        self.assertEqual(data[:0x100], bytes([0xc8, 0xe7]) * 0x80)
+        self.assertEqual(data[0x140:0x144], b"\x01\x02\x03\x04")
 
     def test_a_copy_read_once_is_read_back_as_it_is_made(self):
         # The first frame's smaller texture reads the copy from memory, so the next copy

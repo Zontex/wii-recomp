@@ -312,14 +312,15 @@ static _Atomic uint64_t ring_written, ring_parsed;
 static pthread_t commands_thread_id;
 
 // Work another thread hands the commands thread, such as a peek at the picture or
-// filling in a copy the processor touched. It runs once the commands before it have, or
-// once the rest are waiting on the processor, and the thread asking waits for it.
-static struct { void (*work)(void *); void *argument; } handed;
+// filling in a copy the processor touched. A peek runs once the commands before it have;
+// work that's soon runs between the next two, so a touch doesn't wait out a frame's
+// backlog of draws. The thread asking waits for it.
+static struct { void (*work)(void *); void *argument; int soon; } handed;
 static atomic_flag handing = ATOMIC_FLAG_INIT;
 static _Atomic int handed_waiting, handed_done;
 
-static void run_handed(void) {
-  if (!atomic_load_explicit(&handed_waiting, memory_order_acquire)) return;
+static void run_handed(int between) {
+  if (!atomic_load_explicit(&handed_waiting, memory_order_acquire) || (between && !handed.soon)) return;
   handed.work(handed.argument);
   atomic_store_explicit(&handed_waiting, 0, memory_order_relaxed);
   atomic_store_explicit(&handed_done, 1, memory_order_release);
@@ -337,7 +338,7 @@ static void *commands_thread(void *unused) {
   while (1) {
     uint64_t written = atomic_load_explicit(&ring_written, memory_order_acquire);
     uint32_t used = written == parsed ? 0 : parse_one(ring + (parsed & (RING_BYTES - 1)), (uint32_t)(written - parsed));
-    if (!used) run_handed();
+    run_handed(used != 0);
     if (used) {
       parsed += used;
       atomic_store_explicit(&ring_parsed, parsed, memory_order_release);
@@ -386,7 +387,7 @@ static void lock_graphics(void);
 static void unlock_graphics(void);
 static int may_use_graphics(void);
 
-void gx_run_on_graphics(void (*work)(void *), void *argument) {
+static void hand_over(void (*work)(void *), void *argument, int soon) {
   if (threaded <= 0 || pthread_equal(pthread_self(), commands_thread_id)) {
     if (!may_use_graphics()) return;
     lock_graphics();
@@ -397,11 +398,15 @@ void gx_run_on_graphics(void (*work)(void *), void *argument) {
   while (atomic_flag_test_and_set_explicit(&handing, memory_order_acquire)) wait_briefly();
   handed.work = work;
   handed.argument = argument;
+  handed.soon = soon;
   atomic_store_explicit(&handed_done, 0, memory_order_relaxed);
   atomic_store_explicit(&handed_waiting, 1, memory_order_release);
   while (!atomic_load_explicit(&handed_done, memory_order_acquire)) sched_yield();
   atomic_flag_clear_explicit(&handing, memory_order_release);
 }
+
+void gx_run_on_graphics(void (*work)(void *), void *argument) { hand_over(work, argument, 0); }
+void gx_run_on_graphics_soon(void (*work)(void *), void *argument) { hand_over(work, argument, 1); }
 
 int graphics_busy(void) {
   return threaded > 0 && atomic_load_explicit(&ring_parsed, memory_order_acquire) != atomic_load_explicit(&ring_written, memory_order_relaxed);
@@ -425,6 +430,7 @@ void gx_run_on_graphics(void (*work)(void *), void *argument) {
   work(argument);
   unlock_graphics();
 }
+void gx_run_on_graphics_soon(void (*work)(void *), void *argument) { gx_run_on_graphics(work, argument); }
 int graphics_busy(void) { return 0; }
 static void ring_add(const uint8_t *bytes, uint32_t count) { (void)bytes; (void)count; }
 #endif

@@ -259,8 +259,12 @@ void gx_bounding_box_write(int reg, uint32_t data);
 int gx_bounding_box_read(uint32_t address, uint32_t *value);
 void gx_bounding_box_off(void);
 void gx_bounding_box_started(void);  // Sends what was set before the backend started.  // Anything drawn, cleared or poked, so peeks look again.
-// Runs work on the thread that owns the graphics backend, waiting for it (gx_fifo.c).
+// Runs work on the thread that owns the graphics backend, waiting for it (gx_fifo.c),
+// once every command sent before has run: for a look at the picture, which must show them.
 void gx_run_on_graphics(void (*work)(void *), void *argument);
+// The same, but between the next two commands, for work that needs only what has
+// already run, such as filling in a copy made earlier: it doesn't wait for the backlog.
+void gx_run_on_graphics_soon(void (*work)(void *), void *argument);
 // Frames shown so far, for work done once a frame.
 unsigned gx_frame_number(void);
 
