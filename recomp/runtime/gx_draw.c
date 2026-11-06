@@ -12,6 +12,7 @@
 #include "gx_backend.h"
 #include "gx_inspect.h"
 #include "memory_watch.h"
+#include "title.h"
 
 enum {
   BP_GEN_MODE = 0x00, BP_SCISSOR_FIRST = 0x20, BP_SCISSOR_LAST = 0x21, BP_Z_MODE = 0x40, BP_BLEND = 0x41, BP_CONSTANT_ALPHA = 0x42,
@@ -32,6 +33,7 @@ enum {
 static unsigned frames;
 
 int gx_scale_numerator = 2, gx_scale_denominator = 1;
+static int scale_asked;  // WII_RECOMP_SCALE set it, so a title's own doesn't.
 
 // Read before anything is drawn, as every picture and copy is made at this size. From 1,
 // the Wii's own, to 4; 2 keeps a heavy scene within reach of a small graphics chip.
@@ -44,6 +46,14 @@ __attribute__((constructor)) static void choose_scale(void) {
     return;
   }
   gx_scale_numerator = numerator, gx_scale_denominator = denominator;
+  scale_asked = 1;
+}
+
+// A game built with add_game.py --scale draws at its own size, unless WII_RECOMP_SCALE says otherwise.
+void gx_choose_scale(void) {
+  if (scale_asked || !title || !title->scale_numerator) return;
+  gx_scale_numerator = title->scale_numerator, gx_scale_denominator = title->scale_denominator;
+  fprintf(stderr, "picture: this game is drawn at %d/%d of the Wii's size, as it was built to be\n", gx_scale_numerator, gx_scale_denominator);
 }
 unsigned gx_frame_number(void) { return frames; }
 

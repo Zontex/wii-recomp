@@ -6,7 +6,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "recomp/translate"))
 
 from decode import Program, name_of
-from emit import REPLACED, check_replaced, emit, emit_function, function_name
+from emit import REPLACED, check_replaced, emit, emit_function, function_name, picture_scale
 from functions import find_functions
 
 
@@ -94,6 +94,24 @@ class ReplacedCheck(unittest.TestCase):
     def test_real_program(self):
         functions, _ = find_functions(Program(DOL.read_bytes()))
         check_replaced(set(functions))
+
+
+class PictureScale(unittest.TestCase):
+    def scale(self, *arguments):
+        saved = sys.argv
+        sys.argv = ["emit.py", *arguments]
+        try:
+            return picture_scale()
+        finally:
+            sys.argv = saved
+
+    def test_scale_from_the_command_line(self):
+        self.assertEqual(self.scale(), (0, 0))  # The console's own.
+        self.assertEqual(self.scale("--scale", "3/2"), (3, 2))
+        self.assertEqual(self.scale("--all-code", "--scale", "1"), (1, 1))
+        for wrong in ("1/2", "5", "0/1", "9/2"):
+            with self.assertRaises(SystemExit):
+                self.scale("--scale", wrong)
 
 
 if __name__ == "__main__":

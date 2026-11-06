@@ -231,6 +231,7 @@ void gx_constants_send(int binding, const void *data, size_t bytes);
 // multiply by it, as in width * EFB_SCALE, which leaves the division for last.
 extern int gx_scale_numerator, gx_scale_denominator;
 #define EFB_SCALE gx_scale_numerator / gx_scale_denominator
+void gx_choose_scale(void);  // Once the title is loaded, before anything is drawn.
 #define MAX_VERTICES 65536
 struct GxTexture;
 void gx_copy_rectangle(int *x, int *y, int *width, int *height);

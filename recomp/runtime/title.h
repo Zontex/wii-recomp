@@ -28,6 +28,7 @@ typedef struct {
   uint32_t calibration_flag;      // 0 in a game with no Balance Board.
   int virtual_bluetooth;          // Whether the game talks to bluetooth.c rather than direct input.
   int fifo_breakpoints;           // Whether the chip honours FIFO breakpoints: see gx_fifo.c.
+  int scale_numerator, scale_denominator;  // The picture's size against the Wii's, or 0 for the console's own: see gx_draw.c.
   const TitleFunction *functions;  // Sorted by address.
   int function_count;
   const Module *const *modules;  // Modules the program loads at run time.
