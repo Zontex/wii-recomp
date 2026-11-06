@@ -206,6 +206,7 @@ DecodedTexture gx_decode_texture(int map, TextureMemo *memo) {
     pixel_count += level_size(width, level) * level_size(height, level);
   }
   if (!source || !bytes) return texture;
+  gx_copy_prepare_read(address << 5, bytes);  // A picture copy there is filled in first.
   uint32_t palette_offset = (palette & 0x3ff) << PALETTE_SLOT_SHIFT;
   uint64_t identity = hash_texture_bytes((address << 5) | 0x80000000u, source, bytes, memo) ^ ((uint64_t)image << 20) ^ ((uint64_t)address << 40) ^ palette_offset ^ ((uint64_t)levels << 60);
   // The same image can be drawn with new colors, so the palette is part of what it is.

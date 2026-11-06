@@ -18,11 +18,13 @@ enum { WATCH_SPAN = MEM2_START + MEM2_SIZE, BUSY_STREAK = 4, BUSY_FRAMES = 600 }
 static int watching;
 static unsigned page_shift;
 static _Atomic uint32_t *page_counts, *busy_until;
-static _Atomic uint8_t *page_watched;
+static _Atomic uint8_t *page_watched, *page_held;
+static WatchResolver resolver;
 static uint32_t *last_written;
 static uint8_t *streak;
 static atomic_flag watch_lock = ATOMIC_FLAG_INIT;
 static _Atomic uint32_t frame;
+static _Atomic unsigned faults;
 
 static void lock_watch(void) { while (atomic_flag_test_and_set_explicit(&watch_lock, memory_order_acquire)) {} }
 static void unlock_watch(void) { atomic_flag_clear_explicit(&watch_lock, memory_order_release); }
@@ -77,6 +79,7 @@ uint64_t watch_range(uint32_t address, uint32_t bytes) {
   uint32_t run = 0, run_pages = 0;
   for (uint32_t page = first_page; page <= last_page + 1; page++) {
     if (page <= last_page && !atomic_load_explicit(&page_watched[page], memory_order_relaxed)) {
+      // Not watched, so not held either: a held page stays watched until it's let go.
       if (!run_pages) run = page;
       run_pages++;
       atomic_store_explicit(&page_watched[page], 1, memory_order_relaxed);
@@ -94,10 +97,22 @@ uint64_t watch_count(uint32_t address, uint32_t bytes) {
   return watchable(address, bytes, &first, &last) ? count_pages(first, last) : WATCH_NONE;
 }
 
+static int is_held(uint32_t page) { return atomic_load_explicit(&page_held[page], memory_order_acquire); }
+
+// Asks for a held page's bytes, then lets it go if the resolver didn't, so the access
+// that found it can go on. Never called with the lock held, as the resolver writes memory.
+static void resolve_page(uint32_t page, uint32_t touched) {
+  if (resolver) resolver(touched);
+  if (is_held(page)) watch_release(page << page_shift, 1u << page_shift);
+}
+
 void watch_before_write(const void *host_address, size_t bytes) {
   uintptr_t at = (uintptr_t)host_address, base = (uintptr_t)GUEST_BASE;
   if (!watching || !bytes || at < base || at - base >= WATCH_SPAN) return;
   uint32_t first = (uint32_t)(at - base), last = bytes > WATCH_SPAN - first ? WATCH_SPAN - 1 : first + (uint32_t)bytes - 1;
+  for (uint32_t page = first >> page_shift; page <= last >> page_shift; page++) {
+    if (is_memory(page << page_shift) && is_held(page)) resolve_page(page, page << page_shift > first ? page << page_shift : first);
+  }
   lock_watch();
   for (uint32_t page = first >> page_shift; page <= last >> page_shift; page++) {
     if (is_memory(page << page_shift) && atomic_load_explicit(&page_watched[page], memory_order_relaxed)) open_page(page);
@@ -105,11 +120,50 @@ void watch_before_write(const void *host_address, size_t bytes) {
   unlock_watch();
 }
 
+void watch_set_resolver(WatchResolver chosen) { resolver = chosen; }
+
+int watch_hold(uint32_t address, uint32_t bytes) {
+  uint32_t first, last;
+  if (!watchable(address, bytes, &first, &last)) return 0;
+  lock_watch();
+  for (uint32_t page = first >> page_shift; page <= last >> page_shift; page++) {
+    if (atomic_load_explicit(&page_held[page], memory_order_relaxed)) continue;
+    // The bytes are changing, as far as any reader of them knows.
+    atomic_fetch_add_explicit(&page_counts[page], 1, memory_order_release);
+    atomic_store_explicit(&page_watched[page], 1, memory_order_relaxed);
+    atomic_store_explicit(&page_held[page], 1, memory_order_release);
+    protect(page, 1, PROT_NONE);
+  }
+  unlock_watch();
+  return 1;
+}
+
+void watch_release(uint32_t address, uint32_t bytes) {
+  uint32_t first, last;
+  if (!watchable(address, bytes, &first, &last)) return;
+  lock_watch();
+  for (uint32_t page = first >> page_shift; page <= last >> page_shift; page++) {
+    if (!atomic_load_explicit(&page_held[page], memory_order_relaxed)) continue;
+    atomic_store_explicit(&page_held[page], 0, memory_order_release);
+    open_page(page);
+  }
+  unlock_watch();
+}
+
+int watch_held(uint32_t address, uint32_t bytes) {
+  uint32_t first, last;
+  if (!watchable(address, bytes, &first, &last)) return 0;
+  for (uint32_t page = first >> page_shift; page <= last >> page_shift; page++) {
+    if (is_held(page)) return 1;
+  }
+  return 0;
+}
+
 void watch_next_frame(void) { atomic_fetch_add_explicit(&frame, 1, memory_order_relaxed); }
 int watch_enabled(void) { return watching; }
 
 void watch_start(unsigned long page_bytes) {
-  free((void *)page_counts), free((void *)busy_until), free((void *)page_watched), free(last_written), free(streak);
+  free((void *)page_counts), free((void *)busy_until), free((void *)page_watched), free((void *)page_held), free(last_written), free(streak);
   page_counts = 0;
   watching = 0;
   page_shift = (unsigned)__builtin_ctzl(page_bytes);
@@ -118,15 +172,19 @@ void watch_start(unsigned long page_bytes) {
   page_counts = calloc(pages, sizeof *page_counts);
   busy_until = calloc(pages, sizeof *busy_until);
   page_watched = calloc(pages, sizeof *page_watched);
+  page_held = calloc(pages, sizeof *page_held);
   last_written = calloc(pages, sizeof *last_written);
   streak = calloc(pages, sizeof *streak);
-  watching = page_counts && busy_until && page_watched && last_written && streak;
+  watching = page_counts && busy_until && page_watched && page_held && last_written && streak;
 }
-
-static _Atomic unsigned faults;
 
 int watch_fault(uint64_t offset) {
   if (!watching || offset >= WATCH_SPAN || !is_memory((uint32_t)offset)) return 0;
+  if (is_held((uint32_t)(offset >> page_shift))) {
+    resolve_page((uint32_t)(offset >> page_shift), (uint32_t)offset);
+    atomic_fetch_add_explicit(&faults, 1, memory_order_relaxed);
+    return 1;
+  }
   lock_watch();
   open_page((uint32_t)(offset >> page_shift));
   unlock_watch();

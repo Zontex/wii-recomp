@@ -20,6 +20,11 @@ typedef struct {
 
 typedef struct {
   TevKey tev;
+  uint8_t bounding_box;  // Written to widen the bounding box: not part of a recipe, as it's rarely on.
+} FragmentKey;
+
+typedef struct {
+  FragmentKey fragment;
   VertexKey vertex;
 } ProgramKey;
 
@@ -28,7 +33,7 @@ typedef struct {
 static struct { unsigned program; ProgramKey key; } *built;
 static unsigned built_count, built_capacity;
 
-static Cache fragment_shaders = {.key_bytes = sizeof(TevKey)}, vertex_shaders = {.key_bytes = sizeof(VertexKey)};
+static Cache fragment_shaders = {.key_bytes = sizeof(FragmentKey)}, vertex_shaders = {.key_bytes = sizeof(VertexKey)};
 static Cache programs = {.key_bytes = sizeof(ProgramKey)};
 
 void gx_text_add(ShaderText *text, const char *format, ...) {
@@ -82,12 +87,12 @@ static void store(Cache *cache, const void *key, unsigned object) {
 
 static unsigned find(const Cache *cache, const void *key) { return cache->slots ? cache->objects[find_slot(cache, key)] : 0; }
 
-static unsigned fragment_shader(const TevKey *key) {
+static unsigned fragment_shader(const FragmentKey *key) {
   static char characters[SHADER_TEXT_BYTES];
   unsigned shader = find(&fragment_shaders, key);
   if (shader) return shader;
   ShaderText text = {characters, 0, sizeof characters};
-  gx_tev_write_shader(key, &text);
+  gx_tev_write_shader(&key->tev, key->bounding_box, &text);
   shader = gx_backend->stage_compile(GX_STAGE_FRAGMENT, characters);
   store(&fragment_shaders, key, shader);
   return shader;
@@ -106,7 +111,7 @@ static unsigned vertex_shader(const VertexKey *key) {
 
 static unsigned build_program(const ProgramKey *key) {
   double start = glfwGetTime();
-  unsigned program = gx_backend->shader_link(vertex_shader(&key->vertex), fragment_shader(&key->tev));
+  unsigned program = gx_backend->shader_link(vertex_shader(&key->vertex), fragment_shader(&key->fragment));
   float milliseconds = (float)((glfwGetTime() - start) * 1000);
   gx_stats.new_shaders++;
   if (milliseconds > gx_stats.slowest_shader_ms) gx_stats.slowest_shader_ms = milliseconds;
@@ -131,8 +136,9 @@ static unsigned program_for(const ProgramKey *key) {
 int gx_shader_recipe(GxShader program, const GxRenderState *state, GxRecipe *recipe) {
   for (unsigned i = built_count; i-- > 0;) {
     if (built[i].program != program) continue;
+    if (built[i].key.fragment.bounding_box) return 0;
     memset(recipe, 0, sizeof *recipe);
-    recipe->tev = built[i].key.tev;
+    recipe->tev = built[i].key.fragment.tev;
     recipe->vertex = built[i].key.vertex;
     recipe->state = *state;
     return 1;
@@ -148,13 +154,13 @@ void gx_shader_prepare(const GxRecipe *recipes, unsigned count) {
     char **texts = malloc(2 * count * sizeof *texts);
     unsigned texts_count = 0;
     for (unsigned i = 0; i < count; i++) {
-      ProgramKey whole = {recipes[i].tev, recipes[i].vertex}, *key = &whole;
+      ProgramKey whole = {{recipes[i].tev, 0}, recipes[i].vertex}, *key = &whole;
       if (find(&programs, key)) continue;
       for (int kind = 0; kind < 2; kind++) {
-        if (kind == GX_STAGE_VERTEX ? find(&vertex_shaders, &key->vertex) != 0 : find(&fragment_shaders, &key->tev) != 0) continue;
+        if (kind == GX_STAGE_VERTEX ? find(&vertex_shaders, &key->vertex) != 0 : find(&fragment_shaders, &key->fragment) != 0) continue;
         ShaderText text = {malloc(SHADER_TEXT_BYTES), 0, SHADER_TEXT_BYTES};
         if (kind == GX_STAGE_VERTEX) gx_transform_write_shader(&key->vertex, &text);
-        else gx_tev_write_shader(&key->tev, &text);
+        else gx_tev_write_shader(&key->fragment.tev, 0, &text);
         kinds[texts_count] = kind;
         texts[texts_count++] = text.characters;
       }
@@ -165,7 +171,10 @@ void gx_shader_prepare(const GxRecipe *recipes, unsigned count) {
     free(texts);
   }
   for (unsigned i = 0; i < count; i++) {
-    ProgramKey key = {recipes[i].tev, recipes[i].vertex};
+    ProgramKey key;
+    memset(&key, 0, sizeof key);
+    key.fragment.tev = recipes[i].tev;
+    key.vertex = recipes[i].vertex;
     unsigned program = program_for(&key);
     if (gx_backend->pipeline_prepare) gx_backend->pipeline_prepare(program, &recipes[i].state);
   }
@@ -175,8 +184,12 @@ void gx_shader_use(const TevKey *tev, const VertexKey *vertex) {
   static ProgramKey in_use;
   static int anything_used;
   ProgramKey key;
-  if (anything_used && !memcmp(&in_use.tev, tev, sizeof *tev) && !memcmp(&in_use.vertex, vertex, sizeof *vertex)) return;
-  key.tev = *tev;
+  uint8_t bounding_box = (uint8_t)gx_bounding_box_on;
+  if (anything_used && in_use.fragment.bounding_box == bounding_box && !memcmp(&in_use.fragment.tev, tev, sizeof *tev)
+      && !memcmp(&in_use.vertex, vertex, sizeof *vertex)) return;
+  memset(&key, 0, sizeof key);
+  key.fragment.tev = *tev;
+  key.fragment.bounding_box = bounding_box;
   key.vertex = *vertex;
   unsigned built_before = built_count;
   unsigned program = program_for(&key);

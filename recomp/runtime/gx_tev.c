@@ -639,7 +639,7 @@ static void add_fog(ShaderText *text, const TevKey *key) {
 
 // Writes the shader for one set of color stages. Anything the stages can be set to
 // has a line here, so there is no general shader to fall back on.
-void gx_tev_write_shader(const TevKey *key, ShaderText *text) {
+void gx_tev_write_shader(const TevKey *key, int bounding_box, ShaderText *text) {
   const TevStage *last = &key->stage[key->stages - 1];
   unsigned maps, coordinates, channels;
   gx_tev_reads(key, &maps, &coordinates, &channels);
@@ -658,6 +658,7 @@ void gx_tev_write_shader(const TevKey *key, ShaderText *text) {
   for (int i = 0; i < 2; i++) {
     if (channels & (1u << i)) gx_text_add(text, "GX_VARYING(%d) in vec4 v_color%d;\n", GX_VARYING_COLOR + i, i);
   }
+  if (bounding_box) gx_text_add(text, "GX_BOUNDING_BOX coherent buffer BoundingBox { int bounding_box[4]; };\n");
   gx_text_add(text, "layout(location = 0, index = 0) out vec4 out_color;\n");
   // Blending reads a second output only when the stored alpha differs from the stages'.
   // A second output costs a tile-based chip a second write of every pixel.
@@ -698,6 +699,19 @@ void gx_tev_write_shader(const TevKey *key, ShaderText *text) {
     const char *channels = key->constant_alpha ? "rgb" : "rgba";
     if (key->logic_help == HELP_INVERT) gx_text_add(text, "  result.%s = 1.0 - clamp(result.%s, 0.0, 1.0);\n", channels, channels);
     else gx_text_add(text, "  result.%s = vec4(%s).%s;\n", channels, key->logic_help == HELP_ZERO ? "0.0" : "1.0", channels);
+  }
+  // Each of the game's pixels drawn widens the bounding box, standing for the square of
+  // 2 by 2 the chip works in, as Dolphin's PixelShaderGen.cpp found. The picture's pixel at
+  // the middle of the game's stands for it, so a bigger picture counts each one once.
+  if (bounding_box) {
+    gx_text_add(text,
+      "  ivec2 game_pixel = ivec2(floor(gl_FragCoord.xy / %.6f));\n"
+      "  if (ivec2(floor((vec2(game_pixel) + 0.5) * %.6f)) == ivec2(floor(gl_FragCoord.xy))) {\n"
+      "    atomicMin(bounding_box[0], game_pixel.x & ~1);\n"
+      "    atomicMax(bounding_box[1], game_pixel.x | 1);\n"
+      "    atomicMin(bounding_box[2], game_pixel.y & ~1);\n"
+      "    atomicMax(bounding_box[3], game_pixel.y | 1);\n"
+      "  }\n", (double)gx_scale_numerator / gx_scale_denominator, (double)gx_scale_numerator / gx_scale_denominator);
   }
   gx_text_add(text, "  out_color = result;\n}\n");
 }

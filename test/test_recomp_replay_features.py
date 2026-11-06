@@ -221,26 +221,29 @@ class PictureCopies(Scene):
         update = (len(first), self.TARGET, solid_image((0, 0, 0), 64, 64))
         self.assert_copy_shown(self.picture(textured_state(), commands, [update]))
 
-    def test_a_different_size_reads_memory(self):
+    def test_a_different_size_reads_the_copy_from_memory(self):
+        # Memory holds the copy's real bytes, so a smaller texture there is red too.
         commands = self.scene(texture=use_texture(self.TARGET, 32, 32, self.TEXTURE_RGB565))
         picture = self.picture(textured_state(), commands)
-        self.assert_copy_not_shown(picture)
-        self.assertIn("picture copy read at another size", self.log)
+        self.assert_pixel(picture, 250, 250, (205, 28, 57))  # The copy's RGB565, 0xc8e7, decoded.
+        self.assertIn("1 filled in when touched first", self.log)
 
     def test_a_format_of_another_size_reads_memory(self):
         commands = self.scene(texture=use_texture(self.TARGET, 64, 64, self.TEXTURE_I8))
-        self.assert_copy_not_shown(self.picture(textured_state(), commands))
-        self.assertIn("picture copy read as a format of another size", self.log)
+        picture = self.picture(textured_state(), commands)
+        self.assert_copy_not_shown(picture)
+        found = self.pixel(picture, 250, 250)
+        self.assertIn(found, [(0xc8,) * 3, (0xe7,) * 3])  # One byte or the other of 0xc8e7, as intensity.
 
     def test_copies_are_never_cmpr(self):
         commands = self.scene(texture=use_texture(self.TARGET, 64, 64, self.TEXTURE_CMPR))
         self.assert_copy_not_shown(self.picture(textured_state(), commands))
 
-    def test_a_format_of_the_same_size_uses_the_copy_and_says_so(self):
+    def test_a_format_of_the_same_size_reads_memory(self):
+        # 0xc8e7 as RGB5A3 has its top bit set: five bits each of 18, 7 and 7.
         rgb5a3 = 5
         commands = self.scene(texture=use_texture(self.TARGET, 64, 64, rgb5a3))
-        self.assert_copy_shown(self.picture(textured_state(), commands))
-        self.assertIn("picture copy read as another format = 0x405", self.log)
+        self.assert_pixel(self.picture(textured_state(), commands), 250, 250, (18 * 255 // 31, 7 * 255 // 31, 7 * 255 // 31))
 
     def test_a_copy_landing_on_another_replaces_it(self):
         over = flat_quad(self.GREEN, 0, 0, 64, 64) + copy_picture(self.TARGET + 0x400, self.COPY_RGB565)
@@ -251,22 +254,24 @@ class PictureCopies(Scene):
         beside = copy_picture(self.TARGET + bytes_in_copy, self.COPY_RGB565)
         self.assert_copy_shown(self.picture(textured_state(), self.scene(beside)))
 
-    def test_a_copy_with_gaps_between_rows_is_not_read_whole(self):
+    def test_a_copy_with_gaps_between_rows_is_read_from_memory(self):
+        # Rows of tiles 1024 bytes apart, read as 512: every other row of tiles is the copy's.
         made = flat_quad(self.RED, 0, 0, 64, 64) + copy_picture(self.TARGET, self.COPY_RGB565, stride=1024)
         commands = made + use_texture(self.TARGET, 64, 64, self.TEXTURE_RGB565) + textured_quad(200, 200, 300, 300)
-        self.assert_copy_not_shown(self.picture(textured_state(), commands))
-        self.assertIn("picture copy with gaps between its rows read whole", self.log)
+        picture = self.picture(textured_state(), commands)
+        self.assert_pixel(picture, 250, 202, (205, 28, 57))
+        self.assert_pixel(picture, 250, 209, (0, 0, 0))
 
     def test_a_stride_of_zero_copies_nothing(self):
         made = flat_quad(self.RED, 0, 0, 64, 64) + copy_picture(self.TARGET, self.COPY_RGB565, stride=0)
         commands = made + use_texture(self.TARGET, 64, 64, self.TEXTURE_RGB565) + textured_quad(200, 200, 300, 300)
         self.assert_copy_not_shown(self.picture(textured_state(), commands))
 
-    def test_a_report_comes_once(self):
+    def test_a_copy_read_twice_is_filled_in_once(self):
         texture = use_texture(self.TARGET, 32, 32, self.TEXTURE_RGB565)
         commands = self.scene(texture=texture) + textured_quad(310, 200, 400, 300)
         self.picture(textured_state(), commands)
-        self.assertEqual(self.log.count("picture copy read at another size"), 1)
+        self.assertIn("1 held, 0 read back early, 1 filled in when touched first", self.log)
 
 
 class Comparisons(Scene):

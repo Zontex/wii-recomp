@@ -22,14 +22,14 @@ Statuses:
 | Area | Done | Partial | Missing | Unknown | On demand | Not needed | Total |
 |---|---|---|---|---|---|---|---|
 | 1. CPU | 73 | 21 | 5 | 1 | 4 | 16 | 120 |
-| 2. Graphics commands and registers | 64 | 18 | 9 | 0 | 9 | 10 | 110 |
-| 3. TEV and pixel features | 48 | 13 | 10 | 0 | 4 | 1 | 76 |
-| 4. Vertex and texture | 49 | 11 | 0 | 3 | 1 | 2 | 66 |
+| 2. Graphics commands and registers | 65 | 22 | 4 | 0 | 9 | 10 | 110 |
+| 3. TEV and pixel features | 51 | 17 | 3 | 0 | 4 | 1 | 76 |
+| 4. Vertex and texture | 50 | 10 | 0 | 3 | 1 | 2 | 66 |
 | 5. Hardware blocks | 30 | 9 | 6 | 0 | 5 | 15 | 65 |
 | 6. Audio microcodes | 21 | 2 | 12 | 0 | 5 | 1 | 41 |
 | 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
 | 8. Controllers | 34 | 16 | 7 | 0 | 6 | 2 | 65 |
-| **All** | **352** | **106** | **52** | **4** | **41** | **53** | **608** |
+| **All** | **357** | **113** | **40** | **4** | **41** | **53** | **608** |
 
 ## Biggest gaps
 
@@ -37,17 +37,17 @@ Ordered by how likely a real game is to hit them.
 
 1. **`.rel` modules aren't translated ahead of time** (`cpu.code_loaded_at_run_time_rel_oslink`). Only `.rso` modules are. A `.rel` runs under the interpreter until the next build translates what it reached. Many commercial games keep most of their code in `.rel` modules.
 2. **Disc images are read only in this project's own format** (`hw.disc_image_files_iso_wbfs_rvz`). ISO, WBFS and RVZ need extracting first.
-3. **Picture copies never reach memory, and EFB peek, poke and bounding box are missing** (`pixel.copy_to_texture`, `pixel.efb_peek_cpu_reads_color_depth`, `pixel.efb_poke_cpu_writes`, `pixel.bounding_box`). The CPU reads a stamp, not pixels. Pokes land in the hardware register shadow.
-4. **ES and DI answer errors to much of what a Wii does** (`ios.identify_ticket_tmd_verify`, `ios.getlength_seek_readdvd`, `ios.openpartition_with_tmd_0x93_0x94`, `ios.encrypt_decrypt`, `ios.launch_return_to_menu_start_title`). Launching works only between the Wii Menu and a disc.
-5. **The Zelda family's audio program hasn't been checked against the real one** (`audio.zelda_*`). AX in every version has a C version, equal to the real program on Mario Kart Wii; any program without one runs on the interpreter. The Zelda family's C version, which Super Mario Galaxy 2 uses, follows Dolphin's but has no recording to be compared with yet, and Galaxy 2 reports four mix buffers it doesn't know.
-6. **`setjmp`, C++ exceptions and fibers are at risk** (`cpu.bclr`). `blr` is a host `return`, so code that switches stacks leaves the host stack out of step.
-7. **Self-modifying code** (`cpu.self_modifying_code_icbi`). `icbi` is a no-op, so translated code is never replaced.
-8. **Video interface registers are only stored** (`hw.*` in VI). No beam position, interlace, PAL or 480p modes.
-9. **No GameCube controllers** (`hw.gc_controller_wheel_keyboard_dance_mat`). Every port answers that nothing is plugged in.
-10. **Wii Remote motion is fixed at rest, and there's no Nunchuk, MotionPlus, speaker or second remote** (`ctl.*`). Covered by the controllers stage of `ROADMAP.md`.
-11. **Floating-point status flags aren't worked out from arithmetic** (`cpu.status_flags_fprf_fr_fi_fx_and_others`). Only the game's own writes change them.
-12. **No guest exceptions or memory mapping** (`cpu.program_trap_illegal`, `cpu.dsi_isi`, `cpu.game_defined_bat_maps`, `cpu.page_tables_segment_registers`).
-13. **Copy filters are ignored**: Y scale, gamma, anti-aliasing and deflicker, clamp and field copies (`pixel.copy_*`, `pixel.gamma_on_xfb_copy_1_0_1_7_2_2`).
+3. **ES and DI answer errors to much of what a Wii does** (`ios.identify_ticket_tmd_verify`, `ios.getlength_seek_readdvd`, `ios.openpartition_with_tmd_0x93_0x94`, `ios.encrypt_decrypt`, `ios.launch_return_to_menu_start_title`). Launching works only between the Wii Menu and a disc.
+4. **The Zelda family's audio program hasn't been checked against the real one** (`audio.zelda_*`). AX in every version has a C version, equal to the real program on Mario Kart Wii; any program without one runs on the interpreter. The Zelda family's C version, which Super Mario Galaxy 2 uses, follows Dolphin's but has no recording to be compared with yet, and Galaxy 2 reports four mix buffers it doesn't know.
+5. **`setjmp`, C++ exceptions and fibers are at risk** (`cpu.bclr`). `blr` is a host `return`, so code that switches stacks leaves the host stack out of step.
+6. **Self-modifying code** (`cpu.self_modifying_code_icbi`). `icbi` is a no-op, so translated code is never replaced.
+7. **Video interface registers are only stored** (`hw.*` in VI). No beam position, interlace, PAL or 480p modes.
+8. **No GameCube controllers** (`hw.gc_controller_wheel_keyboard_dance_mat`). Every port answers that nothing is plugged in.
+9. **Wii Remote motion is fixed at rest, and there's no Nunchuk, MotionPlus, speaker or second remote** (`ctl.*`). Covered by the controllers stage of `ROADMAP.md`.
+10. **Floating-point status flags aren't worked out from arithmetic** (`cpu.status_flags_fprf_fr_fi_fx_and_others`). Only the game's own writes change them.
+11. **No guest exceptions or memory mapping** (`cpu.program_trap_illegal`, `cpu.dsi_isi`, `cpu.game_defined_bat_maps`, `cpu.page_tables_segment_registers`).
+12. **Copy filters are partly followed** (`pixel.copy_*`, `pixel.gamma_on_xfb_copy_1_0_1_7_2_2`). Copies in memory follow the vertical filter, its clamps, gamma and YUV, but the card's copy drawn as a texture has none of them, and Y scale, anti-aliasing and field copies are missing.
+13. **The bounding box needs Vulkan** (`pixel.bounding_box`). OpenGL has no shaders that write memory, so it keeps the values the game set.
 
 ## Regressions
 
@@ -314,12 +314,12 @@ Dolphin lists 223 instruction handlers in `Interpreter_Tables.cpp`. Every one is
 | `gx.0x48_token_with_interrupt` | 0x48 token with interrupt | partial | `runtime/gx_fifo.c:97` | Value stored, no signal. Dolphin raises here. Works when the SDK writes both, as it writes 0x47 second. A game writing only 0x48 gets no interrupt. |
 | `gx.0x49_0x4a_copy_rectangle` | 0x49-0x4A copy rectangle | done | `runtime/gx_copy.c:45` |  |
 | `gx.0x4b_copy_target` | 0x4B copy target | done | `runtime/gx_copy.c:60` |  |
-| `gx.0x4d_copy_stride` | 0x4D copy stride | done | `runtime/gx_copy.c:147`, `:156` | Copies never reach memory. |
+| `gx.0x4d_copy_stride` | 0x4D copy stride | done | `runtime/gx_copy.c:316`, `:106` | Rows of tiles land this far apart in memory, and the bytes between them are left alone. |
 | `gx.0x4e_copy_y_scale` | 0x4E copy Y scale | missing |  | Ignored. PAL and field copies get the wrong size. |
 | `gx.0x4f_0x51_clear_color_and_depth` | 0x4F-0x51 clear color and depth | done | `runtime/gx_draw.c:202-209` |  |
 | `gx.0x52_trigger_copy` | 0x52 trigger copy | partial | `runtime/gx_fifo.c:106-125` | See area 3. |
-| `gx.0x53_0x54_vertical_copy_filter` | 0x53-0x54 vertical copy filter | missing |  |  |
-| `gx.0x55_0x56_bounding_box` | 0x55-0x56 bounding box | missing |  |  |
+| `gx.0x53_0x54_vertical_copy_filter` | 0x53-0x54 vertical copy filter | partial | `runtime/gx_copy.c:274`, `gx_encode.c:72` | Applied to copies as they land in memory, colour only, with the wrap past 128 Dolphin found. The card's own copy, drawn as a texture, has none, and says so (`pixel.copy_filter_aa_and_deflicker`). |
+| `gx.0x55_0x56_bounding_box` | 0x55-0x56 bounding box | partial | `runtime/gx_efb.c:132` | Starts the bounding box widening, on Vulkan. OpenGL has none and names `pixel.bounding_box`. |
 | `gx.0x57_clear_pixel_performance` | 0x57 clear pixel performance | on demand |  | Performance counters, read by profiling tools rather than game logic. |
 | `gx.0x58_rev_bits` | 0x58 rev bits | not needed |  | Dolphin ignores it too. |
 | `gx.0x59_scissor_offset` | 0x59 scissor offset | done | `runtime/gx_draw.c:144` |  |
@@ -359,9 +359,9 @@ Dolphin lists 223 instruction handlers in `Interpreter_Tables.cpp`. Every one is
 | `gx.cp_performance_counters` | CP performance counters | on demand |  | Performance counters, read by profiling tools rather than game logic. |
 | `gx.pe_control_and_status` | PE control and status | done | `runtime/gx_fifo.c:456`, `:468` |  |
 | `gx.pe_token` | PE token | done | `runtime/gx_fifo.c:469` |  |
-| `gx.pe_z_alpha_destination_alpha_config` | PE z, alpha, destination alpha config | missing |  | Only EFB peeks and pokes use it, so they report it (`pixel.efb_peek_cpu_reads_color_depth`, `pixel.efb_poke_cpu_writes`). Every game sets it up. |
-| `gx.pe_alpha_read_mode` | PE alpha read mode | missing |  | As `gx.pe_z_alpha_destination_alpha_config`. |
-| `gx.pe_bounding_box_0x10_0x16` | PE bounding box 0x10-0x16 | missing |  |  |
+| `gx.pe_z_alpha_destination_alpha_config` | PE z, alpha, destination alpha config | partial | `runtime/gx_efb.c:58` | Only pokes use it. They go straight in, as in Dolphin, and a poke set to test depth, blend, use a logic operation or leave channels alone names this row. |
+| `gx.pe_alpha_read_mode` | PE alpha read mode | done | `runtime/gx_efb.c:30`, `gx_encode.c:185` | Peeks read alpha as 0, 0xff or as stored. |
+| `gx.pe_bounding_box_0x10_0x16` | PE bounding box 0x10-0x16 | partial | `runtime/gx_efb.c:159`, `gx_fifo.c` | Waits for the card and reads the four values, which turns the box off, as Dolphin's PixelEngine.cpp does. Vulkan only. |
 | `gx.pe_performance_counters` | PE performance counters | on demand |  | Performance counters, read by profiling tools rather than game logic. |
 
 ## 3. TEV and pixel features
@@ -425,20 +425,20 @@ Dolphin lists 223 instruction handlers in `Interpreter_Tables.cpp`. Every one is
 | `pixel.efb_y8_u8_v8_yuv420` | EFB Y8, U8, V8, YUV420 | on demand | `runtime/gx_fifo.c:109` | Picture formats for anti-aliased YUV drawing, very rarely used. Reported when chosen. |
 | `pixel.reinterpreting_efb_after_a_format_change` | Reinterpreting EFB after a format change | missing | `runtime/gx_draw.c:339-345` | Logged only. |
 | `pixel.multisample_and_aa_modes` | Multisample and AA modes | on demand | `runtime/gx_fifo.c:104` | Pictures are drawn without anti-aliasing. Reported when turned on. |
-| `pixel.efb_peek_cpu_reads_color_depth` | EFB peek (CPU reads color, depth) | missing | `runtime/cpu.h:61-66`, `runtime/hardware.c:43-53` | Falls into the hardware register shadow. |
-| `pixel.efb_poke_cpu_writes` | EFB poke (CPU writes) | missing | `runtime/cpu.h:61-66`, `runtime/hardware.c:43-53` | Falls into the hardware register shadow, so a poke can alias a real register. |
-| `pixel.bounding_box` | Bounding box | missing |  | Paper Mario and others rely on it. |
-| `pixel.copy_to_texture` | Copy to texture | partial | `runtime/gx_copy.c:142-204` | Stays on the GPU. Memory gets a stamp, and the copy is used only while the stamp is intact. The CPU reads stamp bytes, not pixels. |
-| `pixel.copy_formats_r4_r8_ra4_ra8_rgb565_rgb5a3` | Copy formats R4, R8, RA4, RA8, RGB565, RGB5A3, RGBA8, A8, G8, B8 | done | `runtime/gx_copy.c:33-43` | By channel swizzle. Bit depth isn't reduced. |
-| `pixel.copy_formats_rg8_gb8` | Copy formats RG8, GB8 | partial | `runtime/gx_copy.c:40` | Copied as IA8, with no RG or GB channel swizzle. |
-| `pixel.depth_copy` | Depth copy | partial | `runtime/gx_copy.c:62` | Any depth copy reads as one value. Format not applied. |
-| `pixel.copy_half_size` | Copy half size | done | `runtime/gx_copy.c:56` |  |
+| `pixel.efb_peek_cpu_reads_color_depth` | EFB peek (CPU reads color, depth) | done | `runtime/gx_efb.c:30`, `:79`, `gx_encode.c:185` | Color as 0xAARRGGBB through the pixel format and alpha read mode, depth as 24 bits, or 16 in a 16-bit depth format, as Dolphin's EFBInterface.cpp and CompressZ16. The first peek after anything changed reads the whole picture back at the Wii's size; later ones read that. Both renderers. The color and depth form (bit 23), which nothing has found the meaning of, and accesses narrower than a word, name this row. |
+| `pixel.efb_poke_cpu_writes` | EFB poke (CPU writes) | partial | `runtime/gx_efb.c:58`, `gx_vulkan.c:1986`, `gx_gl.c` | Sets every picture pixel the game's pixel covers, color or depth, on both renderers. The PE's poke settings aren't followed (`gx.pe_z_alpha_destination_alpha_config`), as in Dolphin, which marks them as unknown. |
+| `pixel.bounding_box` | Bounding box | partial | `runtime/gx_efb.c:132`, `gx_tev.c:705`, `gx_vulkan.c:2016` | On Vulkan, shaders drawn while it's on widen it with each of the game's pixels they reach after the alpha test, in squares of 2 by 2, as Dolphin's PixelShaderGen.cpp. A draw a Vulkan shortcut leaves out (`pixel.vulkan_draw_shortcuts`) doesn't count. OpenGL has no shaders that write memory, and names this row. |
+| `pixel.copy_to_texture` | Copy to texture | done | `runtime/gx_copy.c:316`, `:106`, `memory_watch.c:125` | The copy stays on the card for drawing, and its memory is held: the first read or write of it from anywhere faults, the copy is read back, encoded as the chip does (`gx_encode.c`) and written, and the access goes on. A place read once is read back as each new copy is made, without waiting, and lands as the next picture is shown. Reads are recorded as the frame's commands end, so they never split a pass. A touch of something beside a copy on its first or last page doesn't wait: that page lands with the next picture, taking only bytes nothing has written since. A copy the card left out, as a held-back layer the screen never showed, names this row instead. |
+| `pixel.copy_formats_r4_r8_ra4_ra8_rgb565_rgb5a3` | Copy formats R4, R8, RA4, RA8, RGB565, RGB5A3, RGBA8, A8, G8, B8 | done | `runtime/gx_encode.c:130`, `gx_copy.c:204` | Exact bytes in memory, through the picture's pixel format. Drawn from the card by channel swizzle, at full bit depth. |
+| `pixel.copy_formats_rg8_gb8` | Copy formats RG8, GB8 | done | `runtime/gx_encode.c:130`, `gx_copy.c:204` | RG8 is green then red, GB8 blue then green, in memory and in the card's copy. |
+| `pixel.depth_copy` | Depth copy | partial | `runtime/gx_encode.c:36`, `gx_copy.c:274` | In memory, depth's three bytes read as red, green and blue, for Z4, Z8, Z8M, Z8L, Z16, Z16L and Z24X8. RA4, RA8, RGB565, RGB5A3 and A8 from depth, which Dolphin's software encoder has no answer for, name this row. Drawn from the card, depth reads as one value. |
+| `pixel.copy_half_size` | Copy half size | done | `runtime/gx_copy.c:316`, `gx_encode.c:52` | In memory each texel is the mean of its 2 by 2 box. |
 | `pixel.copy_y_scale` | Copy Y scale | missing |  |  |
 | `pixel.copy_clear` | Copy clear | done | `runtime/gx_fifo.c:124` |  |
-| `pixel.copy_intensity_rgb_to_yuv` | Copy intensity (RGB to YUV) | missing |  | Bit 15. |
-| `pixel.copy_clamp_top_and_bottom` | Copy clamp top and bottom | missing |  |  |
-| `pixel.copy_filter_aa_and_deflicker` | Copy filter (AA and deflicker) | missing |  |  |
-| `pixel.gamma_on_xfb_copy_1_0_1_7_2_2` | Gamma on XFB copy (1.0, 1.7, 2.2) | missing |  |  |
+| `pixel.copy_intensity_rgb_to_yuv` | Copy intensity (RGB to YUV) | partial | `runtime/gx_copy.c:274`, `gx_encode.c:72` | Bits 15 and 16. In memory, Y, U and V from Dolphin's constants, which it found by testing hardware, rounding a half up, for the intensity formats. The card's copy, drawn as a texture, reads red and says so. Other formats asking for it name this row, as Dolphin's two encoders disagree there. |
+| `pixel.copy_clamp_top_and_bottom` | Copy clamp top and bottom | partial | `runtime/gx_encode.c:52` | In memory the filter's rows above and below stop at the copy's edge when asked. A copy read back from the card has no rows beyond its own, so both edges stop there. |
+| `pixel.copy_filter_aa_and_deflicker` | Copy filter (AA and deflicker) | partial | `runtime/gx_encode.c:72` | The vertical filter applies in memory (`gx.0x53_0x54_vertical_copy_filter`). Anti-aliasing doesn't (`pixel.multisample_and_aa_modes`). |
+| `pixel.gamma_on_xfb_copy_1_0_1_7_2_2` | Gamma on XFB copy (1.0, 1.7, 2.2) | partial | `runtime/gx_encode.c:72` | Texture copies in memory follow it, as Dolphin's encoder does. Copies to the screen and the card's copy drawn as a texture don't, and say so. |
 | `pixel.copy_to_xfb` | Copy to XFB | partial | `runtime/gx_fifo.c:118`, `gx_draw.c:216` | Present directly. XFB memory unused. |
 | `pixel.field_copy_frame_to_field` | Field copy (frame to field) | missing |  |  |
 | `pixel.scissor` | Scissor | done | `runtime/gx_draw.c:142-149` |  |
@@ -530,7 +530,7 @@ Dolphin lists 223 instruction handlers in `Interpreter_Tables.cpp`. Every one is
 | `vtx.edge_lod` | Edge LOD | partial | `runtime/gx_tev.c` (`add_stage`) | Diagonal mode is the chip's: each coordinate's change across and down a pixel added, given to `textureGrad`. Edge mode is the GPU's own, which can differ from the chip's by up to half a level at an angle. |
 | `vtx.tmem_preload` | TMEM preload | on demand | `runtime/gx_draw.c:78` | See `gx.0x60_0x63_texture_preload`. |
 | `vtx.update_detection` | Update detection | partial | `runtime/gx_draw.c:86`, `gx_texture.c:135` | Checked once per frame, on a sample of bytes. A texture changed mid-frame, or a small change, can be missed. |
-| `vtx.copies_as_textures` | Copies as textures | partial | `runtime/gx_draw.c:77`, `gx_copy.c:66` | Exact address only. Never expires. |
+| `vtx.copies_as_textures` | Copies as textures | done | `runtime/gx_draw.c:130`, `gx_copy.c:387` | The card's copy, while memory still holds it and the texture has its shape and format. Read any other way, at another size, format, stride or through a palette, the texture comes from the copy's real bytes in memory. |
 | `vtx.non_power_of_two_wrap` | Non-power-of-two wrap | unknown |  | Hardware requires powers of two for repeat. Behaviour off-spec isn't known. |
 
 ## 5. Hardware blocks

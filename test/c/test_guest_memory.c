@@ -20,6 +20,16 @@ static uint32_t gap_detail;
 static int gap_count;
 void gap_hit(const char *id, uint32_t detail) { snprintf(gap_id, sizeof gap_id, "%s", id); gap_detail = detail; gap_count++; }
 
+// Fills a held range when it's first touched, as gx_copy.c does with a copy's bytes.
+static uint32_t resolved_at;
+static int resolves;
+static void fill_held(uint32_t physical) {
+  resolved_at = physical;
+  resolves++;
+  watch_release(0x80400000u, 0x3000u);
+  memset(host(0x80400000u), 0x5a, 0x3000u);
+}
+
 int main(void) {
   guest_memory_init();
 
@@ -104,6 +114,38 @@ int main(void) {
   CHECK_EQ(watch_range(0xcc000000u, 4), WATCH_NONE);
   CHECK_EQ(watch_range(0x817ffff0u, 0x20u), WATCH_NONE);
   CHECK_EQ(gap_count, 1);  // Not a guard page.
+
+  // A held range can't be read or written until its resolver fills it, from whatever
+  // touches it first, and then it reads as filled. It counts as written once let go.
+  watch_set_resolver(fill_held);
+  uint64_t before_hold = watch_range(0x80400000u, 0x3000u);
+  CHECK_EQ(watch_hold(0x80400000u, 0x3000u), 1);
+  CHECK_EQ(watch_held(0x80401000u, 4), 1);
+  CHECK_EQ(watch_held(0x80500000u, 4), 0);
+  uint64_t held_count = watch_count(0x80400000u, 0x3000u);
+  CHECK_EQ(held_count != before_hold && held_count != WATCH_NONE, 1);
+  CHECK_EQ(rd32(0x80401234u), 0x5a5a5a5au);
+  CHECK_EQ(resolves, 1);
+  CHECK_EQ(resolved_at >> 12, 0x401u);
+  CHECK_EQ(watch_held(0x80400000u, 0x3000u), 0);
+  CHECK_EQ(rd32(0x80400000u), 0x5a5a5a5au);
+  CHECK_EQ(resolves, 1);
+  CHECK_EQ(watch_count(0x80400000u, 0x3000u) == held_count, 0);
+  // A write goes first through the resolver too, and the kernel's through watch_before_write.
+  watch_hold(0x80400000u, 0x3000u);
+  wr32(0x80402000u, 0x01020304u);
+  CHECK_EQ(resolves, 2);
+  CHECK_EQ(rd32(0x80402000u), 0x01020304u);
+  CHECK_EQ(rd32(0x80402004u), 0x5a5a5a5au);
+  watch_hold(0x80400000u, 0x3000u);
+  watch_before_write(host(0x80400010u), 4);
+  CHECK_EQ(resolves, 3);
+  CHECK_EQ(watch_held(0x80400000u, 0x3000u), 0);
+  // With no resolver taking it, a touched page is let go as it is.
+  watch_set_resolver(0);
+  watch_hold(0x80400000u, 0x1000u);
+  CHECK_EQ(rd32(0x80400000u), 0x5a5a5a5au);
+  CHECK_EQ(gap_count, 1);
 
   // Starting over clears memory.
   guest_memory_reserve();

@@ -20,6 +20,17 @@ uint64_t watch_range(uint32_t address, uint32_t bytes);
 uint64_t watch_count(uint32_t address, uint32_t bytes);
 // Opens watched pages before the kernel writes there, which a fault can't catch (fread).
 void watch_before_write(const void *host_address, size_t bytes);
+// Holding a range whose bytes aren't in memory yet, as a picture copy's until something
+// reads it (gx_copy.c). Its pages can be neither read nor written, so the first touch from
+// anywhere, the kernel included through watch_before_write, goes to the resolver, which
+// lets the range go and fills it in before the access carries on. A held page counts as
+// watched, its count unchanging until it's let go, which counts as a write. Holding says
+// 0 if the range can't be held, as when watching is off.
+typedef void (*WatchResolver)(uint32_t physical);  // Given the address touched.
+void watch_set_resolver(WatchResolver resolver);
+int watch_hold(uint32_t address, uint32_t bytes);
+void watch_release(uint32_t address, uint32_t bytes);  // Opens the pages for writing.
+int watch_held(uint32_t address, uint32_t bytes);  // Any page of it.
 // Each new picture, so pages written in frame after frame can be told apart.
 void watch_next_frame(void);
 // Turned off by WII_RECOMP_NO_WATCH=1, when every reader looks at the bytes.

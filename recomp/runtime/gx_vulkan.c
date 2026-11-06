@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "gx_vulkan.h"
+#include "timeline.h"
 
 #define EFB_PIXEL_WIDTH (EFB_WIDTH * EFB_SCALE)
 #define EFB_PIXEL_HEIGHT (EFB_HEIGHT * EFB_SCALE)
@@ -231,8 +232,12 @@ static void retire_attachment(GxTexture *t);
 static void upload_pixels(GxTexture *texture, uint32_t width, uint32_t height, uint32_t levels, const uint8_t *rgba);
 
 // A new commands buffer knows nothing of what the last one had set.
+// The bounding box's four values, which shaders with it on widen (see bounding_box_set).
+static struct { Ring ring; VkDescriptorSet set; int bound; } box;
+
 static void forget_set_state(void) {
   pipeline_set = VK_NULL_HANDLE;
+  box.bound = 0;
   memset(&viewport_set, 0, sizeof viewport_set);
   memset(&scissor_set, 0, sizeof scissor_set);
   memset(maps_set, 0, sizeof maps_set);
@@ -243,10 +248,24 @@ static void forget_set_state(void) {
 }
 
 static void mark_frame_start(void);
-static void begin_frame(Frame *frame) {
+// Commands go to the card in batches, one a picture and more when something must wait
+// for it. Each frame's set remembers the batch it was last sent as, and the newest batch
+// the card is known to have finished is kept, so a read back can tell when it's there.
+static uint32_t batch = 1, sent_batch[FRAMES_IN_FLIGHT], finished_batch;
+
+// Starts a set of commands after the last was sent, with nothing of the picture's own.
+static void begin_batch(Frame *frame) {
+  if (vk.frame && vk.frame->submitted) sent_batch[vk.frame - vk.frames] = batch++;
+  int was_sent = frame->submitted;
   vk_frame_begin(frame);
+  if (was_sent && sent_batch[frame - vk.frames] > finished_batch) finished_batch = sent_batch[frame - vk.frames];
   pass_open = 0;
   restarts++;
+  forget_set_state();
+}
+
+static void begin_frame(Frame *frame) {
+  begin_batch(frame);
   frame_serial++;
   if (depth_use.shape != depth_use.last_shape) {
     memset(depth_use.no_load, 0, sizeof depth_use.no_load);
@@ -484,13 +503,16 @@ static void begin_pass(const VkRect2D *area) {
 }
 
 // Sends what's recorded so far and waits for all of it, for when a frame's memory runs out.
+static void record_reads(void);
 static void finish_commands(void) {
+  record_reads();
   give_up_layer();
   leave_strip();
   Frame *frame = vk.frame;
   end_pass();
   vk_frame_submit(frame, VK_NULL_HANDLE, VK_NULL_HANDLE);
-  begin_frame(frame);
+  // The same picture goes on, so what's learned about its passes, by their place in it, holds.
+  begin_batch(frame);
 }
 
 static void write_shape_indices(void) {
@@ -522,6 +544,16 @@ static void start(const GxAttribute *attributes, int attribute_count, size_t byt
   begin_frame(&vk.frames[0]);
   blank_efb(vk.frame->draw);
   clear_shader = vk_shader_link(vk_stage_compile(GX_STAGE_VERTEX, clear_vertex_source), vk_stage_compile(GX_STAGE_FRAGMENT, clear_fragment_source));
+  if (vk.bounding_box) {
+    box.ring = vk_create_ring(4 * sizeof(int32_t), VK_BUFFER_USAGE_STORAGE_BUFFER_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    VkDescriptorSetAllocateInfo allocate = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = vk.descriptor_pool,
+                                            .descriptorSetCount = 1, .pSetLayouts = &vk.set_layouts[SET_BOUNDING_BOX]};
+    vk_check(vkAllocateDescriptorSets(vk.device, &allocate, &box.set), "allocating a descriptor set");
+    VkDescriptorBufferInfo buffer = {box.ring.buffer, 0, VK_WHOLE_SIZE};
+    VkWriteDescriptorSet write = {.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstSet = box.set, .dstBinding = 0, .descriptorCount = 1,
+                                  .descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, .pBufferInfo = &buffer};
+    vkUpdateDescriptorSets(vk.device, 1, &write, 0, 0);
+  }
   static const uint8_t black[BYTES_PER_PIXEL] = {0, 0, 0, 255};  // What OpenGL samples from an empty texture.
   blank_texture = texture_create();
   upload_pixels(blank_texture, 1, 1, 1, black);
@@ -945,6 +977,10 @@ static void draw(int primitive, int count) {
   set_pipeline(commands, vk_pipeline_find(shader_in_use, &state_in_use));
   set_viewport_and_scissor(commands, &viewport_wanted, &area);
   bind_maps(commands);
+  if (box.set && !box.bound) {
+    vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipeline_layout, SET_BOUNDING_BOX, 1, &box.set, 0, 0);
+    box.bound = 1;
+  }
   VkDeviceSize start_of_buffer = 0;
   vkCmdBindVertexBuffers(commands, 0, 1, &frame->vertices.buffer, &start_of_buffer);
   int32_t first = (int32_t)(reserved_at / vertex_bytes);
@@ -1159,7 +1195,9 @@ static void prepare_copy(GxTexture *to, int width, int height, VkFormat format, 
   if (!to->image || to->width != width || to->height != height) {
     if (to->image) vk_retire(to->image, to->view, to->memory);
     retire_attachment(to);
-    vk_create_image(format, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, (uint32_t)width, (uint32_t)height, 1, &to->image, &to->memory);
+    // Readable by transfers too, for a copy that lands in memory (read_texture).
+    vk_create_image(format, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_SAMPLED_BIT, (uint32_t)width, (uint32_t)height, 1,
+                    &to->image, &to->memory);
     to->view = vk_create_view(to->image, format, aspect, 1, mapping);
     to->width = width;
     to->height = height;
@@ -1323,6 +1361,7 @@ static void hand_picture_over(Frame *frame) {
 }
 
 static void present(const GxRectangle *from) {
+  record_reads();
   give_up_layer();
   leave_strip();
   Frame *frame = vk.frame;
@@ -1788,6 +1827,272 @@ static void clear(const GxClear *c) {
   clear_now(c);
 }
 
+// Reading back. Each read takes a slot of host memory, in turn, and is copied in by the
+// card in order with everything else; a ticket names the slot and its turn.
+// A copy's read waits to be recorded until the frame's commands end (record_reads), so
+// it never ends a pass or a held-back layer early, which a tile-based chip pays for twice.
+enum { READ_SLOTS = 256 };
+static struct {
+  Ring ring;
+  unsigned ticket;
+  uint32_t serial;
+  int frame_index, width, height, on_processor;  // On the processor: worked out here, with no card.
+  GxTexture *waiting;  // A copy's texture, still to be recorded.
+  int smooth, failed;
+  uint8_t *processor;
+  size_t processor_size;
+} reads[READ_SLOTS];
+static unsigned next_ticket = 1;
+static int reads_waiting;  // Some read is still to be recorded.
+
+static int read_slot(size_t bytes) {
+  int slot = (int)(next_ticket % READ_SLOTS);
+  Ring *ring = &reads[slot].ring;
+  // Each is used again only after every other, by then long finished, so a bigger read
+  // replaces it at once but for the rare case of the card still being on it.
+  if (ring->buffer && ring->size < bytes) {
+    if (reads[slot].serial > finished_batch) vkQueueWaitIdle(vk.queue);
+    vkDestroyBuffer(vk.device, ring->buffer, 0);
+    vkFreeMemory(vk.device, ring->memory, 0);
+    ring->buffer = VK_NULL_HANDLE;
+  }
+  if (!ring->buffer) *ring = vk_create_read_ring(bytes);
+  reads[slot].ticket = next_ticket++;
+  reads[slot].serial = batch;
+  reads[slot].frame_index = (int)(vk.frame - vk.frames);
+  reads[slot].on_processor = 0;
+  reads[slot].waiting = 0;
+  reads[slot].failed = 0;
+  return slot;
+}
+
+static void to_host(VkCommandBuffer commands) {
+  VkMemoryBarrier to_host = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT, .dstAccessMask = VK_ACCESS_HOST_READ_BIT};
+  vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &to_host, 0, 0, 0, 0);
+}
+
+// The picture as the game thinks of it: any layer held back is settled, and the read
+// goes where the scene's commands are, which run after the strip's.
+static void ready_to_read(void) {
+  give_up_layer();
+  leave_strip();
+  end_pass();
+}
+
+// Images at the Wii's own size, color and depth, that what's read back is shrunk into
+// first, as the processor then reads a quarter as much or less.
+static VkImage small[2];
+static VkDeviceMemory small_memory[2];
+
+static VkImage small_image(int depth) {
+  if (!small[depth]) {
+    vk_create_image(depth ? DEPTH_FORMAT : COLOR_FORMAT, VK_IMAGE_USAGE_TRANSFER_DST_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT, EFB_WIDTH, EFB_HEIGHT, 1,
+                    &small[depth], &small_memory[depth]);
+  }
+  return small[depth];
+}
+
+// Shrinks the source's area into the small image, from a source ready to be read, and
+// leaves the small image ready to be read.
+static void shrink(VkCommandBuffer commands, VkImage source, int depth, const VkOffset3D from[2], int width, int height, int smooth) {
+  VkImageAspectFlags aspect = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+  VkImage to = small_image(depth);
+  barrier(commands, to, aspect, 0, 1, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
+          VK_PIPELINE_STAGE_TRANSFER_BIT, 0, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+  VkImageBlit blit = {.srcSubresource = {aspect, 0, 0, 1}, .srcOffsets = {from[0], from[1]}, .dstSubresource = {aspect, 0, 0, 1},
+                      .dstOffsets = {{0, 0, 0}, {width, height, 1}}};
+  if (same_size(&blit)) {
+    vkCmdCopyImage(commands, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, to, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1,
+                   &(VkImageCopy){blit.srcSubresource, blit.srcOffsets[0], blit.dstSubresource, blit.dstOffsets[0], blit_extent(&blit)});
+  } else {
+    vkCmdBlitImage(commands, source, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, to, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit,
+                   smooth && !depth ? VK_FILTER_LINEAR : VK_FILTER_NEAREST);
+  }
+  barrier(commands, to, aspect, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+          VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+}
+
+static unsigned read_texture(GxTexture *t, int width, int height, int smooth) {
+  if (width <= 0 || height <= 0 || width > EFB_WIDTH || height > EFB_HEIGHT) return 0;
+  if (t->owed && !holds(t)) return 0;  // Its copy was left out, as nothing on screen would show it.
+  if (t->flat_view) {
+    // One value everywhere, known here without the card.
+    int bytes = width * height * BYTES_PER_PIXEL, slot = (int)(next_ticket % READ_SLOTS);
+    if ((size_t)bytes > reads[slot].processor_size) reads[slot].processor = realloc(reads[slot].processor, reads[slot].processor_size = (size_t)bytes);
+    uint8_t value[BYTES_PER_PIXEL];
+    if (t->flat.depth) memcpy(value, &t->flat.value[0], sizeof(float));
+    else for (int i = 0; i < BYTES_PER_PIXEL; i++) value[i] = (uint8_t)lroundf(fminf(fmaxf(t->flat.value[i], 0), 1) * 255);
+    for (int i = 0; i < bytes; i += BYTES_PER_PIXEL) memcpy(reads[slot].processor + i, value, BYTES_PER_PIXEL);
+    reads[slot].ticket = next_ticket++;
+    reads[slot].on_processor = 1;
+    reads[slot].waiting = 0;
+    reads[slot].failed = 0;
+    reads[slot].width = width, reads[slot].height = height;
+    return reads[slot].ticket;
+  }
+  if (!t->image || !t->written) return 0;
+  int slot = read_slot((size_t)width * (size_t)height * BYTES_PER_PIXEL);
+  reads[slot].width = width, reads[slot].height = height;
+  reads[slot].waiting = t;
+  reads[slot].smooth = smooth;
+  reads_waiting = 1;
+  return reads[slot].ticket;
+}
+
+// Records one waiting read, outside any pass, where the scene's commands are.
+static void record_read(int slot) {
+  GxTexture *t = reads[slot].waiting;
+  int width = reads[slot].width, height = reads[slot].height, smooth = reads[slot].smooth;
+  reads[slot].waiting = 0;
+  if (t->owed || t->flat_view || !t->image || !t->written) {  // Left out after all, or since replaced.
+    reads[slot].failed = 1;
+    return;
+  }
+  VkCommandBuffer commands = vk.frame->draw;
+  VkImageAspectFlags aspect = t->depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+  barrier(commands, t->image, aspect, 0, 1, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL,
+          VK_PIPELINE_STAGE_TRANSFER_BIT | VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | COLOR_ATTACHMENT_STAGE,
+          VK_ACCESS_TRANSFER_WRITE_BIT | VK_ACCESS_COLOR_ATTACHMENT_WRITE_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+  const VkOffset3D whole[2] = {{0, 0, 0}, {t->width, t->height, 1}};
+  shrink(commands, t->image, t->depth, whole, width, height, smooth);
+  barrier(commands, t->image, aspect, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL,
+          VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_ACCESS_SHADER_READ_BIT);
+  VkBufferImageCopy region = {.imageSubresource = {aspect, 0, 0, 1}, .imageExtent = {(uint32_t)width, (uint32_t)height, 1}};
+  vkCmdCopyImageToBuffer(commands, small_image(t->depth), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, reads[slot].ring.buffer, 1, &region);
+  to_host(commands);
+  mark("read a copy back", width, height);
+}
+
+
+// Every waiting read, just before the commands are sent. A copy a held-back layer still
+// owes is made first.
+static void record_reads(void) {
+  if (!reads_waiting) return;
+  reads_waiting = 0;
+  for (int slot = 0; slot < READ_SLOTS; slot++) {
+    if (reads[slot].waiting && holds(reads[slot].waiting)) settle_layer(reads[slot].waiting == empty_layer.picture ? 2 : 1);
+  }
+  leave_strip();
+  end_pass();
+  for (int slot = 0; slot < READ_SLOTS; slot++) {
+    if (reads[slot].waiting) record_read(slot);
+  }
+}
+
+// The picture at the Wii's own size, through an image of that size the picture is scaled into.
+static unsigned read_picture(int depth, const GxRectangle *area) {
+  if (area->width <= 0 || area->height <= 0 || area->width > EFB_WIDTH || area->height > EFB_HEIGHT) return 0;
+  ready_to_read();
+  VkImageAspectFlags aspect = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+  VkCommandBuffer commands = vk.frame->draw;
+  VkImage picture = depth ? vk.efb_depth : vk.efb_color;
+  VkImageLayout picture_layout = depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  VkPipelineStageFlags picture_stage = depth ? DEPTH_ATTACHMENT_STAGE : COLOR_ATTACHMENT_STAGE;
+  VkAccessFlags picture_access = depth ? DEPTH_ATTACHMENT_ACCESS : COLOR_ATTACHMENT_ACCESS;
+  barrier(commands, picture, aspect, 0, 1, picture_layout, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, picture_stage, picture_access, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT);
+  VkOffset3D source[2], target[2];
+  blit_areas(area, area->width, area->height, source, target);
+  shrink(commands, picture, depth, source, area->width, area->height, 0);
+  barrier(commands, picture, aspect, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, picture_layout, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_READ_BIT, picture_stage, picture_access);
+  int slot = read_slot((size_t)area->width * (size_t)area->height * BYTES_PER_PIXEL);
+  reads[slot].width = area->width, reads[slot].height = area->height;
+  VkBufferImageCopy region = {.imageSubresource = {aspect, 0, 0, 1}, .imageExtent = {(uint32_t)area->width, (uint32_t)area->height, 1}};
+  vkCmdCopyImageToBuffer(commands, small_image(depth), VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, reads[slot].ring.buffer, 1, &region);
+  to_host(commands);
+  mark("read the picture back", area->width, area->height);
+  return reads[slot].ticket;
+}
+
+static void note_finished(int frame_index) {
+  if (sent_batch[frame_index] > finished_batch) finished_batch = sent_batch[frame_index];
+}
+
+static int read_ready(unsigned ticket) {
+  int slot = (int)(ticket % READ_SLOTS);
+  if (reads[slot].ticket != ticket) return 0;
+  if (reads[slot].on_processor || reads[slot].serial <= finished_batch) return 1;
+  if (reads[slot].serial == batch) return 0;  // Not sent yet.
+  Frame *frame = &vk.frames[reads[slot].frame_index];
+  if (frame->submitted && vkGetFenceStatus(vk.device, frame->fence) == VK_SUCCESS) note_finished(reads[slot].frame_index);
+  return reads[slot].serial <= finished_batch;
+}
+
+static const void *read_finish(unsigned ticket, int *width, int *height) {
+  int slot = (int)(ticket % READ_SLOTS);
+  if (reads[slot].ticket != ticket) return 0;
+  if (!read_ready(ticket)) {
+    if (reads[slot].serial == batch) {
+      TIMELINE_BEGIN("waiting for a read back");
+      finish_commands();  // Sends everything so far and waits for it.
+      TIMELINE_END("waiting for a read back");
+    } else {
+      vk_check(vkWaitForFences(vk.device, 1, &vk.frames[reads[slot].frame_index].fence, VK_TRUE, UINT64_MAX), "waiting for a read back");
+      note_finished(reads[slot].frame_index);
+    }
+  }
+  if (reads[slot].failed) return 0;
+  *width = reads[slot].width, *height = reads[slot].height;
+  return reads[slot].on_processor ? reads[slot].processor : reads[slot].ring.mapped;
+}
+
+// A poke sets the game's pixel, as many of the picture's as cover it, from staging memory.
+static void poke(int depth, int x, int y, uint32_t rgba, float depth_value) {
+  ready_to_read();
+  int left = x * EFB_SCALE, top = y * EFB_SCALE, width = (x + 1) * EFB_SCALE - left, height = (y + 1) * EFB_SCALE - top;
+  VkDeviceSize bytes = (VkDeviceSize)width * (VkDeviceSize)height * BYTES_PER_PIXEL;
+  VkDeviceSize at = vk_ring_take(&vk.frame->staging, bytes, BYTES_PER_PIXEL);
+  if (at == (VkDeviceSize)-1) {
+    finish_commands();
+    at = vk_ring_take(&vk.frame->staging, bytes, BYTES_PER_PIXEL);
+  }
+  uint32_t value = rgba;
+  if (depth) memcpy(&value, &depth_value, sizeof value);
+  for (VkDeviceSize i = 0; i < bytes; i += BYTES_PER_PIXEL) memcpy(vk.frame->staging.mapped + at + i, &value, sizeof value);
+  VkCommandBuffer commands = vk.frame->draw;
+  VkImage picture = depth ? vk.efb_depth : vk.efb_color;
+  VkImageAspectFlags aspect = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
+  VkImageLayout picture_layout = depth ? VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL : VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+  VkPipelineStageFlags picture_stage = depth ? DEPTH_ATTACHMENT_STAGE : COLOR_ATTACHMENT_STAGE;
+  VkAccessFlags picture_access = depth ? DEPTH_ATTACHMENT_ACCESS : COLOR_ATTACHMENT_ACCESS;
+  barrier(commands, picture, aspect, 0, 1, picture_layout, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, picture_stage, picture_access, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT);
+  VkBufferImageCopy region = {.bufferOffset = at, .imageSubresource = {aspect, 0, 0, 1}, .imageOffset = {left, top, 0}, .imageExtent = {(uint32_t)width, (uint32_t)height, 1}};
+  vkCmdCopyBufferToImage(commands, vk.frame->staging.buffer, picture, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &region);
+  barrier(commands, picture, aspect, 0, 1, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, picture_layout, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_ACCESS_TRANSFER_WRITE_BIT, picture_stage, picture_access);
+  if (depth) {
+    flat_depth.known = 0;
+    early_depth_changed();
+  }
+  newest_copy.frame = 0;
+}
+
+// The game sets the bounding box between draws, so the values go in with the commands.
+static int bounding_box_set(int first, int a, int b) {
+  if (!box.set) return 0;
+  leave_strip();
+  end_pass();
+  int32_t values[2] = {a, b};
+  VkCommandBuffer commands = vk.frame->draw;
+  VkMemoryBarrier before = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT, .dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT};
+  vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 1, &before, 0, 0, 0, 0);
+  vkCmdUpdateBuffer(commands, box.ring.buffer, (VkDeviceSize)first * sizeof(int32_t), sizeof values, values);
+  VkMemoryBarrier after = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT,
+                           .dstAccessMask = VK_ACCESS_SHADER_READ_BIT | VK_ACCESS_SHADER_WRITE_BIT};
+  vkCmdPipelineBarrier(commands, VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT, 0, 1, &after, 0, 0, 0, 0);
+  return 1;
+}
+
+static void bounding_box_get(int values[4]) {
+  leave_strip();
+  end_pass();
+  VkMemoryBarrier to_host = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
+                             .dstAccessMask = VK_ACCESS_HOST_READ_BIT};
+  vkCmdPipelineBarrier(vk.frame->draw, VK_PIPELINE_STAGE_FRAGMENT_SHADER_BIT | VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_HOST_BIT, 0, 1, &to_host, 0, 0, 0, 0);
+  TIMELINE_BEGIN("waiting for the bounding box");
+  finish_commands();
+  TIMELINE_END("waiting for the bounding box");
+  memcpy(values, box.ring.mapped, 4 * sizeof(int32_t));
+}
+
 const GxBackend gx_backend_vulkan = {
   .name = "vulkan",
   .window_prepare = window_prepare,
@@ -1811,4 +2116,11 @@ const GxBackend gx_backend_vulkan = {
   .copy_color = copy_color,
   .copy_depth = copy_depth,
   .present = present,
+  .read_texture = read_texture,
+  .read_picture = read_picture,
+  .read_ready = read_ready,
+  .read_finish = read_finish,
+  .poke = poke,
+  .bounding_box_set = bounding_box_set,
+  .bounding_box_get = bounding_box_get,
 };

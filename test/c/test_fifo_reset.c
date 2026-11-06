@@ -20,6 +20,10 @@ void debug_unsupported(const char *i, const char *w, uint32_t v) {}
 void gap_hit(const char *i, uint32_t d) {}
 void gx_present(void) {}
 void gx_copy_to_texture(uint32_t c, int d) {}
+void gx_bounding_box_write(int r, uint32_t d) {}
+int gx_bounding_box_read(uint32_t a, uint32_t *v) { return 0; }
+void gx_bounding_box_off(void) {}
+const GxBackend *gx_backend;
 void gx_clear(void) {}
 uint32_t gx_vertices_size(int f, int c) { return 0; }
 int gx_read_vertices(const uint8_t *d, int f, int c, Vertex *o) { return c; }

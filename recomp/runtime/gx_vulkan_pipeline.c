@@ -26,6 +26,7 @@ static const char *const prefix =
   "#define GX_VARYING(n) layout(location = n)\n"
   "#define GX_BLOCK(n) layout(std140, set = 0, binding = n)\n"
   "#define GX_MAP(n) layout(set = 1, binding = n)\n"
+  "#define GX_BOUNDING_BOX layout(std430, set = 2, binding = 0)\n"
   "#define GX_DEPTH(z, w) ((z) + (w))\n"  // Vulkan's depth runs from 0, not -w.
   "#define GX_EARLY_TESTS\n";  // Every Vulkan device can test depth before the shader.
 
@@ -84,6 +85,9 @@ static void create_set_layouts(void) {
                                               .flags = vk.push_descriptors ? VK_DESCRIPTOR_SET_LAYOUT_CREATE_PUSH_DESCRIPTOR_BIT_KHR : 0,
                                               .bindingCount = MAX_TEXTURE_MAPS, .pBindings = maps};
   vk_check(vkCreateDescriptorSetLayout(vk.device, &textures, 0, &vk.set_layouts[SET_TEXTURES]), "creating a set layout");
+  VkDescriptorSetLayoutBinding box = {0, VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1, VK_SHADER_STAGE_FRAGMENT_BIT, 0};
+  VkDescriptorSetLayoutCreateInfo bounding_box = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_LAYOUT_CREATE_INFO, .bindingCount = 1, .pBindings = &box};
+  vk_check(vkCreateDescriptorSetLayout(vk.device, &bounding_box, 0, &vk.set_layouts[SET_BOUNDING_BOX]), "creating a set layout");
 }
 
 static void create_pipeline_layout(void) {
@@ -91,8 +95,8 @@ static void create_pipeline_layout(void) {
   VkPipelineLayoutCreateInfo info = {.sType = VK_STRUCTURE_TYPE_PIPELINE_LAYOUT_CREATE_INFO, .setLayoutCount = SET_COUNT,
                                      .pSetLayouts = vk.set_layouts, .pushConstantRangeCount = 1, .pPushConstantRanges = &clear};
   vk_check(vkCreatePipelineLayout(vk.device, &info, 0, &vk.pipeline_layout), "creating a pipeline layout");
-  VkDescriptorPoolSize size = {VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, GX_CONSTANT_BLOCKS * FRAMES_IN_FLIGHT};
-  VkDescriptorPoolCreateInfo pool = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = FRAMES_IN_FLIGHT, .poolSizeCount = 1, .pPoolSizes = &size};
+  VkDescriptorPoolSize sizes[2] = {{VK_DESCRIPTOR_TYPE_UNIFORM_BUFFER_DYNAMIC, GX_CONSTANT_BLOCKS * FRAMES_IN_FLIGHT}, {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 1}};
+  VkDescriptorPoolCreateInfo pool = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_POOL_CREATE_INFO, .maxSets = FRAMES_IN_FLIGHT + 1, .poolSizeCount = 2, .pPoolSizes = sizes};
   vk_check(vkCreateDescriptorPool(vk.device, &pool, 0, &vk.descriptor_pool), "creating a descriptor pool");
 }
 
