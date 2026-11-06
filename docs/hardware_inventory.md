@@ -28,8 +28,8 @@ Statuses:
 | 5. Hardware blocks | 30 | 9 | 6 | 0 | 5 | 15 | 65 |
 | 6. Audio microcodes | 21 | 2 | 12 | 0 | 5 | 1 | 41 |
 | 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
-| 8. Controllers | 50 | 7 | 4 | 0 | 5 | 2 | 68 |
-| **All** | **373** | **104** | **37** | **4** | **40** | **53** | **611** |
+| 8. Controllers | 50 | 8 | 3 | 0 | 6 | 2 | 69 |
+| **All** | **373** | **105** | **36** | **4** | **41** | **53** | **612** |
 
 ## Biggest gaps
 
@@ -836,8 +836,9 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | `ctl.0x15_status_request` | 0x15 status request | done | `runtime/wii_remote.c:101` |  |
 | `ctl.0x16_write_memory` | 0x16 write memory | partial | `runtime/wii_remote.c:105` | Attachment space only. EEPROM, speaker and camera writes dropped. |
 | `ctl.0x17_read_memory` | 0x17 read memory | partial | `runtime/wii_remote.c:103`, `:53`, `:65` | Calibration and attachment. Mii block reads zero. |
-| `ctl.0x18_speaker_data` | 0x18 speaker data | missing | `runtime/wii_remote.c:112` | Acks every packet. A real one doesn't unless asked. |
-| `ctl.0x19_speaker_mute` | 0x19 speaker mute | missing | `runtime/wii_remote.c:112` | Bare ack. |
+| `ctl.0x18_speaker_data` | 0x18 speaker data | missing | `runtime/wii_remote.c` (`wii_remote_simulated_output`) | Not played. Not answered either, as a real remote doesn't, following Dolphin's EmuSubroutines.cpp. |
+| `ctl.0x19_speaker_mute` | 0x19 speaker mute | partial | `runtime/wii_remote.c` (`wii_remote_simulated_output`) | Answered only when the game asks, as Dolphin's EmuSubroutines.cpp does. Nothing to mute, as the speaker doesn't play. |
+| `ctl.unknown_output_report` | An output report a remote doesn't have | on demand | `runtime/wii_remote.c` (`wii_remote_simulated_output`) | Reported and not answered. Dolphin stops at one. |
 | `ctl.0x20_status` | 0x20 status | done | `runtime/wii_remote.c` (`report_status`) | Attachment, speaker, camera, lights and the low-battery flag; the battery from the player's controller, full by default. Sent unasked when an attachment goes in or out. |
 | `ctl.0x21_read_reply` | 0x21 read reply | done | `runtime/wii_remote.c:65` |  |
 | `ctl.0x22_ack` | 0x22 ack | done | `runtime/wii_remote.c:44` |  |
