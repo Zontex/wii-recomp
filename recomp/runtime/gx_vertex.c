@@ -1,8 +1,8 @@
 // Vertices: decodes each format the game declares into a buffer for the vertex
 // shader, which applies the matrices (gx_transform.c) and lights (gx_light.c).
-#include <string.h>
-
+#include <stddef.h>
 #include <stdlib.h>
+#include <string.h>
 
 #include "cpu.h"
 #include "debug.h"
@@ -238,29 +238,32 @@ static void keep_last_normals(const Format *f, const Vertex *last) {
   memcpy(gx_cached_normals[CACHED_BINORMAL], last->binormal, sizeof last->binormal);
 }
 
-int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
+// What every vertex starts as: no position, normal or coordinates, white, and the draw's
+// matrices. Copied whole for each, which costs less than setting each part.
+static void vertex_start(const Format *f, Vertex *start) {
+  (void)f;
+  uint32_t matrices = gx.cp[CP_MATRIX_INDEX], matrices_high = gx.cp[CP_MATRIX_INDEX + 0x10];
+  memset(start, 0, sizeof *start);
+  start->matrix[VERTEX_MATRIX_POSITION] = (uint8_t)(matrices & MATRIX_INDEX_MASK);
+  for (int i = 0; i < TEXTURES; i++) {
+    uint32_t index = i < 4 ? bits(matrices, 6 + i * 6, 6) : bits(matrices_high, (i - 4) * 6, 6);
+    start->matrix[VERTEX_MATRIX_COORDINATE + i] = (uint8_t)index;
+  }
+  for (int i = 0; i < 2; i++) {
+    for (int c = 0; c < 4; c++) start->color[i][c] = 1;
+  }
+}
+
+static int read_vertices_general(const uint8_t *data, int format, int count, Vertex *out) {
   const Format f = *format_for(format & 7);
   if (f.normal_components == ALL_NORMAL_VALUES && f.normal != KIND_NONE && (f.texture[VERTEX_NORMALS_UV] || f.texture[VERTEX_NORMALS_UV + 1] || f.texture[VERTEX_NORMALS_UV + 2])) {
     debug_unsupported("vtx.normal_nbt_9_values", "texture coordinates 5 to 7 beside binormal and tangent", (uint32_t)format);
   }
-  uint32_t matrices = gx.cp[CP_MATRIX_INDEX], matrices_high = gx.cp[CP_MATRIX_INDEX + 0x10];
-  uint8_t matrix_defaults[VERTEX_MATRICES];
-  matrix_defaults[VERTEX_MATRIX_POSITION] = (uint8_t)(matrices & MATRIX_INDEX_MASK);
-  for (int i = 0; i < TEXTURES; i++) {
-    uint32_t index = i < 4 ? bits(matrices, 6 + i * 6, 6) : bits(matrices_high, (i - 4) * 6, 6);
-    matrix_defaults[VERTEX_MATRIX_COORDINATE + i] = (uint8_t)index;
-  }
   // Color 1 without color 0 feeds the first channel, and the second reads as missing, as
   // Dolphin's VertexShaderGen.cpp has it.
   int color_slot[2] = {0, f.color[0] == KIND_NONE ? 0 : 1};
-  // What every vertex starts as: no position, normal or coordinates, white, and the
-  // draw's matrices. Copied whole for each, which costs less than setting each part.
   Vertex start;
-  memset(&start, 0, sizeof start);
-  memcpy(start.matrix, matrix_defaults, sizeof matrix_defaults);
-  for (int i = 0; i < 2; i++) {
-    for (int c = 0; c < 4; c++) start.color[i][c] = 1;
-  }
+  vertex_start(&f, &start);
   uint32_t position_bytes = (uint32_t)f.position_components * component_bytes(f.position_type);
   uint32_t texture_bytes[TEXTURES];
   for (int i = 0; i < TEXTURES; i++) texture_bytes[i] = (uint32_t)f.texture_components[i] * component_bytes(f.texture_type[i]);
@@ -301,6 +304,176 @@ int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
     if (!skipped) kept++;
   }
   return kept;
+}
+
+// The same, worked out once a format: each part the vertex has becomes a step, at a fixed
+// place in the vertex's bytes, and the encodings games use most get a step of their own.
+// Galaxy 2 sends 150,000 vertices a frame, nearly all four parts indexed by 16 bits, and
+// the general decoder spent about 130 cycles on each: checking each address against the
+// memory map, and reloading the format's fields that didn't fit in registers. Every step
+// writes what the general decoder would, from the same conversions, and anything less
+// common goes through those conversions as they are.
+enum {
+  STEP_FLOAT3, STEP_S16_3, STEP_S16_2, STEP_RGBA8,  // Indexed by 16 bits.
+  STEP_COMPONENTS, STEP_COLOR, STEP_NORMALS,      // Any kind and type, as the general decoder reads them.
+  MOST_STEPS = 12,
+};
+typedef struct {
+  uint8_t op, kind, array, type, components;
+  uint16_t at, out;  // The part's place in the stream's vertex, and in Vertex.
+  uint32_t direct;   // Its size when it's in the stream itself.
+  float scale;
+} Step;
+typedef struct {
+  int ready, steps_count, color_slot_of[2];
+  uint32_t bytes;
+  Step steps[MOST_STEPS];
+} Plan;
+static Plan plans[8];
+static unsigned plan_written[8];
+
+static void plan_step(Plan *plan, int op, int kind, int array, int type, int components, uint32_t at, size_t out, uint32_t direct, float scale) {
+  plan->steps[plan->steps_count++] = (Step){(uint8_t)op, (uint8_t)kind, (uint8_t)array, (uint8_t)type, (uint8_t)components, (uint16_t)at, (uint16_t)out, direct, scale};
+}
+
+static const Plan *plan_for(int format) {
+  const Format *f = format_for(format);
+  Plan *plan = &plans[format];
+  if (plan_written[format] == gx_cp_written) return plan;
+  plan_written[format] = gx_cp_written;
+  memset(plan, 0, sizeof *plan);
+  // Three separately indexed normals keep the general decoder; so do formats too long to plan.
+  plan->ready = f->normal_indexes == 1;
+  uint32_t at = (uint32_t)f->position_index;
+  for (int i = 0; i < TEXTURES; i++) at += (uint32_t)f->texture_index[i];
+  if (f->position != KIND_NONE) {
+    uint32_t direct = (uint32_t)f->position_components * component_bytes(f->position_type);
+    int op = f->position == KIND_INDEX16 && f->position_components == 3 && f->position_type == COMPONENT_FLOAT ? STEP_FLOAT3
+             : f->position == KIND_INDEX16 && f->position_components == 3 && f->position_type == COMPONENT_S16  ? STEP_S16_3
+                                                                                                            : STEP_COMPONENTS;
+    plan_step(plan, op, f->position, ARRAY_POSITION, f->position_type, f->position_components, at, offsetof(Vertex, position), direct, f->position_scale);
+    at += attribute_bytes(f->position, direct);
+  }
+  if (f->normal != KIND_NONE) {
+    uint32_t direct = (uint32_t)f->normal_components * component_bytes(f->normal_type);
+    int op = f->normal == KIND_INDEX16 && f->normal_components == 3 && f->normal_type == COMPONENT_S16 ? STEP_S16_3 : STEP_NORMALS;
+    plan_step(plan, op, f->normal, ARRAY_NORMAL, f->normal_type, f->normal_components, at, offsetof(Vertex, normal), direct, f->normal_scale);
+    at += attribute_bytes(f->normal, direct) * (uint32_t)f->normal_indexes;
+  }
+  int slot[2] = {0, f->color[0] == KIND_NONE ? 0 : 1};
+  for (int i = 0; i < 2; i++) {
+    if (f->color[i] == KIND_NONE) continue;
+    uint32_t direct = color_bytes(f->color_type[i]);
+    int op = f->color[i] == KIND_INDEX16 && f->color_type[i] == COLOR_RGBA8 ? STEP_RGBA8 : STEP_COLOR;
+    plan_step(plan, op, f->color[i], ARRAY_COLOR + i, f->color_type[i], 4, at, offsetof(Vertex, color) + (size_t)slot[i] * sizeof(float[4]), direct, 0);
+    at += attribute_bytes(f->color[i], direct);
+  }
+  for (int i = 0; i < TEXTURES; i++) {
+    if (f->texture[i] == KIND_NONE) continue;
+    if (plan->steps_count == MOST_STEPS) {
+      plan->ready = 0;
+      break;
+    }
+    uint32_t direct = (uint32_t)f->texture_components[i] * component_bytes(f->texture_type[i]);
+    int op = f->texture[i] == KIND_INDEX16 && f->texture_components[i] == 2 && f->texture_type[i] == COMPONENT_S16 ? STEP_S16_2 : STEP_COMPONENTS;
+    plan_step(plan, op, f->texture[i], ARRAY_TEXTURE + i, f->texture_type[i], f->texture_components[i], at, offsetof(Vertex, uv) + (size_t)i * sizeof(float[2]),
+              direct, f->texture_scale[i]);
+    at += attribute_bytes(f->texture[i], direct);
+  }
+  plan->bytes = format_bytes[format];
+  return plan;
+}
+
+// Where an array's elements start in this process, and how far past its start the
+// memory it's in goes: an index whose element starts beyond that has no memory, as host()
+// says. No index times stride reaches from one block of memory into another.
+typedef struct { const uint8_t *first; uint32_t room, stride; int unmapped; } Array;
+
+static Array array_at(uint32_t base, uint32_t stride) {
+  uint32_t physical = base & 0x3fffffffu, room = 0;
+  if (physical < MEM1_SIZE) room = MEM1_SIZE - physical;
+  else if (physical - MEM2_START < MEM2_SIZE) room = MEM2_START + MEM2_SIZE - physical;
+  else if (physical - LOCKED_CACHE_PHYSICAL < LOCKED_CACHE_SIZE) room = LOCKED_CACHE_PHYSICAL + LOCKED_CACHE_SIZE - physical;
+  // An array starting where there's no memory could still reach some: those go through host().
+  return (Array){GUEST_BASE + physical, room, stride, room == 0};
+}
+
+static inline uint32_t big16(const uint8_t *p) { return ((uint32_t)p[0] << 8) | p[1]; }
+static inline uint32_t big32_at(const uint8_t *p) { return ((uint32_t)p[0] << 24) | ((uint32_t)p[1] << 16) | ((uint32_t)p[2] << 8) | p[3]; }
+
+static inline const uint8_t *element(const Array *a, int array, uint32_t index) {
+  if (a->unmapped) return host((array_base[array] + index * array_stride[array]) | 0x80000000u);
+  uint32_t offset = index * a->stride;
+  return offset < a->room ? a->first + offset : 0;
+}
+
+static int read_vertices_planned(const Plan *plan, const uint8_t *data, int count, Vertex *out, const Vertex *start, const Format *f) {
+  Array arrays[MOST_STEPS];
+  for (int k = 0; k < plan->steps_count; k++) arrays[k] = array_at(array_base[plan->steps[k].array], array_stride[plan->steps[k].array]);
+  int coordinate_matrices[TEXTURES], coordinate_matrix_count = 0;
+  for (int i = 0; i < TEXTURES; i++) {
+    if (f->texture_index[i]) coordinate_matrices[coordinate_matrix_count++] = i;
+  }
+  int kept = 0;
+  for (int n = 0; n < count; n++) {
+    const uint8_t *vertex = data + (size_t)n * plan->bytes;
+    Vertex *v = &out[kept];
+    *v = *start;
+    uint32_t matrix_at = 0;
+    if (f->position_index) v->matrix[VERTEX_MATRIX_POSITION] = vertex[matrix_at++] & MATRIX_INDEX_MASK;
+    for (int k = 0; k < coordinate_matrix_count; k++) v->matrix[VERTEX_MATRIX_COORDINATE + coordinate_matrices[k]] = vertex[matrix_at++] & MATRIX_INDEX_MASK;
+    int skipped = 0;
+    for (int k = 0; k < plan->steps_count; k++) {
+      const Step *step = &plan->steps[k];
+      const uint8_t *at = vertex + step->at;
+      float *to = (float *)((uint8_t *)v + step->out);
+      if (step->array == ARRAY_POSITION) skipped = skips_vertex(at, step->kind);
+      const uint8_t *source;
+      if (step->kind == KIND_DIRECT) source = at;
+      else source = element(&arrays[k], step->array, step->kind == KIND_INDEX16 ? big16(at) : at[0]);
+      if (!source) continue;
+      switch (step->op) {
+        case STEP_FLOAT3:
+          to[0] = as_float(big32_at(source)), to[1] = as_float(big32_at(source + 4)), to[2] = as_float(big32_at(source + 8));
+          break;
+        case STEP_S16_3:
+          to[0] = (float)(int16_t)big16(source) * step->scale, to[1] = (float)(int16_t)big16(source + 2) * step->scale;
+          to[2] = (float)(int16_t)big16(source + 4) * step->scale;
+          break;
+        case STEP_S16_2:
+          to[0] = (float)(int16_t)big16(source) * step->scale, to[1] = (float)(int16_t)big16(source + 2) * step->scale;
+          break;
+        case STEP_RGBA8:
+          for (int c = 0; c < 4; c++) to[c] = (float)source[c] / 255;
+          break;
+        case STEP_COMPONENTS: read_components(source, step->type, step->scale, step->components, to); break;
+        case STEP_COLOR: read_color(source, step->type, to); break;
+        default: {  // Normals, with the tangent and binormal of nine values after it.
+          uint32_t size = component_bytes(f->normal_type);
+          float *parts[3] = {v->normal, v->tangent, v->binormal};
+          for (uint32_t part = 0; part < (uint32_t)f->normal_components / 3; part++) read_normal(source + part * 3 * size, f, parts[part]);
+        }
+      }
+    }
+    if (n == count - 1) keep_last_normals(f, v);
+    if (!skipped) kept++;
+  }
+  return kept;
+}
+
+int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
+  format &= 7;
+  const Plan *plan = plan_for(format);
+  // A display list's draw kept for reuse records which indexes it read, which only the general decoder does.
+  if (!plan->ready || spans.on) return read_vertices_general(data, format, count, out);
+  const Format *f = format_for(format);
+  if (f->normal_components == ALL_NORMAL_VALUES && f->normal != KIND_NONE && (f->texture[VERTEX_NORMALS_UV] || f->texture[VERTEX_NORMALS_UV + 1] || f->texture[VERTEX_NORMALS_UV + 2])) {
+    debug_unsupported("vtx.normal_nbt_9_values", "texture coordinates 5 to 7 beside binormal and tangent", (uint32_t)format);
+  }
+  for (int a = 0; a < ARRAYS; a++) array_base[a] = gx.cp[CP_ARRAY_BASE + a], array_stride[a] = gx.cp[CP_ARRAY_STRIDE + a] & 0xff;
+  Vertex start;
+  vertex_start(f, &start);
+  return read_vertices_planned(plan, data, count, out, &start, f);
 }
 
 // Display lists: models are drawn by calling the same lists frame after frame, and their
