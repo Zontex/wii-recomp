@@ -318,21 +318,38 @@ void vk_create_frames(void) {
   }
 }
 
+// How pictures meet the display. Waiting for the display's refresh (FIFO) shows each one
+// whole, with no tearing; MAILBOX shows the newest at each refresh; IMMEDIATE shows each
+// at once and tears. WII_RECOMP_PRESENT=fifo|mailbox|immediate chooses; otherwise the
+// first of FIFO, MAILBOX, IMMEDIATE that the display offers. FIFO is always offered.
 static VkPresentModeKHR choose_present_mode(void) {
-  // In order of preference. The first matches OpenGL with its swap interval at 0.
-  static const VkPresentModeKHR wanted[] = {VK_PRESENT_MODE_IMMEDIATE_KHR, VK_PRESENT_MODE_MAILBOX_KHR};
+  static const struct { const char *name; VkPresentModeKHR mode; } named[] = {
+    {"fifo", VK_PRESENT_MODE_FIFO_KHR}, {"mailbox", VK_PRESENT_MODE_MAILBOX_KHR}, {"immediate", VK_PRESENT_MODE_IMMEDIATE_KHR}};
   uint32_t count = 0;
   vkGetPhysicalDeviceSurfacePresentModesKHR(vk.physical, vk.surface, &count, 0);
   VkPresentModeKHR *modes = calloc(count, sizeof *modes);
   vkGetPhysicalDeviceSurfacePresentModesKHR(vk.physical, vk.surface, &count, modes);
-  VkPresentModeKHR chosen = VK_PRESENT_MODE_FIFO_KHR;
-  for (int i = (int)(sizeof wanted / sizeof wanted[0]) - 1; i >= 0; i--) {
+  const char *asked = getenv("WII_RECOMP_PRESENT");
+  int chosen = -1;
+  for (size_t n = 0; n < sizeof named / sizeof named[0] && chosen < 0; n++) {
+    if (asked && strcmp(asked, named[n].name)) continue;
     for (uint32_t m = 0; m < count; m++) {
-      if (modes[m] == wanted[i]) chosen = wanted[i];
+      if (modes[m] == named[n].mode) chosen = (int)n;
     }
   }
+  if (chosen < 0) {
+    if (asked) fprintf(stderr, "vulkan: the display doesn't offer %s, so pictures wait for its refresh\n", asked);
+    chosen = 0;
+  }
+  fprintf(stderr, "vulkan: pictures shown with %s (the display offers", named[chosen].name);
+  for (uint32_t m = 0; m < count; m++) {
+    for (size_t n = 0; n < sizeof named / sizeof named[0]; n++) {
+      if (modes[m] == named[n].mode) fprintf(stderr, " %s", named[n].name);
+    }
+  }
+  fprintf(stderr, ")\n");
   free(modes);
-  return chosen;
+  return named[chosen].mode;
 }
 
 // Plain 8-bit output, as the picture's values are already what the screen should show.
