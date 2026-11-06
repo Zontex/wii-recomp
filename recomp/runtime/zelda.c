@@ -853,6 +853,7 @@ static void process_gba_crypto(uint32_t address) {
 // mails during a frame, which let it render more voices.
 enum { MAIL_WAITING, MAIL_RENDERING, MAIL_WRITING_CMD, MAIL_HALTED };
 enum { ACK_STANDARD, ACK_DONE_RENDERING };
+enum { FRAME_END_CYCLES = 5000 * 12 };  // 5,000 ticks of the 60.75 MHz time base, in 729 MHz cycles.
 
 static struct {
   uint32_t flags;
@@ -896,8 +897,16 @@ static void send_command_ack(int ack_type, uint16_t sync_value) {
     dsp_push_mail(0x80000000u | sync_value, 0, 0);
     return;
   }
-  dsp_push_mail(ack_type == ACK_STANDARD ? DSP_MAIL_SYNC : DSP_MAIL_FRAME_END, 1, 0);
-  if (ack_type == ACK_STANDARD) dsp_push_mail(0xf3550000u | sync_value, 0, 0);
+  if (ack_type == ACK_DONE_RENDERING) {
+    // The program finishes the frames' mix before it says so. Under the interpreter,
+    // Super Mario Galaxy 2's arrives 4,568 to 5,432 ticks after the last frame's
+    // acknowledgment. Sent with it, its interrupt lands as the game reads that one, and
+    // the game sends its next render before "continue", which halts the program.
+    dsp_push_mail_later(DSP_MAIL_FRAME_END, 1, FRAME_END_CYCLES);
+    return;
+  }
+  dsp_push_mail(DSP_MAIL_SYNC, 1, 0);
+  dsp_push_mail(0xf3550000u | sync_value, 0, 0);
 }
 
 // Renders voices up to the last the game has unlocked, and the frames asked for.
@@ -917,7 +926,10 @@ static void render_frames(void) {
       if (flags & (1 << bit)) add_voice((uint16_t)u.rendering_curr_voice);
       u.rendering_curr_voice++;
     }
-    if (!(u.flags & LIGHT_PROTOCOL)) send_command_ack(ACK_STANDARD, (uint16_t)(0xff00 | u.rendering_curr_frame));
+    // Each frame is acknowledged by its count from 1, as Super Mario Galaxy 2's program does
+    // under the interpreter (f355ff01 to f355ff07 for seven). Dolphin counts from 0, and
+    // the game, a moment late, can then send its next render before "continue", which halts.
+    if (!(u.flags & LIGHT_PROTOCOL)) send_command_ack(ACK_STANDARD, (uint16_t)(0xff00 | (u.rendering_curr_frame + 1)));
     finalize_frame();
     u.rendering_curr_voice = 0;
     u.sync_max_voice_id = 0;
@@ -1087,7 +1099,10 @@ static void handle_mail_default(uint32_t mail) {
         break;
       }
     } else if (!(mail & 0xffff)) {
-      if (rendering_in_progress()) {
+      // A game that's behind sends its next render, and the sync mails for its first
+      // frame, before "continue": Super Mario Galaxy 2 does so under the interpreter,
+      // and the program keeps them for that render. Dolphin halts here instead.
+      if (rendering_in_progress() || (u.pending_commands_count && !u.cmd_can_execute)) {
         u.mail_state = MAIL_RENDERING;
       } else {
         gap_hit(GAP_MAIL, 0x05);  // A sync mail with no frame being rendered: halts.
@@ -1105,13 +1120,13 @@ static void handle_mail_default(uint32_t mail) {
       u.sync_voice_skip_flags[base] = (uint16_t)(mail >> 16);
       u.sync_voice_skip_flags[base + 1] = (uint16_t)(mail & 0xffff);
       if (u.sync_flags_second_half) u.sync_max_voice_id = 0xffff;
-      render_audio();
+      if (rendering_in_progress()) render_audio();  // Otherwise kept for the render to come.
       if (u.sync_flags_second_half) u.mail_state = MAIL_WAITING;
       u.sync_flags_second_half = !u.sync_flags_second_half;
     } else {
       u.sync_max_voice_id = (((mail >> 16) & 0xf) + 1) << 4;
       u.sync_voice_skip_flags[(mail >> 16) & 0xff] = (uint16_t)(mail & 0xffff);
-      render_audio();
+      if (rendering_in_progress()) render_audio();  // Otherwise kept for the render to come.
       u.mail_state = MAIL_WAITING;
     }
     break;

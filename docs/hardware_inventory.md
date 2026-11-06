@@ -686,7 +686,7 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | `audio.zelda_sample_source` | Zelda: sample sources 2, 6 and any other unknown one | missing | `runtime/zelda.c` | The voice is silent. |
 | `audio.zelda_unknown_buffer` | Zelda: a mix sent to a buffer number we don't know | on demand | `runtime/zelda.c` | Super Mario Galaxy 2 sends four. |
 | `audio.zelda_unknown_command` | Zelda: a command Dolphin doesn't know, or one that halts | on demand | `runtime/zelda.c` |  |
-| `audio.zelda_unexpected_mail` | Zelda: mail the program wouldn't expect, by kind | on demand | `runtime/zelda.c` |  |
+| `audio.zelda_unexpected_mail` | Zelda: mail the program wouldn't expect, by kind | on demand | `runtime/zelda.c` | A sync mail while a render waits for "continue" is kept for that render, as Super Mario Galaxy 2's program does under the interpreter when the game is behind; Dolphin halts there. With nothing waiting it still halts, as kind 5. |
 | `audio.zelda_memory_range` | Zelda: main memory out of range | on demand | `runtime/zelda.c` | Nothing is read or written. |
 | `audio.asnd_aesnd_homebrew` | ASnd, AESnd (homebrew) | not needed |  | Commercial games don't use them. |
 | `audio.card_gba` | CARD, GBA | partial | `runtime/dsp.c` (`card_program`) | GameCube link helpers. CARD unlocks a card and hands back to the ROM, as Dolphin's CARD.cpp. GBA is reported. |
