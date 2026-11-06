@@ -209,7 +209,13 @@ def copy_console(source, target, nand=None):
         if name == "nand":
             continue
         path = os.path.join(source, name)
-        if os.path.isdir(path):
+        if name in ("drive", "shelf"):
+            # Folders of their own, with each disc image linked, so changing discs in the copy
+            # moves only the links.
+            os.makedirs(os.path.join(target, name))
+            for image in os.listdir(path):
+                os.symlink(os.path.realpath(os.path.join(path, image)), os.path.join(target, name, image))
+        elif os.path.isdir(path):
             os.symlink(os.path.abspath(path), os.path.join(target, name))
         else:
             shutil.copy2(path, os.path.join(target, name))

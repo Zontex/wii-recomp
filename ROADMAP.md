@@ -118,10 +118,10 @@ Done when every graphics row is done or marked not needed, and recordings from e
 ### 6. Remaining hardware (planned)
 
 - [x] GameCube controller ports, answering "no controller"
-- [ ] Video modes including PAL, 480p and interlaced
+- [x] Video modes including PAL, 480p and interlaced: timed from the program's own registers (`runtime/vi.c`), 50 Hz for PAL, with a component cable offered
 - [ ] Memory card, SRAM and clock
 - [ ] Region and language from SYSCONF
-- [ ] Widescreen
+- [x] Widescreen: the window takes the console's 4:3 or 16:9 setting
 
 ### 7. Native IOS (in progress)
 
@@ -134,7 +134,7 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 0 to 2.
 - [x] Each IOS version's own memory at the top of MEM2, so a game's heap gets the full arena it was sized for
 - [x] Your own Wii's BootMii NAND backup and keys decrypted into the storage the console reads (`recomp/tools/import_nand.py`, `wii/`)
 - [ ] Miis and saves from that backup used by every title, so a game picks up where it was left on the Wii
-- [ ] Storage that behaves like a NAND: open modes, owners and permissions, real usage, and writes a power cut can't corrupt
+- [ ] Storage that behaves like a NAND: open modes, owners and permissions, real usage, and writes a power cut can't corrupt. Done: open modes, real usage and free space, names and folders IOS refuses, one copy of a file shared between handles, and files written whole. Left: owners and permissions checked against the caller
 - [ ] Every game's direct start through the same path
 - [ ] Fewer replacements of Nintendo's own library code, as the hardware and IOS models take their place
 
@@ -161,10 +161,11 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - [x] 60 fps on every one of 16 screens on an Intel Mac
 - [x] A recompiled disc image in the drive shows its banner, and Start hands over to the game, running natively
 - [x] Region free, without changing the disc
-- [ ] Back to the menu from a game: built, not yet tried end to end
-- [ ] Launching channels
-- [ ] The real clock
-- [ ] Menu, disc channel, a game and back, 20 times in a row with real controllers
+- [x] Back to the menu from a game: Home, Wii Menu, Yes, tested from Mario Kart Wii with a scripted remote. Interrupts waiting when a game turns them back on are taken at once, as the processor does, so its shutdown finishes promptly
+- [x] Launching channels: each channel built with `add_game.py --nand` starts from the grid, natively, and goes back with Home. The Mii Channel, the Photo Channel and the Forecast and News Channels, which say they can't connect. The Wii Shop Channel stops as it starts
+- [x] The real clock: the computer's time, whatever the menu's date setting stored
+- [x] Power, reset and standby, from the control pipe or by closing the window, and discs changed as the console runs
+- [ ] Menu, disc channel, a game and back, 20 times in a row with real controllers. With the scripted remote, see `recomp/tools/autoplay/games/00000001-00000002/roundtrip.py`
 
 ### 10. Disc image in, game out (in progress)
 

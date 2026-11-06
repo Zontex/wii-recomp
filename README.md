@@ -151,7 +151,19 @@ recomp/build/wii-recomp --console console
 
 A **`.wrd` disc image** is a game prepared for the console: the disc's files, unencrypted, plus the game's translated code for each computer it was built for (`darwin-x86_64` on an Intel Mac, `linux-aarch64` on a Pi). The console reads it like a disc in its drive. It holds the game, so it's yours alone: don't share it.
 
-The menu shows the game's banner in the Disc Channel, and Start runs it. The simulated Wii Remote has a Nunchuk plugged in. A game that sees a Classic Controller may hide its pointer, so plug one in (F2) only for games played with it. The console stays a single program: when you start a game, it restarts itself with the game's code, as a Wii does.
+The menu shows the game's banner in the Disc Channel, and Start runs it. Home, then Wii Menu, goes back. The simulated Wii Remote has a Nunchuk plugged in. A game that sees a Classic Controller may hide its pointer, so plug one in (F2) only for games played with it. The console stays a single program: when you start a game, it restarts itself with the game's code, as a Wii does.
+
+**Channels** installed in your storage are built the same way, by title ID, and the menu starts them from its grid:
+
+```sh
+python3 recomp/tools/add_game.py 00010002-48414341 --nand wii/nand --console console   # the Mii Channel
+```
+
+A channel the console has no native code for is refused, and the menu says it can't start it. Channels that need the internet, such as the Forecast and News Channels, show their own message that they can't connect.
+
+**The console's buttons and drive.** Closing the window presses the power button: the menu or game turns the console off its own way, saving what it needs to. Through the control pipe (`WII_RECOMP_CONTROL`), `power` and `reset` press the buttons, `eject` empties the drive, and `insert <name>` puts in a disc image from the console's `shelf/`. `--title <high>-<low>` starts an installed title directly, as `--boot-disc` starts the disc.
+
+The window takes the shape of the console's TV setting, 4:3 or 16:9, and the console runs at the rate the menu or game sets: a European menu runs at 50 Hz unless EURGB60 is chosen in Wii Settings.
 
 ### Sound
 
@@ -165,7 +177,8 @@ The console recognises the game's audio program by a checksum of its code and ru
 ### What doesn't work yet
 
 - **A plain ISO in the drive.** Each game goes through `add_game.py` first.
-- **Going back to the Wii Menu.** Home, then Wii Menu, freezes. Close the window instead.
+- **The Wii Shop Channel** stops as it starts. The other channels in a Wii's storage run.
+- **A framebuffer a program draws into itself**, rather than with the graphics chip, isn't shown yet; the console reports it.
 - **The simulated board in a game's own setup.** With the game's own Wii Remote code, as `add_game.py` builds it, Wii Fit Plus's first-time setup gets to the Balance Board and then drops the simulated board, asking for its power button again. A build without `--virtual-bluetooth` gets through.
 - **Real Wii Remotes and the Balance Board** are built but haven't been tried with real hardware. Until then the keyboard and mouse drive a simulated remote and board. See [Real Wii Remotes](recomp/README.md#real-wii-remotes-and-the-balance-board).
 - **Playing from the Wii Menu** has been tested on an Intel Mac only. On a Raspberry Pi 5, games have been played directly.
