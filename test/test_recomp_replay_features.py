@@ -226,7 +226,7 @@ class PictureCopies(Scene):
         commands = self.scene(texture=use_texture(self.TARGET, 32, 32, self.TEXTURE_RGB565))
         picture = self.picture(textured_state(), commands)
         self.assert_pixel(picture, 250, 250, (205, 28, 57))  # The copy's RGB565, 0xc8e7, decoded.
-        self.assertIn("1 filled in when touched first", self.log)
+        self.assertIn("1 waited for, 1 places read back as made", self.log)
 
     def test_a_format_of_another_size_reads_memory(self):
         commands = self.scene(texture=use_texture(self.TARGET, 64, 64, self.TEXTURE_I8))
@@ -271,7 +271,7 @@ class PictureCopies(Scene):
         texture = use_texture(self.TARGET, 32, 32, self.TEXTURE_RGB565)
         commands = self.scene(texture=texture) + textured_quad(310, 200, 400, 300)
         self.picture(textured_state(), commands)
-        self.assertIn("1 held, 0 read back early, 1 filled in when touched first", self.log)
+        self.assertEqual(self.log.count("waited for the card"), 1)
 
 
 class Comparisons(Scene):

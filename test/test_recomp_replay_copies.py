@@ -110,7 +110,20 @@ class CopiesInMemory(Played):
         again = flat_quad(GREEN, 0, 0, 64, 64) + copy_picture(TARGET, COPY_RGB565)
         data = self.memory([first, again, b"", b""], TARGET, 2)
         self.assertEqual(data, bytes([0x15, 0xa5]))  # Green: 2, 45 and 5.
-        self.assertIn("1 read back early", self.log)
+        # Only the first, read as a texture in the frame it was made, waited for the card.
+        self.assertEqual(self.log.count("waited for the card"), 1)
+
+    def test_a_copy_partly_covered_keeps_its_bytes_apart(self):
+        # A big copy, then a small one at the same place, as a blur chain makes: nothing is
+        # read back while they're made, and memory has the small one's bytes over the big one's.
+        big = flat_quad(RED, 0, 0, 64, 64) + copy_picture(TARGET, COPY_RGB565)
+        small = flat_quad(GREEN, 0, 0, 64, 64) + copy_picture(TARGET, COPY_RGB565, 32, 32, stride=16 * 32)
+        data = self.memory([big + small], TARGET, 64 * 64 * 2)
+        self.assertEqual(data[:2], bytes([0x15, 0xa5]))  # Green, from the small copy's first tile.
+        self.assertEqual(data[256:258], bytes([0xc8, 0xe7]))  # The big one's, in the gap between the small one's rows.
+        self.assertEqual(data[512:514], bytes([0x15, 0xa5]))  # The small one's second row of tiles.
+        self.assertEqual(data[8 * 512:8 * 512 + 2], bytes([0xc8, 0xe7]))  # The big one's, past the small one's rows.
+        self.assertIn("1 kept apart from a later one, 0 landed early, 0 waited for", self.log)
 
 
 @unittest.skipUnless(shutil.which("clang") and shutil.which("make"), "needs clang and make")
