@@ -25,11 +25,11 @@ Statuses:
 | 2. Graphics commands and registers | 65 | 22 | 4 | 0 | 9 | 10 | 110 |
 | 3. TEV and pixel features | 51 | 17 | 3 | 0 | 4 | 1 | 76 |
 | 4. Vertex and texture | 50 | 10 | 0 | 3 | 1 | 2 | 66 |
-| 5. Hardware blocks | 30 | 9 | 6 | 0 | 5 | 15 | 65 |
+| 5. Hardware blocks | 31 | 8 | 6 | 0 | 5 | 15 | 65 |
 | 6. Audio microcodes | 21 | 2 | 12 | 0 | 5 | 1 | 41 |
-| 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
+| 7. IOS | 36 | 13 | 3 | 0 | 10 | 6 | 68 |
 | 8. Controllers | 50 | 8 | 3 | 0 | 6 | 2 | 69 |
-| **All** | **373** | **105** | **36** | **4** | **41** | **53** | **612** |
+| **All** | **377** | **101** | **36** | **4** | **44** | **53** | **615** |
 
 ## Biggest gaps
 
@@ -37,7 +37,7 @@ Ordered by how likely a real game is to hit them.
 
 1. **`.rel` modules aren't translated ahead of time** (`cpu.code_loaded_at_run_time_rel_oslink`). Only `.rso` modules are. A `.rel` runs under the interpreter until the next build translates what it reached. Many commercial games keep most of their code in `.rel` modules.
 2. **Disc images are read only in this project's own format** (`hw.disc_image_files_iso_wbfs_rvz`). ISO, WBFS and RVZ need extracting first.
-3. **ES and DI answer errors to much of what a Wii does** (`ios.identify_ticket_tmd_verify`, `ios.getlength_seek_readdvd`, `ios.openpartition_with_tmd_0x93_0x94`, `ios.encrypt_decrypt`, `ios.launch_return_to_menu_start_title`). Launching works only between the Wii Menu and a disc.
+3. **ES and DI answer errors to some of what a Wii does** (`ios.identify_ticket_tmd_verify`, `ios.getlength_seek_readdvd`, `ios.openpartition_with_tmd_0x93_0x94`, `ios.encrypt_decrypt`). Launching works between the Wii Menu, a disc and any channel built for the console; a title without native code is refused (`ios.launch_untranslated_title`).
 4. **The Zelda family's audio program hasn't been checked against the real one** (`audio.zelda_*`). AX in every version has a C version, equal to the real program on Mario Kart Wii; any program without one runs on the interpreter. The Zelda family's C version, which Super Mario Galaxy 2 uses, follows Dolphin's but has no recording to be compared with yet, and Galaxy 2 reports four mix buffers it doesn't know.
 5. **`setjmp`, C++ exceptions and fibers are at risk** (`cpu.bclr`). `blr` is a host `return`, so code that switches stacks leaves the host stack out of step.
 6. **Self-modifying code** (`cpu.self_modifying_code_icbi`). `icbi` is a no-op, so translated code is never replaced.
@@ -51,7 +51,7 @@ Ordered by how likely a real game is to hit them.
 
 ## Regressions
 
-Since 7691d88 ("stop faking success"), STM shutdown, reset and idle answer an error (`ios.dev_stm_immediate`). The other two found then, DI's cover status and the stop past 64 queued replies, are fixed.
+None open. The three found at 7691d88 ("stop faking success"), STM shutdown, reset and idle, DI's cover status and the stop past 64 queued replies, are fixed.
 
 ## 1. CPU
 
@@ -767,8 +767,8 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
-| `ios.dev_stm_immediate` | `/dev/stm/immediate` | partial | `runtime/stm.c:8-15` | Dimming and the disc light only. **Regression:** shutdown, reset and idle answer an error since 7691d88. |
-| `ios.dev_stm_eventhook` | `/dev/stm/eventhook` | partial | `runtime/devices.c:33` | Held open forever. Power and reset never sent. |
+| `ios.dev_stm_immediate` | `/dev/stm/immediate` | done | `runtime/stm.c` | Dimming and the disc light are answered. Shutdown and idle (standby) turn the console off, writing open files first; hot reset starts it again from the Wii Menu, or the same title when it was started alone. Codes from Dolphin's STM.h. |
+| `ios.dev_stm_eventhook` | `/dev/stm/eventhook` | done | `runtime/stm.c` | Held until a button: the control pipe's `reset` and `power`, or closing the window, which presses power and cuts it after 5 seconds if the program doesn't turn off. Closing the handle drops the held request, as Dolphin does. |
 | `ios.dev_aes` | `/dev/aes` | done | `runtime/crypto.c:145` | Copy, and AES-128-CBC both ways with the game's key; the IV carries on, so a message can come in pieces. Checked against the FIPS-197 and SP 800-38A vectors. |
 | `ios.dev_sha` | `/dev/sha` | partial | `runtime/crypto.c:227` | SHA-1 start, add and finish. The HMAC requests answer an error and are reported. |
 | `ios.dev_sdio_slot0` | `/dev/sdio/slot0` | done | `runtime/sdio.c` | No card: status says empty, and insert waits are held. |
