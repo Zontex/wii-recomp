@@ -9,7 +9,7 @@ GRID_DISC = (-0.64, -0.40)  # The disc channel's square, top left of the first p
 # The grid always shows the date along the bottom, as "Fri 11/6" or "Fri 06/11".
 DATE = re.compile(r"\b(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\b\.? ?\d{1,2}/\d{1,2}")
 # Once its start-up is over, the grid shows the time over the date, and only then takes input.
-TIME = re.compile(r"\b\d{1,2}[: ]\d{2}\b")
+TIME = re.compile(r"\b\d{1,2}[: ]?\d{2}\b")  # Text recognition sometimes drops the colon.
 # Words a game's Home Menu shows, in English.
 HOME_MENU = "Wii Menu"
 
@@ -23,7 +23,32 @@ def square(index):
     return COLUMNS[index % 4], ROWS[index // 4]
 
 
+# Where the pointer waits while the screen is read: the bar under the grid, between the
+# clock and the Wii button, where no channel lies under the hand's tip.
+PARKED = (-0.35, 0.95)
+
+
 class Menu(Player):
+    def look(self):
+        self.game.point(*PARKED, then=0.4)
+        screen = self.game.read_screen("s")
+        text = " | ".join(item["text"] for item in screen)
+        self.same = self.same + 1 if text == self.last_text else 0
+        self.last_text = text
+        return text, screen
+
+    def react(self, text, screen):
+        if not screen:  # Between screens: wait rather than press, so nothing opens by chance.
+            return
+        if self.stuck(screen):
+            return
+        words = {item["text"]: item for item in screen}
+        button = next((words[b] for b in self.buttons if b in words), None)
+        if button:
+            self.click(button["x"], button["y"])
+        else:
+            self.click(*PARKED)  # A held press, which the menu takes, where nothing lies.
+
     def click(self, x, y, then=1.0):
         """A held press, which the menu sees reliably where a tap can be missed. The
         pointer moves onto the spot and rests, as the menu only picks what it hovers."""
