@@ -758,7 +758,7 @@ def title_description(program_bytes, tmd, values, function_count, module_count, 
             "extern const TitleFunction title_apploader[];\n"
             "__attribute__((visibility(\"default\"))) const Title wii_recomp_title = {\n"
             f"  TITLE_INTERFACE, 0x{fnv1a64(program_bytes[:program_length(program_bytes)]):016x}ull, 0x{high:08x}u, 0x{low:08x}u, {ios},\n"
-            f"  0x{values['ax_frame_done']:x}u, 0x{values.get('calibration_flag', 0):x}u,\n"
+            f"  0x{values.get('calibration_flag', 0):x}u,\n"
             f"  {int('--virtual-bluetooth' in sys.argv)}, {int('--fifo-breakpoints' in sys.argv)},\n"
             f"  title_functions, {function_count}, title_modules, {module_count},\n"
             f"  0x{APPLOADER_AT if apploader[0] else 0:x}u, 0x{apploader[0]:x}u, 0x{apploader[1]:016x}ull, title_apploader, {apploader[2]},\n"

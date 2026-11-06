@@ -21,6 +21,19 @@ def inventory_rows(path=INVENTORY):
     return {ident: (item.strip(), status.strip()) for ident, item, status in ROW.findall(Path(path).read_text())}
 
 
+def inventory_details(path=INVENTORY):
+    """Every row's ID, mapped to its item, status, line number and section heading."""
+    found, section = {}, ""
+    for number, line in enumerate(Path(path).read_text().splitlines(), 1):
+        if line.startswith("#"):
+            section = line.lstrip("#").strip()
+        match = ROW.match(line)
+        if match:
+            ident, item, status = match.groups()
+            found[ident] = {"item": item.strip(), "status": status.strip(), "line": number, "section": section}
+    return found
+
+
 def read_gaps(path):
     found = []
     for line in Path(path).read_text().splitlines():
@@ -31,30 +44,47 @@ def read_gaps(path):
     return found
 
 
+def collect(runs):
+    """Merges runs, each (name, what read_gaps found), into id -> {"runs", "count", "details"}."""
+    hits = {}
+    for name, gaps in runs:
+        for ident, detail, count in gaps:
+            entry = hits.setdefault(ident, {"runs": set(), "count": 0, "details": set()})
+            entry["runs"].add(name)
+            entry["count"] += count
+            entry["details"].add(detail)
+    return hits
+
+
+def rank_key(ident, hits, rows):
+    """Most runs first, then the row furthest from done, then the most hits."""
+    status = rows.get(ident, ("", "missing"))[1]
+    return (-len(hits[ident]["runs"]), STATUS_ORDER.index(status) if status in STATUS_ORDER else 0, -hits[ident]["count"])
+
+
+def split(hits, rows):
+    """The IDs still to close, those whose row says done or not needed, and those with no row."""
+    listed = [i for i in hits if i in rows and rows[i][1] not in ("done", "not needed")]
+    done = [i for i in hits if i in rows and rows[i][1] in ("done", "not needed")]
+    return listed, done, [i for i in hits if i not in rows]
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("runs", nargs="+", help="gaps.txt files, optionally as name=path")
     parser.add_argument("--inventory", default=INVENTORY)
     arguments = parser.parse_args()
     rows = inventory_rows(arguments.inventory)
-
-    hits = {}  # id -> {"runs": set, "count": int, "details": set}
+    runs = []
     for run in arguments.runs:
         name, _, path = run.rpartition("=")
-        name = name or Path(path).resolve().parent.name
-        for ident, detail, count in read_gaps(path):
-            entry = hits.setdefault(ident, {"runs": set(), "count": 0, "details": set()})
-            entry["runs"].add(name)
-            entry["count"] += count
-            entry["details"].add(detail)
+        runs.append((name or Path(path).resolve().parent.name, read_gaps(path)))
+    hits = collect(runs)
 
     def rank(ident):
-        status = rows.get(ident, ("", "missing"))[1]
-        return (-len(hits[ident]["runs"]), STATUS_ORDER.index(status) if status in STATUS_ORDER else 0, -hits[ident]["count"])
+        return rank_key(ident, hits, rows)
 
-    listed = [i for i in hits if i in rows and rows[i][1] not in ("done", "not needed")]
-    done = [i for i in hits if i in rows and rows[i][1] in ("done", "not needed")]
-    unknown = [i for i in hits if i not in rows]
+    listed, done, unknown = split(hits, rows)
 
     def table(title, idents):
         if not idents:

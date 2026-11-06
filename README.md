@@ -150,6 +150,15 @@ A **`.wrd` disc image** is a game prepared for the console: the disc's files, un
 
 The menu shows the game's banner in the Disc Channel, and Start runs it. The simulated Wii Remote has a Classic Controller plugged in, and a game that sees one may hide its pointer. Wii Fit Plus is one, so start the console with `WII_RECOMP_ATTACHMENT=none` for it. The console stays a single program: when you start a game, it restarts itself with the game's code, as a Wii does.
 
+### Sound
+
+The console recognises the game's audio program by a checksum of its code and runs a C version of it: AX, which most games use, or the Zelda family's, which Nintendo's own studios used, as in Super Mario Galaxy 2. Any other program runs on an interpreter of the audio processor, more slowly, on Dolphin's free boot ROM. Either way the program writes its sound to the game's memory and the audio DMA plays it, as on a Wii. A few settings help when checking it:
+
+- `WII_RECOMP_DSP=lle` runs every audio program on the interpreter, from the boot ROM, even one with a C version. This is the real program, and what the C versions are checked against.
+- `WII_RECOMP_AUDIO_WAV=<file>` keeps everything the speakers get as a WAV file, silence included, like Dolphin's `dspdump.wav`.
+- `WII_RECOMP_MUTE=1` plays nothing; the game's sound still runs with the same timing.
+- **Sound recordings.** With `WII_RECOMP_DSP=lle`, send `record-sound <frames> <file>` through the control pipe (`WII_RECOMP_CONTROL`), or start with `WII_RECOMP_SOUND_RECORD=<frame>:<frames>:<file>`, where frames are sixtieths of a second and frame 0 records from power-on. `python3 recomp/tools/sound_bench.py <folder>` then plays every `.wsr` in a folder through the interpreter and through the C version, with no game running, and prints where they first differ and how fast each is. Recordings hold the game's own data: keep them outside the repository.
+
 ### What doesn't work yet
 
 - **A plain ISO in the drive.** Each game goes through `add_game.py` first.

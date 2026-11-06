@@ -71,6 +71,23 @@ python3 recomp/tools/autoplay/autoplay.py setup --disc extracted/sys --saves <em
 
 The game ID in the disc's `boot.bin` picks the session: first `autoplay/games/<game ID>/<session>.py`, then the shared `autoplay/sessions/`. The shared ones work for any game. A game's own folder holds what's particular to it: `games/RFPE01/setup.py` plays Wii Fit Plus's whole first-time setup, standing on the board when asked, and keeps the saves for later sessions to start from. To add a game, make its folder and build on `player.py`. Pictures and saves stay in `--keep` or a temporary folder, never in the repository. The exit status is 0 when the session passed.
 
+### Compatibility runs
+
+`recomp/tools/compat_run.py` plays every game you have for a while, one after another with nobody watching, and says how far each got and which gaps to close first.
+
+```sh
+python3 recomp/tools/compat_run.py all                          # every games/*.wrd, 90 s each
+python3 recomp/tools/compat_run.py RMCE01 ~/discs/game.rvz --seconds 120
+python3 recomp/tools/compat_run.py all --dry-run                # what it would build and play
+python3 recomp/tools/compat_run.py --report-from ~/wii-recomp-runs/mac ~/wii-recomp-runs/pi
+```
+
+A game can be a disc image, an extracted disc, a game ID added before or a `.wrd`. One without an image is built with `add_game.py` first. Each one is played by the same generic explorer as autoplay's `explore` session: it reads the screen, clicks the button it names or presses A, and tries something else on a screen that doesn't change. Nothing in it is about one game. It keeps the log, the gaps file and a picture every 10 s, and gives the game a tier from what it measured: doesn't boot, boots to first picture, reaches menus (pressing a button on a still screen led to a new one, twice), or in game (heavy drawing for 5 s after the menus). How the run ended is kept apart: ran the whole time, stopped, crashed, exited or stalled. The notes at the top of the tool say exactly how each is measured.
+
+It writes `report.md` and `report.json` in `~/wii-recomp-runs/compat-<date>/` unless `--out` says where, always outside the repository, as the pictures and logs are the game's. The report has each game's tier, frame rate and own gaps, then every gap across all games, scored by how many games hit it, how far those games got and how far its row in `docs/hardware_inventory.md` is from done, each linked to its row. That ranking is what the roadmap should follow.
+
+It never touches real saves: every game starts from a fresh copy of `recomp/build/saves` (or `--saves`, or `--saves empty` for a new Wii) inside its run folder. Remotes are simulated, and only the processes it started are ever stopped, by their process ID, at each game's time limit or when it's interrupted. Text recognition works on a Mac only; elsewhere screens are compared by picture alone. Where Vulkan doesn't start, it plays with OpenGL, whose pictures the control pipe's `shot` now saves too.
+
 `recomp/tools/import_nand.py` decrypts a BootMii NAND backup in `wii/` into the storage folder `wii/nand/` (see `wii/README.md`). Its file system and encryption follow Dolphin's `NANDImporter.cpp`.
 
 `recomp/tools/perf_run.py` measures a fixed run with no input from a copy of `recomp/build/saves`: frame rate, worst frame, CPU, the Mac's speed limit, and what each slow frame spent its time on. It works on a Mac only, because it reads `pmset`.
@@ -100,7 +117,8 @@ Each frame of the recording gives one PNG, of its last copy to the screen. A fra
   - `hardware.c`: hardware registers.
   - `input.c`: keyboard, mouse and control pipe input for the simulated Wii Remote and Balance Board.
   - `bluetooth.c`, `bluetooth_channels.c`, `wii_remote.c`: the virtual Bluetooth chip and each slot's device. `remote_link.c` links real devices into the slots, through `remote_link_linux.c` or `remote_link_mac.c`, or `remote_link_loopback.c` for testing.
-  - `audio.c`, `ax.c`, `audio_output_mac.c`: sound. `ax.c` does the audio processor's mixing from the game's own voices and command lists, `audio.c` paces it and hands samples to the output thread, and the output file is the only per-platform part.
+  - `dsp.c`, `ax.c`, `ax_voice.h`, `zelda.c`, `dsp_lle*.c`, `dsp_accelerator.c`, `dsp_record.c`: the audio processor. `dsp.c` has its mailboxes and identifies the game's program by a checksum; `ax.c` (GameCube and Wii AX) and `zelda.c` are C versions of the known programs, and the interpreter in `dsp_lle*.c` runs any other. `dsp_record.c` records the interpreter's work for `tools/sound_bench.py`, which checks the C versions against it.
+  - `audio.c`, `audio_output_mac.c`: sound. The audio DMA reads what the program wrote to memory, `audio.c` hands it to the output thread, and the output file is the only per-platform part.
   - `ios.c`, `devices.c`, `es.c`, `files.c`, `fs.c`: stand-ins for the Wii's system services and storage.
   - `gx_fifo.c`, `gx_vertex.c`, `gx_transform.c`, `gx_light.c`, `gx_texture.c`, `gx_tev.c`, `gx_shader.c`, `gx_copy.c`, `gx_draw.c`, `window.c`: graphics, from command stream to window. The vertex and color stages become small shaders written for each setup the game uses, cached by key in `gx_shader.c`.
   - `dff.c`: reads Dolphin's FIFO recordings, for `tools/replay`.

@@ -107,13 +107,13 @@ Each stage is **done**, **in progress** or **planned**, and each item is ticked 
 
 Done when every graphics row is done or marked not needed, and recordings from every available title match Dolphin within a set limit.
 
-### 5. Sound (planned)
+### 5. Sound (in progress)
 
-- [ ] Identify a game's audio program by its contents
-- [ ] AX in all its versions, and the Zelda family
-- [ ] A DSP interpreter as the fallback for unknown programs
+- [x] Identify a game's audio program by its contents
+- [ ] AX in all its versions, and the Zelda family. AX is done: equal to the real program on Mario Kart Wii recordings, the versions no recording reaches checked against Dolphin's code. The Zelda family's C version waits for a Super Mario Galaxy 2 recording to be checked against
+- [x] A DSP interpreter as the fallback for unknown programs
 - [ ] Streamed disc audio, THP video sound and ADPCM
-- [ ] Muting leaves the game's timing unchanged
+- [x] Muting leaves the game's timing unchanged
 
 ### 6. Remaining hardware (planned)
 
@@ -191,6 +191,7 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - [ ] A list of titles, homebrew and SDK demos
 - [ ] Mario Kart Wii from a fresh console: Grand Prix, Time Trials with ghosts, VS and Battle, saving and reloading, sound in time, and back to the Wii Menu. Online play stays out of scope; the game should say it can't connect
 - [x] Automatic play for any title (`recomp/tools/autoplay/`): scripted sessions per game that read the screen and act, with Wii Fit Plus's first-time setup as the first
+- [x] Compatibility runs (`recomp/tools/compat_run.py`): every game played unattended by the generic explorer, given a tier from measured signals, with the gaps ranked across all of them
 - [ ] An automatic script for each: boots, reaches gameplay, sound, picture comparison and frame rate
 - [ ] Run on every change to shared code
 

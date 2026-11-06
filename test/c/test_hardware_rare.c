@@ -1,5 +1,5 @@
 // Rarely used registers in hardware.c: the reset button, the audio interface's interrupt,
-// the accelerator DMA, the serial I/O buffer and the DTV status.
+// the accelerator DMA, the DSP control register, the serial I/O buffer and the DTV status.
 #include "../../recomp/runtime/hardware.c"
 #include "../../recomp/runtime/timeline.c"
 #include "../harness.h"
@@ -8,6 +8,16 @@
 static uint64_t now_ticks = 60750000ull * 1000;
 uint64_t time_base(void) { return now_ticks; }
 uint64_t audio_next_due(void) { return 0; }
+void dsp_update(uint64_t now) {}
+int dsp_read(uint32_t a, int n, uint32_t *v) { return 0; }
+int dsp_write(uint32_t a, uint32_t v, int n) { return 0; }
+uint32_t dsp_control_read(void) { return 0; }
+static uint32_t dsp_control_written;
+uint32_t dsp_control_write(uint32_t v) { dsp_control_written = v; return 0; }
+static int dma_resets;
+int audio_dma_read(uint32_t a, int n, uint32_t *v) { return 0; }
+int audio_dma_write(uint32_t a, uint32_t v, int n) { return 0; }
+void audio_dma_reset(void) { dma_resets++; }
 int si_read(uint32_t a, uint32_t *v) { return 0; }
 int si_write(uint32_t a, uint32_t v) { return 0; }
 int exi_read(uint32_t a, uint32_t *v) { return 0; }
@@ -105,6 +115,27 @@ static void test_accelerator_dma(void) {
   CHECK_EQ(gaps, 0);
 }
 
+// The processor's own bits go to dsp.c. Its mail interrupt shares the line, and a reset
+// stops audio DMA, as Dolphin's DSP.cpp does.
+static void test_dsp_control(void) {
+  hw_write(MASK, 1u << IRQ_DSP, 4);
+  hw_write(DSP, 0x0100 | 0x0004, 2);  // Mail interrupt enabled, processor halted.
+  CHECK_EQ(dsp_control_written, 0x0104);
+  CHECK_EQ(dma_resets, 0);
+  dsp_interrupt();
+  CHECK_EQ(hw_read(DSP, 2) & 0x80, 0x80);
+  CHECK(irq_pending());
+  hw_write(DSP, 0x0100 | 0x0080, 2);  // Acknowledged.
+  CHECK(!irq_pending());
+  CHECK_EQ(hw_read(DSP, 2) & 0x80, 0);
+  hw_write(DSP, 0x0001, 2);  // Reset.
+  CHECK_EQ(dma_resets, 1);
+  dsp_interrupt();  // Disabled now.
+  CHECK(!irq_pending());
+  hw_write(DSP, 0x0080, 2);
+  CHECK_EQ(gaps, 0);
+}
+
 static void test_serial_buffer(void) {
   hw_write(0xcd006480u, 0x00400300u, 4);
   hw_write(0xcd0064fcu, 0x12345678u, 4);
@@ -122,6 +153,7 @@ int main(void) {
   test_reset_button();
   test_audio_interrupt();
   test_accelerator_dma();
+  test_dsp_control();
   test_serial_buffer();
   test_dtv_status();
   return finish();

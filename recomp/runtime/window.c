@@ -1,6 +1,11 @@
 // The game's window. The Mac needs it created and serviced on the main thread;
 // drawing happens on the game's thread.
+#ifdef GX_WITH_VULKAN
+#include <vulkan/vulkan.h>
+#define GLFW_INCLUDE_VULKAN
+#else
 #define GLFW_INCLUDE_NONE
+#endif
 #include <GLFW/glfw3.h>
 #ifdef __APPLE__
 #include <objc/message.h>
@@ -80,6 +85,11 @@ static void stay_awake(void) {
 }
 
 void window_create(void) {
+#ifdef GX_WITH_VULKAN
+  // GLFW looks for the Vulkan loader on its own, and on the Mac it doesn't find
+  // Homebrew's, so it's handed the one the console is linked with.
+  glfwInitVulkanLoader(vkGetInstanceProcAddr);
+#endif
   if (!glfwInit()) { fprintf(stderr, "stop: no window system\n"); exit(10); }
   stay_awake();
   gx_backend_choose();

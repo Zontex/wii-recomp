@@ -5,9 +5,10 @@
 #include <stdlib.h>
 #include <string.h>
 #include <time.h>
+#include <fcntl.h>
 #include <pthread.h>
 #include <sched.h>
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 #include <sys/mman.h>
 #include <unistd.h>
 #endif
@@ -297,11 +298,12 @@ static void write_pair(uint32_t low_address, uint32_t value) {
 }
 
 // The chip runs beside the CPU on a Wii, and the game already waits for it through
-// tokens and draw done. So on Linux commands go to a thread of their own, through a ring
-// mapped twice in a row, which lets a command crossing the end read as one piece. A game
-// using FIFO breakpoints needs the chip in step with it, and stays on this thread.
+// tokens and draw done. So commands go to a thread of their own, through a ring mapped
+// twice in a row, which lets a command crossing the end read as one piece. A game using
+// FIFO breakpoints needs the chip in step with it, and stays on this thread, as does
+// WII_RECOMP_GX_INLINE=1.
 static int threaded = -1;
-#ifdef __linux__
+#if defined(__linux__) || defined(__APPLE__)
 #define RING_BYTES (16u * 1024u * 1024u)
 #define EMPTY_TURNS_BEFORE_SLEEP 200
 #define EMPTY_SLEEP_NANOSECONDS 50000
@@ -351,8 +353,22 @@ static void *commands_thread(void *unused) {
   return 0;
 }
 
+// Memory with no name in the file system, to map twice. macOS has no memfd_create, so it
+// takes shared memory under a name, and drops the name at once.
+static int ring_file(void) {
+#ifdef __APPLE__
+  char name[32];
+  snprintf(name, sizeof name, "/wii-recomp-%d", (int)getpid());
+  int file = shm_open(name, O_RDWR | O_CREAT | O_EXCL, 0600);
+  shm_unlink(name);
+  return file;
+#else
+  return memfd_create("wii-recomp-commands", 0);
+#endif
+}
+
 static int start_commands_thread(void) {
-  int file = memfd_create("wii-recomp-commands", 0);
+  int file = ring_file();
   if (file < 0 || ftruncate(file, RING_BYTES)) return 0;
   uint8_t *both = mmap(0, RING_BYTES * 2, PROT_NONE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
   if (both == MAP_FAILED || mmap(both, RING_BYTES, PROT_READ | PROT_WRITE, MAP_SHARED | MAP_FIXED, file, 0) == MAP_FAILED

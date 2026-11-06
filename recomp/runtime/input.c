@@ -10,10 +10,9 @@
 
 #include "title.h"
 #include "cpu.h"
+#include "dsp_record.h"
 #include "gx_inspect.h"
-#ifdef GX_WITH_VULKAN
 #include "gx_shot.h"
-#endif
 #include "input.h"
 #include "hardware.h"
 
@@ -253,7 +252,8 @@ static uint32_t button_named(const char *name) {
 
 // One command per line: press a, hold a, release a, pointer x y, board on kg x y, board off,
 // reset to press the console's reset button, shot <file> to save the next picture,
-// record <frames> <file> to record frames for recomp/tools/replay.
+// record <frames> <file> to record frames for recomp/tools/replay, record-sound <frames>
+// <file> to record the audio processor's work for recomp/tools/sound_bench.py.
 static void run_command(const char *line) {
   char word[16], name[16], path[1024];
   float x = 0, y = 0, kilograms = state.kilograms;
@@ -267,15 +267,10 @@ static void run_command(const char *line) {
   else if (sscanf(line, "board %15s %f %f %f", word, &kilograms, &x, &y) >= 1) {
     input_board(!strcmp(word, "on"), kilograms, x, y);
   } else if (!strncmp(line, "dump", 4)) gx_inspect_dump();
+  else if (sscanf(line, "record-sound %d %1023s", &first, path) == 2) dsp_record_request(first, path);
   else if (sscanf(line, "record %d %1023s", &first, path) == 2) gx_record_request(first, path);
   else if (sscanf(line, "skip %d %d", &first, &last) == 2) gx_inspect_skip(first, last);
-  else if (sscanf(line, "shot %1023s", path) == 1) {
-#ifdef GX_WITH_VULKAN
-    gx_shot(path);
-#else
-    fprintf(stderr, "control: shot needs the Vulkan renderer\n");
-#endif
-  }
+  else if (sscanf(line, "shot %1023s", path) == 1) gx_shot(path);
   else fprintf(stderr, "control: unknown command: %s", line);
 }
 
