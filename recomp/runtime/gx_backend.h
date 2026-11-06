@@ -87,6 +87,8 @@ typedef struct {
   // shader and state will need.
   void (*stages_prepare)(int count, const int *kinds, const char *const *texts);
   void (*pipeline_prepare)(GxShader shader, const GxRenderState *state);
+  // Many at once, side by side, where the backend can. Optional; pipeline_prepare otherwise.
+  void (*pipelines_prepare)(int count, const GxShader *shaders, const GxRenderState *states);
   void (*shader_use)(GxShader shader);
   void (*constants_send)(int block, const void *data, size_t bytes);
 

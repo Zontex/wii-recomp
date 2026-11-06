@@ -2,6 +2,7 @@
 // blending, depth and culling, so each mix is built once, on first use, and kept.
 #include <errno.h>
 #include <pthread.h>
+#include <stdatomic.h>
 #include <shaderc/shaderc.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -270,22 +271,19 @@ static void load_stages(FILE *file) {
   fclose(file);
 }
 
-static PipelineSlot *find_slot(const PipelineKey *key);
-static void grow_pipelines(void);
-static VkPipeline build_pipeline(const PipelineKey *key);
+static int build_many(PipelineKey *keys, int count, int write_down);
 
 static void load_pipelines(FILE *file) {
-  PipelineKey key;
+  PipelineKey key, *keys = 0;
+  int count = 0, room = 0;
   while (fread(&key, sizeof key, 1, file) == 1) {
     if (!stage_find(key.vertex) || !stage_find(key.fragment)) continue;  // Its stage didn't survive.
-    if ((pipeline_count + 1) * 2 > pipeline_slots) grow_pipelines();
-    PipelineSlot *slot = find_slot(&key);
-    if (slot->pipeline) continue;
-    slot->key = key;
-    slot->pipeline = build_pipeline(&key);
-    pipeline_count++;
+    if (count == room) keys = realloc(keys, (size_t)(room = room ? room * 2 : 256) * sizeof *keys);
+    keys[count++] = key;
   }
   fclose(file);
+  build_many(keys, count, 0);
+  free(keys);
 }
 
 // Everything the last runs used is ready before the game draws anything.
@@ -563,6 +561,74 @@ VkPipeline vk_pipeline_find(GxShader shader, const GxRenderState *state) {
 }
 
 void vk_pipeline_prepare(GxShader shader, const GxRenderState *state) { vk_pipeline_find(shader, state); }
+
+// Many pipelines at once, on as many workers as there are cores, up to 8, for the start.
+// Each is built from its key alone, and Vulkan's pipeline cache takes several threads, so
+// the table is only filled in once they're all built. On the Mac, each pipeline is a
+// Metal compile, so building 700 one at a time took 15 seconds.
+static PipelineKey *batch_keys;
+static VkPipeline *batch_built;
+static atomic_int batch_next;
+static int batch_count;
+
+static void *build_batch(void *unused) {
+  (void)unused;
+  for (int i; (i = atomic_fetch_add(&batch_next, 1)) < batch_count;) batch_built[i] = build_pipeline(&batch_keys[i]);
+  return 0;
+}
+
+// Recipes noted on OpenGL hold no drawing state at all. No draw uses such a pipeline, so
+// only their stages are worth building.
+static int no_state(const GxRenderState *state) {
+  static const GxRenderState none;
+  return !memcmp(state, &none, sizeof none);
+}
+
+// Builds the keys not built yet and keeps them, written down too if asked. Returns how many.
+static int build_many(PipelineKey *keys, int count, int write_down) {
+  enum { MOST_WORKERS = 8 };
+  while ((pipeline_count + (uint32_t)count + 1) * 2 > pipeline_slots) grow_pipelines();
+  int wanted = 0;
+  for (int i = 0; i < count; i++) {
+    if (no_state(&keys[i].state) || find_slot(&keys[i])->pipeline) continue;
+    int repeated = 0;
+    for (int j = 0; j < wanted && !repeated; j++) repeated = !memcmp(&keys[j], &keys[i], sizeof keys[i]);
+    if (!repeated) keys[wanted++] = keys[i];
+  }
+  if (!wanted) return 0;
+  batch_keys = keys;
+  batch_built = calloc((size_t)wanted, sizeof *batch_built);
+  batch_count = wanted;
+  atomic_store(&batch_next, 0);
+  long cores = sysconf(_SC_NPROCESSORS_ONLN);
+  int workers = cores < 1 ? 1 : cores > MOST_WORKERS ? MOST_WORKERS : (int)cores;
+  if (workers > wanted) workers = wanted;
+  pthread_t threads[MOST_WORKERS];
+  for (int i = 0; i < workers; i++) pthread_create(&threads[i], 0, build_batch, 0);
+  for (int i = 0; i < workers; i++) pthread_join(threads[i], 0);
+  for (int i = 0; i < wanted; i++) {
+    PipelineSlot *slot = find_slot(&keys[i]);
+    slot->key = keys[i];
+    slot->pipeline = batch_built[i];
+    pipeline_count++;
+    if (write_down && pipelines_file) fwrite(&keys[i], sizeof keys[i], 1, pipelines_file);
+  }
+  if (write_down && pipelines_file) fflush(pipelines_file);
+  free(batch_built);
+  batch_built = 0;
+  return wanted;
+}
+
+void vk_pipelines_prepare(int count, const GxShader *shaders_used, const GxRenderState *states) {
+  PipelineKey *keys = calloc((size_t)count + 1, sizeof *keys);
+  for (int i = 0; i < count; i++) {
+    keys[i].vertex = stages[shaders[shaders_used[i] - 1].vertex].hash;
+    keys[i].fragment = stages[shaders[shaders_used[i] - 1].fragment].hash;
+    keys[i].state = states[i];
+  }
+  build_many(keys, count, 1);
+  free(keys);
+}
 
 // Bias stays out of samplers, as Vulkan on Metal has none. See read_map_biases in gx_tev.c.
 static VkSampler create_sampler(const GxSampling *sampling, int nearest_only) {

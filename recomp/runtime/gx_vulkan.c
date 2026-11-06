@@ -2104,6 +2104,7 @@ const GxBackend gx_backend_vulkan = {
   .shader_link = vk_shader_link,
   .stages_prepare = vk_stages_prepare,
   .pipeline_prepare = vk_pipeline_prepare,
+  .pipelines_prepare = vk_pipelines_prepare,
   .shader_use = shader_use,
   .constants_send = constants_send,
   .render_state = render_state,
