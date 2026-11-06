@@ -6,23 +6,33 @@
 #include "harness.h"
 #include "bluetooth.h"
 #include "ios.h"
+#include "input.h"
 #include "title.h"
 #include "wii_remote.h"
 
 const Title *title = &(Title){.virtual_bluetooth = 1};
 uint32_t hw_read(uint32_t a, int n) { return 0; }
 void hw_write(uint32_t a, uint32_t v, int n) {}
-uint32_t input_buttons(void) { return 0; }
-void input_pointer_now(float *x, float *y) { *x = *y = 0; }
-void attachment_read(uint32_t address, uint8_t *out, uint32_t bytes) { memset(out, 0, bytes); }
-void attachment_write(uint32_t address, const uint8_t *data, uint32_t bytes) {}
-void attachment_fill(uint8_t *out, uint32_t bytes) { for (uint32_t i = 0; i < bytes; i++) out[i] = (uint8_t)(0x40 + i); }
+uint32_t input_buttons(int player) { return 0; }
+int input_connected(int player) { return player == 0; }
+void input_snapshot(int player, PlayerState *out) { memset(out, 0, sizeof *out); }
+Attachment input_attachment(int player) { return ATTACHMENT_CLASSIC; }
+const char *input_attachment_name(Attachment attachment) { return "classic"; }
+float input_battery_level(int player) { return 1; }
+int input_board_enabled(void) { return 1; }
+int input_motionplus(int player) { return 0; }
+void attachment_plain_state(int device, const PlayerState *player, uint8_t out[6]) { memset(out, 0, 6); }
+void input_set_outputs(int player, int rumble, uint8_t lights) {}
+void attachment_plug(int device, Attachment kind) {}
+void attachment_read(int device, uint32_t address, uint8_t *out, uint32_t bytes) { memset(out, 0, bytes); }
+void attachment_write(int device, uint32_t address, const uint8_t *data, uint32_t bytes) {}
+void attachment_fill(int device, const PlayerState *player, uint8_t *out, uint32_t bytes) { for (uint32_t i = 0; i < bytes; i++) out[i] = (uint8_t)(0x40 + i); }
 void board_read(uint32_t address, uint8_t *out, uint32_t bytes) {}
 void board_write(uint32_t address, const uint8_t *data, uint32_t bytes) {}
 void board_fill(uint8_t *out, uint32_t bytes) {}
-void camera_read(uint32_t address, uint8_t *out, uint32_t bytes) {}
-void camera_write(uint32_t address, const uint8_t *data, uint32_t bytes) {}
-void camera_fill(float x, float y, uint8_t *out, uint32_t bytes) {}
+void camera_read(int device, uint32_t address, uint8_t *out, uint32_t bytes) {}
+void camera_write(int device, uint32_t address, const uint8_t *data, uint32_t bytes) {}
+void camera_fill(int device, float x, float y, uint8_t *out, uint32_t bytes) {}
 uint64_t time_base(void) { return 0; }
 void link_backend_start(int mode) {}
 void link_backend_search(void) {}

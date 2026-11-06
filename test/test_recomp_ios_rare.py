@@ -1,14 +1,16 @@
 """Rarely used IOS and Bluetooth requests, each answered as a Wii would, in small C harnesses."""
+import os
 import shutil
 import subprocess
 import sys
 import tempfile
 import unittest
+import zlib
 from pathlib import Path
 
 HERE = Path(__file__).parent
 RUNTIME = HERE.parent / "recomp/runtime"
-FLAGS = ["-w", "-O1", "-fwrapv", f"-I{RUNTIME}", f"-I{HERE}", "-lm"]
+FLAGS = ["-w", "-O1", "-fwrapv", f"-I{RUNTIME}", f"-I{HERE}", "-I/usr/local/include", "-lm"]
 
 
 @unittest.skipUnless(shutil.which("clang"), "needs clang")
@@ -36,21 +38,83 @@ class RareRequests(unittest.TestCase):
         self.assertEqual((saves / "title/b").read_bytes(), b"yes!")
 
     def test_bluetooth_rare_commands_and_channels(self):
-        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "remote_link.c", "gaps.c"]
+        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "wii_motionplus.c", "remote_link.c", "gaps.c"]
         result = self.build_and_run([HERE / "c/test_bluetooth_rare.c"] + [RUNTIME / name for name in sources])
         self.assertIn("gap: ctl.sdp_queries 0x1", result.stderr)  # Refused service discovery is reported.
 
     def test_real_devices_through_the_link(self):
-        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "remote_link.c", "gaps.c"]
+        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "wii_motionplus.c", "remote_link.c", "gaps.c"]
         result = self.build_and_run([HERE / "c/test_remote_link.c"] + [RUNTIME / name for name in sources], self.folder / "remotes.txt")
         self.assertIn("remotes: the board 00:23:31:00:00:09 is player 5", result.stderr)
         self.assertIn("00:23:31:00:00:09 4", (self.folder / "remotes.txt").read_text())  # Its slot is remembered.
 
+    def test_loopback_devices_through_the_chip(self):
+        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "remote_link.c", "remote_link_loopback.c", "wii_attachment.c",
+                   "wii_attachment_key.c", "wii_board.c", "wii_camera.c", "wii_motionplus.c", "input.c", "gaps.c"]
+        self.build_and_run([HERE / "c/test_loopback_chip.c"] + [RUNTIME / name for name in sources], self.folder / "remotes.txt")
+
+    def test_four_players_through_the_chip(self):
+        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "remote_link.c", "wii_attachment.c", "wii_attachment_key.c",
+                   "wii_board.c", "wii_camera.c", "wii_motionplus.c", "input.c", "gaps.c"]
+        self.build_and_run([HERE / "c/test_players_chip.c"] + [RUNTIME / name for name in sources])
+
+    def test_players_controls_and_commands(self):
+        self.build_and_run([HERE / "c/test_players.c", RUNTIME / "input.c"])
+
+    def test_controller_settings(self):
+        sources = [HERE / "c/test_controllers.c"] + [RUNTIME / name for name in ("controllers.c", "settings_file.c", "input.c")]
+        result = self.build_and_run(sources, self.folder)
+        self.assertIn("controllers: wrote", result.stderr)
+
+    def test_controller_mapping_and_gyro_pointer(self):
+        self.build_and_run([HERE / "c/test_pad_map.c", RUNTIME / "pad_map.c"])
+
+    def test_controllers_through_sdl(self):
+        sys.path.insert(0, str(HERE.parent / "recomp/translate"))
+        import build_file
+        compile_flags, link_flags = build_file.sdl3_flags()
+        sources = [HERE / "c/test_pads_virtual.c"] + [RUNTIME / name for name in ("pads.c", "pad_map.c", "input.c", "controllers.c", "settings_file.c")]
+        program = self.folder / "program"
+        subprocess.run(["clang", *map(str, sources), *FLAGS, *compile_flags.split(), *link_flags.split(), "-o", str(program)], check=True)
+        result = subprocess.run([str(program)], capture_output=True, text=True, timeout=60, env={**os.environ, "SDL_JOYSTICK_HIDAPI": "0"})
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(result.stdout.endswith("ok\n"), result.stdout)
+        self.assertIn("controllers: Virtual Pro Controller is player 1, with its gyro as the pointer", result.stderr)
+        self.assertIn("controllers: Virtual Joy-Con pair is player 2", result.stderr)
+        self.assertIn("control: virtual controller 1 rumbles", result.stderr)
+        self.assertIn("control: virtual controller 1 stops rumbling", result.stderr)
+        self.assertIn("control: virtual controller 1 shows player light 2", result.stderr)
+        self.assertIn("control: there's no virtual controller 1", result.stderr)
+
+    def test_motionplus_through_the_chip(self):
+        sources = ["bluetooth.c", "bluetooth_channels.c", "wii_remote.c", "wii_motionplus.c", "remote_link.c", "wii_attachment.c",
+                   "wii_attachment_key.c", "wii_board.c", "wii_camera.c", "input.c", "gaps.c"]
+        result = self.build_and_run([HERE / "c/test_motionplus.c"] + [RUNTIME / name for name in sources])
+        # The calibration's check is zlib's CRC-32 of both blocks, less their check bytes.
+        block = bytes.fromhex(result.stderr.split("calibration:")[1].split("\n")[0].replace(" ", ""))
+        crc = zlib.crc32(block[16:30], zlib.crc32(block[:14]))
+        self.assertEqual(block[14:16] + block[30:32], (crc >> 16).to_bytes(2, "big") + (crc & 0xffff).to_bytes(2, "big"))
+
+    def test_motionplus_answers_follow_from_the_numbers(self):
+        sys.path.insert(0, str(HERE.parent / "recomp/tools"))
+        import motionplus_challenge as challenge
+        self.assertEqual((RUNTIME / "wii_motionplus_challenge.h").read_text(), challenge.header())
+        x, y0, y1 = (int.from_bytes(data, "little") for data in challenge.answers().values())
+        n, v = challenge.N, challenge.SQRT_V ** 2 % challenge.N
+        self.assertEqual(y0 * y0 % n, x)
+        self.assertEqual(y1 * y1 % n, x * v % n)
+
     @unittest.skipUnless(sys.platform == "linux", "Linux's Bluetooth backend")
     def test_linux_remote_sockets(self):
-        sources = [HERE / "c/test_remote_link_linux.c", RUNTIME / "remote_link_linux.c", RUNTIME / "remote_link.c"]
+        sources = [HERE / "c/test_remote_link_linux.c", RUNTIME / "remote_link_linux.c", RUNTIME / "remote_link_hidraw.c", RUNTIME / "remote_link.c"]
         self.build_and_run(sources, self.folder / "remotes.txt")
+
+    @unittest.skipUnless(sys.platform == "linux", "Linux's HID backend")
+    def test_remotes_through_hidraw(self):
+        sources = [HERE / "c/test_remote_link_hidraw.c", RUNTIME / "remote_link_hidraw.c", RUNTIME / "remote_link.c"]
+        self.build_and_run(sources, self.folder)
 
 
 if __name__ == "__main__":
     unittest.main()
+

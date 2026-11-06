@@ -25,9 +25,55 @@ python3 recomp/tools/prepare_console.py wii/nand console --menu recomp/build-men
 cp game.wrd console/drive/ && recomp/build/wii-recomp --console console
 ```
 
-Keys: arrows for the D-pad, Enter for A, Backspace for B, `1`, `2`, `=` for plus, `-` for minus, `H` for Home. The arrows also tilt the Classic Controller's left stick, and X, C, Z and V are its L, R, ZL and ZR (in Mario Kart Wii, L uses an item and R drifts). The mouse is the pointer. Space steps on or off the board, and W, A, S, D lean. A control pipe takes the same buttons by name, `l`, `r`, `zl` and `zr` among them, and `stick x y`.
+A game built with `emit.py --virtual-bluetooth` reads the simulated Wii Remotes and Balance Board through its own Bluetooth code. Each remote has a Nunchuk plugged in unless the settings say otherwise. A game that sees a Classic Controller, such as Wii Fit Plus, may turn its pointer off and wait for Classic Controller buttons, so plug one in only for games played with it.
 
-A game built with `emit.py --virtual-bluetooth` reads the simulated Wii Remote and Balance Board through its own Bluetooth code. That remote has a Classic Controller plugged in; set `WII_RECOMP_ATTACHMENT=none` to unplug it, as a game such as Wii Fit Plus expects, since with one plugged in it turns its pointer off and its Home Menu waits for Classic Controller buttons.
+### Controller settings
+
+The console keeps its controller settings in `controllers.ini`, in the console folder with `--console` and beside the program otherwise, or wherever `WII_RECOMP_CONTROLLERS` says. The first run writes it with every setting at its default, after a `#`. To change one, take the `#` away and edit it. A line with a mistake stops the console and names the line. It has these sections:
+
+- **`[remotes]`**: `mode`, as `WII_RECOMP_REMOTES` below. The environment variable wins when set.
+- **`[player1]` to `[player4]`**:
+  - `source`: what drives the player. It's a list of `keyboard`, `mouse`, `pad` (the next controller to connect), `pad:<serial number>` or `none`. Only one player can have the keyboard, or the mouse. Players with a keyboard or mouse are there from the start; the others join when their controller does.
+  - `attachment`: `none`, `nunchuk` or `classic`. `WII_RECOMP_ATTACHMENT` wins for player 1.
+  - `motionplus`: `yes` puts a Wii MotionPlus between the remote and its attachment, for games that use one. Games without MotionPlus find it switched off and carry on, and a controller's gyro gives its readings.
+  - `sideways`, `pointer`, `gyro_speed` and `recenter`: how a controller stands in for the remote.
+- **`[board]`**: `source = keyboard` or `none`, for the simulated Balance Board in games made for one.
+- **`[keys]`**: each keyboard control and up to four keys for it. The defaults are below.
+
+With no changes, player 1 is the keyboard and mouse, and the remote has a Nunchuk. Default keys: arrows for the D-pad, Enter for A, Backspace for B, `1`, `2`, `=` for plus, `-` for minus, `H` for Home. The arrows also tilt the Classic Controller's left stick and the Nunchuk's stick, X, C, Z and V are the Classic Controller's L, R, ZL and ZR (in Mario Kart Wii, L uses an item and R drifts), and C and Z are the Nunchuk's C and Z. Q shakes the remote. F2 plugs the next attachment into the remote: none, a Nunchuk, a Classic Controller. F3 plugs a Wii MotionPlus in or out. The remote tells the game, as when one is plugged in by hand. The mouse is the pointer. Space steps on or off the board, and W, A, S, D lean. A control pipe takes the same buttons by name, `l`, `r`, `zl`, `zr`, `c` and `z` among them, and `stick x y`.
+
+### Switch controllers and other gamepads
+
+Controllers are read through SDL3 (`runtime/pads.c`). A controller that connects joins the first player whose `source` takes one, a player named by its serial number first. That player's remote calls the game, as switching a remote on does, and leaves when the controller does. With the defaults, the first controller is player 1 alongside the keyboard, and the next ones are players 2 to 4.
+
+| The remote has | Controller | Wii |
+| --- | --- | --- |
+| A Nunchuk, or nothing | A, B / ZR, Y, X | A, B, 1, 2 |
+| | Left stick, L, ZL | Nunchuk stick, C, Z |
+| | R | A shake |
+| | D-pad, +, −, Home | the same |
+| A Classic Controller | Every button and both sticks where a Nintendo controller has them | the same |
+| Held sideways (`sideways = yes`, or one Joy-Con alone) | the D-pad or stick turned a quarter, B, A, X, Y | the D-pad, 1, 2, A, B |
+
+- **Pointer.** The gyro moves it. Turning 20 degrees from the middle reaches the side of the screen, or less with a higher `gyro_speed`. Turning left and right counts about whichever way is up, however the controller is held. `recenter` (the right stick's click by default) brings it back to the middle. `pointer = stick` moves it with the right stick instead.
+- **Motion and drift.** The controller's motion and turn are the remote's. A Joy-Con pair moves as two hands: the right one is the remote and the left one the Nunchuk. The gyro's zero is taken again whenever the controller is still for a second, so the pointer doesn't drift.
+- **Outputs.** The game's rumble rumbles the controller, the remote's lit light shows as its player light, and its battery shows in the game's Home Menu.
+- **Linux setup.** On Linux, run `sudo recomp/tools/remotes_setup.sh` once so SDL reads Switch controllers itself, with their gyro and rumble. The same setup is for real remotes, and both work together.
+- **Switch 2 controllers** work by cable only, as SDL 3.4 starts them over USB.
+- **Mac.** Pair controllers in System Settings.
+
+`WII_RECOMP_INPUT_STATS=1` prints, every five seconds for each controller:
+- how many gyro samples arrived a second
+- how often the remote read its player
+- how old the newest sample was when it did, at the middle and the 99th percentile
+- the gyro's zero
+
+The control pipe drives virtual controllers through SDL, so scripts and tests take the same path as real ones:
+- `pad add pro` or `pad add joycons` adds one, numbered from 1; `pad remove <n>` removes it.
+- `pad press|hold|release <n> <button>` works its buttons (`a`, `b`, `x`, `y`, `l`, `r`, `zl`, `zr`, `plus`, `minus`, `home`, `capture`, `left_stick`, `right_stick`, `dpad_up` and so on).
+- `pad stick <n> left|right x y` tilts a stick.
+- `pad accel <n> x y z` (in g) and `pad gyro <n> x y z` (degrees a second, SDL's axes) set its motion.
+- `pad turn <n> <right> <up>` turns it by that many degrees.
 
 ### Real Wii Remotes and the Balance Board
 
@@ -42,12 +88,19 @@ On the same `--virtual-bluetooth` builds, real remotes and a real board pass the
 
 The board always takes the fifth slot, where games look for it. Each remote keeps its player number between runs, by address, in `remotes.txt` beside the program (in the console folder with `--console`). When a game hangs up on a remote, the remote turns off, and any button brings it back, as on a Wii. `WII_RECOMP_SPEAKER=off` keeps speaker sound from the remote and passes only its rumble.
 
-- **Raspberry Pi and other Linux:** run `sudo recomp/tools/remotes_setup.sh` once, and again after each build. It stops bluetoothd taking the remotes' channels and lets the program listen for them. Pair each remote and the board once with `sudo recomp/tools/remotes_setup.sh pair` after pressing its red SYNC button. From then on any button connects it. Without pairing, hold 1 and 2 as the game starts, or while the game searches for remotes. Remotes stay connected when the console hands over from the Wii Menu to a disc. `--undo` puts bluetoothd back.
+- **Raspberry Pi and other Linux:** run `sudo recomp/tools/remotes_setup.sh` once.
+  - bluetoothd takes a remote's connection as it does any controller's, and the console reads the remote through the kernel's HID (`runtime/remote_link_hidraw.c`). The setup keeps the kernel's own Wii Remote driver away, since it would send the remote reports of its own, and lets the console read Nintendo's controllers.
+  - Pair each remote and the board once with `sudo recomp/tools/remotes_setup.sh pair` after pressing its red SYNC button. From then on any button connects it.
+  - Without pairing, hold 1 and 2 as the game starts, or while the game searches for remotes.
+  - Remotes stay connected when the console hands over from the Wii Menu to a disc.
+  - A game hanging up can't turn a remote off this way, so it sleeps until a button is pressed.
+  - `--sockets` is the older way: bluetoothd's input plugin is turned off, the console answers remotes itself over raw sockets, and remotes do turn off. Wireless keyboards and Switch controllers stop working while it's set, and it must be run again after each build.
+  - `--undo` puts everything back.
 - **Mac:** pair the remote once in System Settings > Bluetooth while holding 1 and 2, and allow Input Monitoring if macOS asks. macOS can't turn a remote off, so when a game hangs up, the remote sleeps until a button is pressed.
 
 None of this has been tried with real hardware yet: the link, the Bluetooth chip's side and the Linux sockets are tested with stand-ins (`test/test_recomp_ios_rare.py`), and Wii Fit Plus plays through setup on `loopback`.
 
-Set `WII_RECOMP_CONTROL=<path>` to drive it from a script through a pipe at that path, one command per line: `press a`, `hold a`, `release a`, `pointer x y`, `stick x y` (the Classic Controller's left stick, -1 to 1), `board on <kg> <lean x> <lean y>`, `board off`. Saves go to `recomp/build/saves`, or to `WII_RECOMP_SAVES`. On first start, files the Wii Menu makes on a new Wii and that neither folder has are made there, empty: WiiConnect24's settings, lists and mailboxes, and the Mii database. Games such as Mario Kart Wii stop at "Could not write to/read from Wii system memory" without them.
+Set `WII_RECOMP_CONTROL=<path>` to drive it from a script through a pipe at that path, one command per line: `press a`, `hold a`, `release a`, `pointer x y`, `stick x y` (the Classic Controller's left stick, -1 to 1), `board on <kg> <lean x> <lean y>`, `board off`, `accel x y z` (the remote's motion in g, along its own axes, x to its right: flat and still is `0 0 1`), `roll <degrees>` (turned clockwise and held still, which moves the camera's picture and gravity together, as games expect), `shake`, `nunchuk stick x y`, `nunchuk accel x y z`, and `attach none`, `attach nunchuk` or `attach classic`, `motionplus on` or `off`, and `gyro x y z` (how fast the remote turns, in degrees a second about its own axes, for a MotionPlus). Commands are player 1's unless they start with another player, as in `p2 press a`, and `p2 connect` and `p2 disconnect` bring a player's remote in and out, as switching a remote on and off does. Up to four players' remotes are there at once. The pipe also takes the console's own commands: `reset` presses its reset button, `shot <file>` saves the next picture (Vulkan only), `record <frames> <file>` records frames for `recomp/tools/replay`, and `dump` and `skip <first> <last>` are for the graphics inspector. Saves go to `recomp/build/saves`, or to `WII_RECOMP_SAVES`. On first start, files the Wii Menu makes on a new Wii and that neither folder has are made there, empty: WiiConnect24's settings, lists and mailboxes, and the Mii database. Games such as Mario Kart Wii stop at "Could not write to/read from Wii system memory" without them.
 
 Set `WII_RECOMP_MUTE=1` to skip the sound device, and `WII_RECOMP_AUDIO_WAV=<path>` to save what the mixer makes.
 
@@ -115,7 +168,8 @@ Each frame of the recording gives one PNG, of its last copy to the screen. A fra
   - `guest_memory.h`, `guest_memory.c`: the Wii's memory, one window at a fixed host address. A load or store is a mask, one compare that sends the hardware block to `hardware.c`, and the access, and an access through the stack pointer skips the compare. Where a Wii has no memory, the first touch opens a zero page and is named in `gaps.txt` as `cpu.dsi_isi`. A real crash prints the faulting address and function first.
   - `threads.c`, `interrupts.c`: the game's threads, interrupts and clocks.
   - `hardware.c`: hardware registers.
-  - `input.c`: keyboard, mouse and control pipe input for the simulated Wii Remote and Balance Board.
+  - `pads.c`: host controllers through SDL3, and `pad_map.c`, how one stands in for a Wii Remote, with the gyro pointer.
+  - `input.c`: the four players' controls and the board's weight, set by the keyboard, mouse and control pipe. `control_pipe.c` reads the pipe, and `input_direct.c` stands in for the game's own remote functions in builds without `--virtual-bluetooth`. `controllers.c` reads `controllers.ini` with `settings_file.c`, a small INI reader.
   - `bluetooth.c`, `bluetooth_channels.c`, `wii_remote.c`: the virtual Bluetooth chip and each slot's device. `remote_link.c` links real devices into the slots, through `remote_link_linux.c` or `remote_link_mac.c`, or `remote_link_loopback.c` for testing.
   - `dsp.c`, `ax.c`, `ax_voice.h`, `zelda.c`, `dsp_lle*.c`, `dsp_accelerator.c`, `dsp_record.c`: the audio processor. `dsp.c` has its mailboxes and identifies the game's program by a checksum; `ax.c` (GameCube and Wii AX) and `zelda.c` are C versions of the known programs, and the interpreter in `dsp_lle*.c` runs any other. `dsp_record.c` records the interpreter's work for `tools/sound_bench.py`, which checks the C versions against it.
   - `audio.c`, `audio_output_mac.c`: sound. The audio DMA reads what the program wrote to memory, `audio.c` hands it to the output thread, and the output file is the only per-platform part.

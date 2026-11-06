@@ -1,241 +1,355 @@
-// Stands in for the Wii Remote and Balance Board at the point the game reads them,
-// so no Bluetooth is needed. Channel 0 is the remote, channel 3 the board.
-#include <fcntl.h>
+// The players' controls and the board's weight, as the host last set them. Writers are
+// the window, the control pipe and controller threads; the readers are the simulated
+// devices on the emulation thread. One lock covers it all, and a reader takes a whole
+// player at once, so a report never mixes two moments.
+#include <math.h>
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <sys/stat.h>
-#include <unistd.h>
 
-#include "title.h"
 #include "cpu.h"
-#include "dsp_record.h"
-#include "gx_inspect.h"
-#include "gx_shot.h"
 #include "input.h"
-#include "hardware.h"
 
-enum {
-  CHANNEL_REMOTE = 0, CHANNEL_BOARD = 3, CHANNELS = 4,
-  DEVICE_REMOTE = 0, DEVICE_BOARD = 3, NO_DEVICE = 253, NOT_CONNECTED = -1,
-  STATUS_BYTES = 0xb0, HOLD = 0, TRIGGER = 4, RELEASE = 8, ACCELERATION = 0x0c, ACCELERATION_SIZE = 0x18,
-  POINTER = 0x20, HORIZON = 0x34, DISTANCE = 0x48, DEVICE_TYPE = 0x5c, ERROR = 0x5d, POINTER_VALID = 0x5e,
-  DATA_FORMAT = 0x5f, BOARD_TOTAL = 0x60, BOARD_SENSORS = 0x68, BOARD_AVERAGES = 0x88,
-  POINTER_SEEN = 2, CORE_ACCELERATION_POINTER = 3, PRESS_MS = 100, TICKS_PER_MS = 60750,
-  SENSOR_STATUS_BYTES = 0x34, SENSOR_DEVICE = 0x28, SENSOR_RAW = 0x2a, SENSOR_TEMPERATURE = 0x32, SENSOR_BATTERY = 0x33,
-  RAW_PER_KILOGRAM = 100, ROOM_TEMPERATURE = 25, BATTERY_FULL = 200,
+enum { PRESS_MS = 100, SHAKE_MS = 400, SHAKE_SWING_MS = 50, TICKS_PER_MS = 60750 };
+static const float SHAKE_G = 2.5f;  // Well past what KPAD counts as a shake.
+
+typedef struct {
+  int connected, attachment_chosen;
+  uint32_t held, pulsed, pad;
+  uint64_t pulse_until, shake_until;
+  float pointer_x, pointer_y, roll;
+  float sticks[4];
+  float accel[3], nunchuk_stick[2], nunchuk_accel[3], gyro[3];
+  Attachment attachment;
+  int motionplus;
+  PlayerOutputs outputs;
+  float battery;
+  uint64_t sampled_at, sample_seen;
+  int snapshots, ages_count;
+  float ages[1024];  // Milliseconds from a controller's sample to the snapshot that took it.
+} Player;
+
+#define AT_REST {0, 0, 1}
+static Player players[PLAYERS] = {
+  {.connected = 1, .accel = AT_REST, .nunchuk_accel = AT_REST, .battery = 1},
+  {.accel = AT_REST, .nunchuk_accel = AT_REST, .battery = 1},
+  {.accel = AT_REST, .nunchuk_accel = AT_REST, .battery = 1},
+  {.accel = AT_REST, .nunchuk_accel = AT_REST, .battery = 1},
 };
-
-static const float DISTANCE_METERS = 1.5f;
-
 static struct {
-  uint32_t held;
-  uint32_t pulsed;
-  uint64_t pulse_until;
-  float pointer_x, pointer_y;
-  float stick_x, stick_y;
-  int standing;
+  int enabled, standing;
   float kilograms, lean_x, lean_y;
-} state = {.kilograms = 60};
-static uint32_t previous[CHANNELS];
+} board = {.enabled = 1, .kilograms = 60};
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 
-void input_hold(uint32_t buttons, int down) {
+static int valid(int player) { return player >= 0 && player < PLAYERS; }
+
+void input_connect(int player, int connected) {
+  if (!valid(player)) return;
   pthread_mutex_lock(&lock);
-  state.held = down ? state.held | buttons : state.held & ~buttons;
+  players[player].connected = connected;
   pthread_mutex_unlock(&lock);
 }
 
-void input_press(uint32_t buttons) {
+int input_connected(int player) {
+  if (!valid(player)) return 0;
   pthread_mutex_lock(&lock);
-  state.pulsed |= buttons;
-  state.pulse_until = time_base() + PRESS_MS * TICKS_PER_MS;
+  int connected = players[player].connected;
+  pthread_mutex_unlock(&lock);
+  return connected;
+}
+
+void input_hold(int player, uint32_t buttons, int down) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  Player *p = &players[player];
+  p->held = down ? p->held | buttons : p->held & ~buttons;
   pthread_mutex_unlock(&lock);
 }
 
-void input_pointer(float x, float y) {
+void input_press(int player, uint32_t buttons) {
+  if (!valid(player)) return;
   pthread_mutex_lock(&lock);
-  state.pointer_x = x;
-  state.pointer_y = y;
+  players[player].pulsed |= buttons;
+  players[player].pulse_until = time_base() + PRESS_MS * TICKS_PER_MS;
   pthread_mutex_unlock(&lock);
 }
 
-void input_pointer_now(float *x, float *y) {
+void input_pointer(int player, float x, float y) {
+  if (!valid(player)) return;
   pthread_mutex_lock(&lock);
-  *x = state.pointer_x;
-  *y = state.pointer_y;
+  players[player].pointer_x = x;
+  players[player].pointer_y = y;
   pthread_mutex_unlock(&lock);
+}
+
+void input_stick(int player, float x, float y) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].sticks[0] = x;
+  players[player].sticks[1] = y;
+  pthread_mutex_unlock(&lock);
+}
+
+// Called with the lock held.
+static uint32_t current_buttons(Player *p) {
+  if (p->pulsed && time_base() >= p->pulse_until) p->pulsed = 0;
+  return p->held | p->pulsed | p->pad;
+}
+
+void input_pad_buttons(int player, uint32_t buttons) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].pad = buttons;
+  pthread_mutex_unlock(&lock);
+}
+
+void input_classic_sticks(int player, const float left[2], const float right[2]) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  memcpy(players[player].sticks, left, sizeof(float) * 2);
+  memcpy(players[player].sticks + 2, right, sizeof(float) * 2);
+  pthread_mutex_unlock(&lock);
+}
+
+static const char *attachment_names[ATTACHMENT_KINDS] = {"none", "nunchuk", "classic"};
+
+const char *input_attachment_name(Attachment attachment) {
+  return attachment >= 0 && attachment < ATTACHMENT_KINDS ? attachment_names[attachment] : "?";
+}
+
+int input_attachment_named(const char *name, Attachment *out) {
+  for (int i = 0; i < ATTACHMENT_KINDS; i++) {
+    if (!strcmp(name, attachment_names[i])) {
+      *out = (Attachment)i;
+      return 1;
+    }
+  }
+  return 0;
+}
+
+// Until the settings (controllers.c) or the player plug one in, a remote has a Classic
+// Controller. Called with the lock held.
+static Attachment attachment_of(Player *p) { return p->attachment_chosen ? p->attachment : ATTACHMENT_CLASSIC; }
+
+void input_snapshot(int player, PlayerState *out) {
+  memset(out, 0, sizeof *out);
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  Player *p = &players[player];
+  uint64_t now = time_base();
+  out->buttons = current_buttons(p);
+  out->pointer_x = p->pointer_x;
+  out->pointer_y = p->pointer_y;
+  out->roll = p->roll;
+  memcpy(out->sticks, p->sticks, sizeof out->sticks);
+  memcpy(out->accel, p->accel, sizeof out->accel);
+  memcpy(out->nunchuk_stick, p->nunchuk_stick, sizeof out->nunchuk_stick);
+  memcpy(out->nunchuk_accel, p->nunchuk_accel, sizeof out->nunchuk_accel);
+  out->attachment = attachment_of(p);
+  memcpy(out->gyro, p->gyro, sizeof out->gyro);
+  out->motionplus = p->motionplus;
+  p->snapshots++;
+  if (p->sampled_at != p->sample_seen) {
+    p->sample_seen = p->sampled_at;
+    if (p->ages_count < (int)(sizeof p->ages / sizeof *p->ages)) p->ages[p->ages_count++] = (float)(now - p->sampled_at) / TICKS_PER_MS;
+  }
+  // A shake swings the remote back and forth along its length.
+  if (now < p->shake_until) out->accel[1] += (now / (SHAKE_SWING_MS * TICKS_PER_MS)) % 2 ? SHAKE_G : -SHAKE_G;
+  pthread_mutex_unlock(&lock);
+}
+
+void input_motion(int player, const float accel[3], float roll) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  memcpy(players[player].accel, accel, sizeof players[player].accel);
+  players[player].roll = roll;
+  pthread_mutex_unlock(&lock);
+}
+
+void input_accel(int player, const float accel[3]) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  memcpy(players[player].accel, accel, sizeof players[player].accel);
+  pthread_mutex_unlock(&lock);
+}
+
+void input_roll(int player, float roll) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].roll = roll;
+  pthread_mutex_unlock(&lock);
+}
+
+void input_nunchuk(int player, float stick_x, float stick_y, const float accel[3]) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].nunchuk_stick[0] = stick_x;
+  players[player].nunchuk_stick[1] = stick_y;
+  memcpy(players[player].nunchuk_accel, accel, sizeof players[player].nunchuk_accel);
+  pthread_mutex_unlock(&lock);
+}
+
+void input_nunchuk_stick(int player, float x, float y) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].nunchuk_stick[0] = x;
+  players[player].nunchuk_stick[1] = y;
+  pthread_mutex_unlock(&lock);
+}
+
+void input_nunchuk_accel(int player, const float accel[3]) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  memcpy(players[player].nunchuk_accel, accel, sizeof players[player].nunchuk_accel);
+  pthread_mutex_unlock(&lock);
+}
+
+void input_shake(int player) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].shake_until = time_base() + SHAKE_MS * TICKS_PER_MS;
+  pthread_mutex_unlock(&lock);
+}
+
+void input_attach(int player, Attachment attachment) {
+  if (!valid(player) || attachment < 0 || attachment >= ATTACHMENT_KINDS) return;
+  pthread_mutex_lock(&lock);
+  players[player].attachment = attachment;
+  players[player].attachment_chosen = 1;
+  pthread_mutex_unlock(&lock);
+}
+
+void input_attach_motionplus(int player, int attached) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].motionplus = attached != 0;
+  pthread_mutex_unlock(&lock);
+}
+
+int input_motionplus(int player) {
+  if (!valid(player)) return 0;
+  pthread_mutex_lock(&lock);
+  int attached = players[player].motionplus;
+  pthread_mutex_unlock(&lock);
+  return attached;
+}
+
+void input_gyro(int player, const float gyro[3]) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  memcpy(players[player].gyro, gyro, sizeof players[player].gyro);
+  pthread_mutex_unlock(&lock);
+}
+
+Attachment input_attachment(int player) {
+  if (!valid(player)) return ATTACHMENT_NONE;
+  pthread_mutex_lock(&lock);
+  Attachment attachment = attachment_of(&players[player]);
+  pthread_mutex_unlock(&lock);
+  return attachment;
+}
+
+void input_set_outputs(int player, int rumble, uint8_t lights) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].outputs.rumble = rumble;
+  players[player].outputs.lights = lights;
+  pthread_mutex_unlock(&lock);
+}
+
+PlayerOutputs input_outputs(int player) {
+  PlayerOutputs outputs = {0};
+  if (!valid(player)) return outputs;
+  pthread_mutex_lock(&lock);
+  outputs = players[player].outputs;
+  pthread_mutex_unlock(&lock);
+  return outputs;
+}
+
+void input_battery(int player, float level) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].battery = level < 0 ? 0 : level > 1 ? 1 : level;
+  pthread_mutex_unlock(&lock);
+}
+
+float input_battery_level(int player) {
+  if (!valid(player)) return 0;
+  pthread_mutex_lock(&lock);
+  float level = players[player].battery;
+  pthread_mutex_unlock(&lock);
+  return level;
+}
+
+uint32_t input_buttons(int player) {
+  if (!valid(player)) return 0;
+  pthread_mutex_lock(&lock);
+  uint32_t buttons = current_buttons(&players[player]);
+  pthread_mutex_unlock(&lock);
+  return buttons;
+}
+
+void input_board_enable(int enabled) {
+  pthread_mutex_lock(&lock);
+  board.enabled = enabled;
+  pthread_mutex_unlock(&lock);
+}
+
+int input_board_enabled(void) {
+  pthread_mutex_lock(&lock);
+  int enabled = board.enabled;
+  pthread_mutex_unlock(&lock);
+  return enabled;
 }
 
 void input_board(int standing, float kilograms, float lean_x, float lean_y) {
   pthread_mutex_lock(&lock);
-  state.standing = standing;
-  state.kilograms = kilograms;
-  state.lean_x = lean_x;
-  state.lean_y = lean_y;
+  board.standing = standing;
+  board.kilograms = kilograms;
+  board.lean_x = lean_x;
+  board.lean_y = lean_y;
   pthread_mutex_unlock(&lock);
 }
 
 void input_board_nudge(float lean_x, float lean_y) {
   pthread_mutex_lock(&lock);
-  state.lean_x = lean_x;
-  state.lean_y = lean_y;
+  board.lean_x = lean_x;
+  board.lean_y = lean_y;
   pthread_mutex_unlock(&lock);
 }
 
 void input_board_toggle(void) {
   pthread_mutex_lock(&lock);
-  state.standing = !state.standing;
+  board.standing = !board.standing;
   pthread_mutex_unlock(&lock);
 }
 
-static void write_float(uint32_t address, float value) {
-  union { float f; uint32_t bits; } word = {.f = value};
-  wr32(address, word.bits);
-}
-
-static void write_double(uint32_t address, double value) {
-  union { double d; uint64_t bits; } word = {.d = value};
-  wr32(address, (uint32_t)(word.bits >> 32));
-  wr32(address + 4, (uint32_t)word.bits);
-}
-
-static uint32_t current_buttons(void) {
-  if (state.pulsed && time_base() >= state.pulse_until) state.pulsed = 0;
-  return state.held | state.pulsed;
-}
-
-void input_stick(float x, float y) {
+float input_board_kilograms(void) {
   pthread_mutex_lock(&lock);
-  state.stick_x = x;
-  state.stick_y = y;
+  float kilograms = board.kilograms;
   pthread_mutex_unlock(&lock);
+  return kilograms;
 }
 
-// The left stick, then the right, which nothing moves yet.
-void input_sticks(float out[4]) {
+double input_board_total(void) {
   pthread_mutex_lock(&lock);
-  out[0] = state.stick_x;
-  out[1] = state.stick_y;
-  out[2] = out[3] = 0;
+  double total = board.standing ? board.kilograms : 0;
   pthread_mutex_unlock(&lock);
-}
-
-uint32_t input_buttons(void) {
-  pthread_mutex_lock(&lock);
-  uint32_t buttons = current_buttons();
-  pthread_mutex_unlock(&lock);
-  return buttons;
-}
-
-static void fill_common(uint32_t out, int channel, uint32_t buttons) {
-  for (uint32_t i = 0; i < STATUS_BYTES; i += 4) wr32(out + i, 0);
-  wr32(out + HOLD, buttons);
-  wr32(out + TRIGGER, buttons & ~previous[channel]);
-  wr32(out + RELEASE, previous[channel] & ~buttons);
-  previous[channel] = buttons;
-}
-
-static void fill_remote(uint32_t out) {
-  fill_common(out, CHANNEL_REMOTE, current_buttons());
-  write_float(out + ACCELERATION + 4, -1);  // Held still, pointing at the screen.
-  write_float(out + ACCELERATION_SIZE, 1);
-  write_float(out + POINTER, state.pointer_x);
-  write_float(out + POINTER + 4, state.pointer_y);
-  write_float(out + HORIZON, 1);
-  write_float(out + DISTANCE, DISTANCE_METERS);
-  wr8(out + DEVICE_TYPE, DEVICE_REMOTE);
-  wr8(out + ERROR, 0);
-  wr8(out + POINTER_VALID, POINTER_SEEN);
-  wr8(out + DATA_FORMAT, CORE_ACCELERATION_POINTER);
+  return total;
 }
 
 // Sensors sit at front right, back right, front left, back left.
-static void read_sensors(double sensors[4]) {
-  double total = state.standing ? state.kilograms : 0;
-  double right = (1 + state.lean_x) / 2, front = (1 + state.lean_y) / 2;
+void input_board_now(double sensors[4]) {
+  pthread_mutex_lock(&lock);
+  double total = board.standing ? board.kilograms : 0;
+  double right = (1 + board.lean_x) / 2, front = (1 + board.lean_y) / 2;
+  pthread_mutex_unlock(&lock);
   sensors[0] = total * right * front;
   sensors[1] = total * right * (1 - front);
   sensors[2] = total * (1 - right) * front;
   sensors[3] = total * (1 - right) * (1 - front);
-}
-
-void input_board_now(double kilograms[4]) {
-  pthread_mutex_lock(&lock);
-  read_sensors(kilograms);
-  pthread_mutex_unlock(&lock);
-}
-
-static void fill_board(uint32_t out) {
-  fill_common(out, CHANNEL_BOARD, 0);
-  wr8(out + DEVICE_TYPE, DEVICE_BOARD);
-  double sensors[4], total = state.standing ? state.kilograms : 0;
-  read_sensors(sensors);
-  write_double(out + BOARD_TOTAL, total);
-  for (uint32_t i = 0; i < 4; i++) {
-    write_double(out + BOARD_SENSORS + i * 8, sensors[i]);
-    write_double(out + BOARD_AVERAGES + i * 8, sensors[i]);
-  }
-}
-
-// KPADRead(channel, statuses, count): newest status first, returns how many.
-// Only a game built for the Balance Board has this flag. Others scan every channel
-// and shouldn't find a device they know nothing about.
-static int has_board(void) { return title->calibration_flag != 0; }
-
-static int is_connected(int channel) { return channel == CHANNEL_REMOTE || (channel == CHANNEL_BOARD && has_board()); }
-
-void input_read(void) {
-  int channel = (int)cpu.r[3];
-  uint32_t out = cpu.r[4];
-  pthread_mutex_lock(&lock);
-  if (channel == CHANNEL_REMOTE) fill_remote(out);
-  else if (channel == CHANNEL_BOARD && has_board()) fill_board(out);
-  pthread_mutex_unlock(&lock);
-  cpu.r[3] = is_connected(channel);
-}
-
-// WPADProbe(channel, type): 0 and a device type if something is connected.
-void input_probe(void) {
-  int channel = (int)cpu.r[3];
-  uint32_t type = cpu.r[4];
-  int connected = is_connected(channel);
-  if (type) wr32(type, !connected ? NO_DEVICE : channel == CHANNEL_BOARD ? DEVICE_BOARD : DEVICE_REMOTE);
-  cpu.r[3] = connected ? 0 : (uint32_t)NOT_CONNECTED;
-}
-
-// WPADRead(channel, status). Only the game's board code calls this directly.
-void input_board_sensors(void) {
-  uint32_t out = cpu.r[4];
-  double sensors[4];
-  pthread_mutex_lock(&lock);
-  read_sensors(sensors);
-  pthread_mutex_unlock(&lock);
-  for (uint32_t i = 0; i < SENSOR_STATUS_BYTES; i++) wr8(out + i, 0);
-  wr8(out + SENSOR_DEVICE, DEVICE_BOARD);
-  for (uint32_t i = 0; i < 4; i++) wr16(out + SENSOR_RAW + i * 2, (uint16_t)(sensors[i] * RAW_PER_KILOGRAM));
-  wr8(out + SENSOR_TEMPERATURE, ROOM_TEMPERATURE);
-  wr8(out + SENSOR_BATTERY, BATTERY_FULL);
-}
-
-// Asks for calibration data with a callback that only raises this flag.
-void input_board_calibration(void) {
-  uint32_t buffer = cpu.r[4], bytes = cpu.r[6];
-  for (uint32_t i = 0; i < bytes; i++) wr8(buffer + i, 0);
-  wr32(title->calibration_flag, 1);
-  cpu.r[3] = 0;
-}
-
-// WBCRead(status, kilograms, count): the four sensors, as doubles.
-void input_board_weights(void) {
-  uint32_t out = cpu.r[4], count = cpu.r[5];
-  double sensors[4];
-  pthread_mutex_lock(&lock);
-  read_sensors(sensors);
-  pthread_mutex_unlock(&lock);
-  for (uint32_t i = 0; i < count && i < 4; i++) write_double(out + i * 8, sensors[i]);
-  cpu.r[3] = 0;
 }
 
 static uint32_t button_named(const char *name) {
@@ -243,6 +357,7 @@ static uint32_t button_named(const char *name) {
     {"left", BUTTON_LEFT}, {"right", BUTTON_RIGHT}, {"down", BUTTON_DOWN}, {"up", BUTTON_UP}, {"plus", BUTTON_PLUS},
     {"two", BUTTON_TWO}, {"one", BUTTON_ONE}, {"b", BUTTON_B}, {"a", BUTTON_A}, {"minus", BUTTON_MINUS}, {"home", BUTTON_HOME},
     {"l", BUTTON_CLASSIC_L}, {"r", BUTTON_CLASSIC_R}, {"zl", BUTTON_CLASSIC_ZL}, {"zr", BUTTON_CLASSIC_ZR},
+    {"c", BUTTON_NUNCHUK_C}, {"z", BUTTON_NUNCHUK_Z},
   };
   for (size_t i = 0; i < sizeof names / sizeof names[0]; i++) {
     if (!strcmp(name, names[i].name)) return names[i].bit;
@@ -250,41 +365,77 @@ static uint32_t button_named(const char *name) {
   return 0;
 }
 
-// One command per line: press a, hold a, release a, pointer x y, board on kg x y, board off,
-// reset to press the console's reset button, shot <file> to save the next picture,
-// record <frames> <file> to record frames for recomp/tools/replay, record-sound <frames>
-// <file> to record the audio processor's work for recomp/tools/sound_bench.py.
-static void run_command(const char *line) {
-  char word[16], name[16], path[1024];
-  float x = 0, y = 0, kilograms = state.kilograms;
-  int first, last;
-  if (sscanf(line, "press %15s", name) == 1) input_press(button_named(name));
-  else if (sscanf(line, "hold %15s", name) == 1) input_hold(button_named(name), 1);
-  else if (sscanf(line, "release %15s", name) == 1) input_hold(button_named(name), 0);
-  else if (sscanf(line, "pointer %f %f", &x, &y) == 2) input_pointer(x, y);
-  else if (sscanf(line, "stick %f %f", &x, &y) == 2) input_stick(x, y);
-  else if (!strncmp(line, "reset", 5)) reset_button_press();
-  else if (sscanf(line, "board %15s %f %f %f", word, &kilograms, &x, &y) >= 1) {
+// The controls' commands: press a, hold a, release a, pointer x y, stick x y, board on
+// kg x y, board off, connect, disconnect, accel x y z, roll degrees (held still), shake, nunchuk
+// stick x y, nunchuk accel x y z, attach none|nunchuk|classic, motionplus on|off, gyro x y z
+// (degrees a second). Any of them but board may start with a player, as in "p2 press a";
+// without one it is player 1's.
+int input_run_command(const char *line) {
+  char word[16], name[16];
+  float x = 0, y = 0, z = 0, kilograms = input_board_kilograms();
+  Attachment attachment;
+  int player = 0, skipped = 0, number;
+  if (sscanf(line, " p%d %n", &number, &skipped) == 1 && skipped) {
+    if (number < 1 || number > PLAYERS) return 0;
+    player = number - 1;
+    line += skipped;
+  }
+  uint32_t button;
+  if (sscanf(line, "press %15s", name) == 1 && (button = button_named(name))) input_press(player, button);
+  else if (sscanf(line, "hold %15s", name) == 1 && (button = button_named(name))) input_hold(player, button, 1);
+  else if (sscanf(line, "release %15s", name) == 1 && (button = button_named(name))) input_hold(player, button, 0);
+  else if (sscanf(line, "pointer %f %f", &x, &y) == 2) input_pointer(player, x, y);
+  else if (sscanf(line, "stick %f %f", &x, &y) == 2) input_stick(player, x, y);
+  else if (sscanf(line, "accel %f %f %f", &x, &y, &z) == 3) input_accel(player, (float[3]){x, y, z});
+  else if (sscanf(line, "roll %f", &x) == 1) {
+    // Turned and otherwise still: gravity moves round to the remote's side as well, which
+    // the game uses with the camera's picture to keep the pointer level.
+    float turn = x * (float)M_PI / 180;
+    input_motion(player, (float[3]){-sinf(turn), 0, cosf(turn)}, turn);
+  }
+  else if (!strncmp(line, "shake", 5)) input_shake(player);
+  else if (sscanf(line, "nunchuk stick %f %f", &x, &y) == 2) input_nunchuk_stick(player, x, y);
+  else if (sscanf(line, "nunchuk accel %f %f %f", &x, &y, &z) == 3) {
+    input_nunchuk_accel(player, (float[3]){x, y, z});
+  } else if (sscanf(line, "attach %15s", name) == 1 && input_attachment_named(name, &attachment)) input_attach(player, attachment);
+  else if (sscanf(line, "motionplus %15s", name) == 1 && (!strcmp(name, "on") || !strcmp(name, "off"))) {
+    input_attach_motionplus(player, !strcmp(name, "on"));
+  } else if (sscanf(line, "gyro %f %f %f", &x, &y, &z) == 3) input_gyro(player, (float[3]){x, y, z});
+  else if (!strncmp(line, "connect", 7)) input_connect(player, 1);
+  else if (!strncmp(line, "disconnect", 10)) input_connect(player, 0);
+  else if (!skipped && sscanf(line, "board %15s %f %f %f", word, &kilograms, &x, &y) >= 1 && (!strcmp(word, "on") || !strcmp(word, "off"))) {
     input_board(!strcmp(word, "on"), kilograms, x, y);
-  } else if (!strncmp(line, "dump", 4)) gx_inspect_dump();
-  else if (sscanf(line, "record-sound %d %1023s", &first, path) == 2) dsp_record_request(first, path);
-  else if (sscanf(line, "record %d %1023s", &first, path) == 2) gx_record_request(first, path);
-  else if (sscanf(line, "skip %d %d", &first, &last) == 2) gx_inspect_skip(first, last);
-  else if (sscanf(line, "shot %1023s", path) == 1) gx_shot(path);
-  else fprintf(stderr, "control: unknown command: %s", line);
+  } else return 0;
+  return 1;
 }
 
-static void *control_loop(void *path) {
-  // Opened for writing too, so it stays open between senders.
-  FILE *pipe_file = fdopen(open(path, O_RDWR), "r");
-  char line[1200];  // Room for a shot command with a long path.
-  while (pipe_file && fgets(line, sizeof line, pipe_file)) run_command(line);
-  return 0;
+void input_pad_sampled(int player) {
+  if (!valid(player)) return;
+  pthread_mutex_lock(&lock);
+  players[player].sampled_at = time_base();
+  pthread_mutex_unlock(&lock);
 }
 
-void input_start_control_pipe(const char *path) {
-  static pthread_t thread;
-  unlink(path);
-  mkfifo(path, 0600);
-  pthread_create(&thread, 0, control_loop, (void *)path);
+static int by_size(const void *a, const void *b) {
+  float x = *(const float *)a, y = *(const float *)b;
+  return (x > y) - (x < y);
+}
+
+InputStats input_stats(int player) {
+  InputStats stats = {0};
+  if (!valid(player)) return stats;
+  static float ages[1024];
+  pthread_mutex_lock(&lock);
+  Player *p = &players[player];
+  stats.snapshots = p->snapshots;
+  stats.samples_seen = p->ages_count;
+  memcpy(ages, p->ages, sizeof(float) * (size_t)p->ages_count);
+  p->snapshots = p->ages_count = 0;
+  pthread_mutex_unlock(&lock);
+  if (stats.samples_seen) {
+    qsort(ages, (size_t)stats.samples_seen, sizeof *ages, by_size);
+    stats.age_p50_ms = ages[stats.samples_seen / 2];
+    stats.age_p99_ms = ages[(stats.samples_seen * 99) / 100];
+  }
+  return stats;
 }

@@ -3,10 +3,12 @@
 // carries the HID reports. The kernel's HID layer and its hid-wiimote driver never see
 // the remote, so nothing else sends it reports. Dolphin's IOLinux.cpp works the same way.
 //
-// Remotes reach the console two ways:
+// Remotes reach the console three ways:
 //   - A remote paired with this machine (SYNC; see recomp/tools/remotes_setup.sh) calls
-//     it when any button is pressed. We listen on both PSMs to answer, which needs
-//     bluetoothd's input plugin off, as that setup script does.
+//     it when any button is pressed. With bluetoothd's input plugin on, as it is by
+//     default, bluetoothd answers, and the remote arrives through the kernel's HID
+//     (remote_link_hidraw.c). With it off (remotes_setup.sh --sockets), we listen on both
+//     PSMs and answer here.
 //   - A remote in pairing mode (1+2, or SYNC) is found by a search, which runs when the
 //     game searches, and once at start. It's linked for this session only.
 //
@@ -27,6 +29,7 @@
 #include <unistd.h>
 
 #include "remote_link.h"
+#include "remote_link_hidraw.h"
 
 // From the kernel's Bluetooth headers, so there's no library to install.
 enum { AF_BT = 31, PROTO_L2CAP = 0, PROTO_HCI = 1, PSM_CONTROL = 0x11, PSM_INTERRUPT = 0x13 };
@@ -169,8 +172,18 @@ static void *answer_calls(void *unused) {
   (void)unused;
   int control = l2cap_listen(PSM_CONTROL), interrupt = l2cap_listen(PSM_INTERRUPT);
   if (control < 0 || interrupt < 0) {
-    fprintf(stderr, "remotes: can't answer remotes that call (%s), so press 1 and 2 to link one.\n"
-                    "remotes: recomp/tools/remotes_setup.sh lets paired remotes wake the console\n", strerror(errno));
+    // In use, or not ours to take: bluetoothd's input plugin answers them, and they come
+    // through HID (remote_link_hidraw.c). Only remotes_setup.sh --sockets answers them here.
+    // With the plugin off for --sockets, though, nothing else answers them.
+    int why = errno, sockets_setup = !access("/etc/systemd/system/bluetooth.service.d/wii-recomp.conf", F_OK);
+    if (why == EACCES && sockets_setup) {
+      fprintf(stderr, "remotes: can't answer remotes that call, as this build hasn't been allowed to: "
+                      "run sudo recomp/tools/remotes_setup.sh --sockets again, or press 1 and 2 to link one\n");
+    } else if (why != EADDRINUSE && why != EACCES) {
+      fprintf(stderr, "remotes: can't answer remotes that call: %s\n", strerror(why));
+    }
+    if (control >= 0) close(control);
+    if (interrupt >= 0) close(interrupt);
     return 0;
   }
   // A remote opens control, then interrupt. The two are matched by address.
@@ -329,5 +342,6 @@ void link_backend_start(int mode) {
   pthread_t thread;
   pthread_create(&thread, 0, answer_calls, 0);
   pthread_detach(thread);
+  link_hidraw_start();
   if (!taken) link_backend_search();  // A remote already in pairing mode links at once.
 }
