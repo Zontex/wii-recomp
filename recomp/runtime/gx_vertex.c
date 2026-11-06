@@ -172,6 +172,8 @@ enum { ARRAYS = 12 };
 // While a display list's draw is decoded to be kept, the lowest and highest index read
 // from each array, so the memory it came from can be watched.
 static struct { int on; uint32_t low[ARRAYS], high[ARRAYS], used; } spans;
+// Each array's base and stride, read once a draw: nothing writes them while it decodes.
+static uint32_t array_base[ARRAYS], array_stride[ARRAYS];
 
 // Returns where an attribute's data is, in the stream or in an array.
 static const uint8_t *locate(const uint8_t **p, int kind, int array, uint32_t direct) {
@@ -187,7 +189,7 @@ static const uint8_t *locate(const uint8_t **p, int kind, int array, uint32_t di
     if (!(spans.used & (1u << array)) || index > spans.high[array]) spans.high[array] = index;
     spans.used |= 1u << array;
   }
-  return host((gx.cp[CP_ARRAY_BASE + array] + index * (gx.cp[CP_ARRAY_STRIDE + array] & 0xff)) | 0x80000000u);
+  return host((array_base[array] + index * array_stride[array]) | 0x80000000u);
 }
 
 // Several components of one type, the type chosen once rather than for each.
@@ -262,28 +264,36 @@ int gx_read_vertices(const uint8_t *data, int format, int count, Vertex *out) {
   uint32_t position_bytes = (uint32_t)f.position_components * component_bytes(f.position_type);
   uint32_t texture_bytes[TEXTURES];
   for (int i = 0; i < TEXTURES; i++) texture_bytes[i] = (uint32_t)f.texture_components[i] * component_bytes(f.texture_type[i]);
+  for (int a = 0; a < ARRAYS; a++) array_base[a] = gx.cp[CP_ARRAY_BASE + a], array_stride[a] = gx.cp[CP_ARRAY_STRIDE + a] & 0xff;
+  // The parts the format has, in the order they come: a vertex then looks only at those.
+  int coordinate_matrices[TEXTURES], coordinate_matrix_count = 0, coordinates[TEXTURES], coordinate_count = 0, colors[2], color_count = 0;
+  for (int i = 0; i < TEXTURES; i++) {
+    if (f.texture_index[i]) coordinate_matrices[coordinate_matrix_count++] = i;
+    if (f.texture[i] != KIND_NONE) coordinates[coordinate_count++] = i;
+  }
+  for (int i = 0; i < 2; i++) {
+    if (f.color[i] != KIND_NONE) colors[color_count++] = i;
+  }
   const uint8_t *p = data;
   int kept = 0;
   for (int n = 0; n < count; n++) {
     Vertex *v = &out[kept];
     *v = start;
     if (f.position_index) v->matrix[VERTEX_MATRIX_POSITION] = *p++ & MATRIX_INDEX_MASK;
-    for (int i = 0; i < TEXTURES; i++) {
-      if (f.texture_index[i]) v->matrix[VERTEX_MATRIX_COORDINATE + i] = *p++ & MATRIX_INDEX_MASK;
-    }
+    for (int k = 0; k < coordinate_matrix_count; k++) v->matrix[VERTEX_MATRIX_COORDINATE + coordinate_matrices[k]] = *p++ & MATRIX_INDEX_MASK;
     int skipped = skips_vertex(p, f.position);
     if (f.position != KIND_NONE) {
       const uint8_t *source = locate(&p, f.position, ARRAY_POSITION, position_bytes);
       if (source) read_components(source, f.position_type, f.position_scale, f.position_components, v->position);
     }
     if (f.normal != KIND_NONE) read_normals(&p, &f, v);
-    for (int i = 0; i < 2; i++) {
-      if (f.color[i] == KIND_NONE) continue;
+    for (int k = 0; k < color_count; k++) {
+      int i = colors[k];
       const uint8_t *source = locate(&p, f.color[i], ARRAY_COLOR + i, color_bytes(f.color_type[i]));
       if (source) read_color(source, f.color_type[i], v->color[color_slot[i]]);
     }
-    for (int i = 0; i < TEXTURES; i++) {
-      if (f.texture[i] == KIND_NONE) continue;
+    for (int k = 0; k < coordinate_count; k++) {
+      int i = coordinates[k];
       const uint8_t *source = locate(&p, f.texture[i], ARRAY_TEXTURE + i, texture_bytes[i]);
       if (source) read_components(source, f.texture_type[i], f.texture_scale[i], f.texture_components[i], v->uv[i]);
     }
