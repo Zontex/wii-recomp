@@ -4,7 +4,9 @@
 System titles such as the Wii Menu aren't on a disc. Their program is one of the title's
 contents, and the menu's is an unusual one: its entry is a physical address, and its code
 sits in a section marked as data. This writes a copy with those fixed, plus an empty disc
-for the runtime. The storage folder is only read.
+for the runtime. A channel's boot content is often only Nintendo's loader, which reads
+the channel's real program from another content: then that program is written instead.
+The storage folder is only read.
 
 Usage: recomp/translate/prepare_title.py <Wii storage folder> <title high> <title low> <output folder>
 Example: recomp/translate/prepare_title.py /path/to/NAND 00000001 00000002 recomp/build-menu/disc
@@ -97,6 +99,43 @@ def content_files(storage, tmd, content):
             yield path.name, data
 
 
+LOADER_FROM = 0x81000000  # A boot program running from here only loads another: Nintendo's channel loader.
+
+
+def looks_like_program(data):
+    """Whether data starts with a plausible DOL header: sections inside the file and MEM1,
+    and an entry inside a text section."""
+    if len(data) < HEADER_WORDS * 4:
+        return False
+    header = struct.unpack_from(f">{HEADER_WORDS}I", data)
+    text = []
+    for section in range(ALL_SECTIONS):
+        offset, address, size = header[OFFSETS + section], header[ADDRESSES + section], header[SIZES + section]
+        if not size:
+            continue
+        if offset < HEADER_WORDS * 4 or offset + size > len(data) or not CACHED_MEMORY <= address < CACHED_MEMORY + 0x1800000:
+            return False
+        if section < TEXT_SECTIONS:
+            text.append((address, size))
+    return any(start <= header[ENTRY] < start + size for start, size in text)
+
+
+def loaded_program(storage, tmd, content, boot):
+    """The program a channel loader loads, when the boot content is one: Nintendo's NAND
+    loader runs from high in MEM1 and reads the title's one other program from its
+    contents, then jumps into it. That program is what gets translated. None otherwise."""
+    marked = program_with_code_marked(boot)
+    header = struct.unpack_from(f">{HEADER_WORDS}I", marked)
+    if header[ENTRY] < LOADER_FROM:
+        return None
+    programs = [(name, data) for name, data in content_files(storage, tmd, content)
+                if data is not boot and looks_like_program(data) and data != boot]
+    if len(programs) != 1:
+        return None
+    print(f"the boot content is a loader; translating {programs[0][0]}, the program it loads")
+    return programs[0][1]
+
+
 def write_modules(storage, tmd, content, system):
     """Code modules the title loads at run time, unpacked, for the translator."""
     folder = system / "modules"
@@ -116,7 +155,9 @@ def main():
     system = output / "sys"
     system.mkdir(parents=True, exist_ok=True)
     (output / "tmd.bin").write_bytes(tmd)
-    (system / "main.dol").write_bytes(program_with_code_marked((content / boot_content_name(tmd)).read_bytes()))
+    boot = (content / boot_content_name(tmd)).read_bytes()
+    loaded = loaded_program(storage, tmd, content, boot)
+    (system / "main.dol").write_bytes(loaded if loaded else program_with_code_marked(boot))  # A loaded program is a usual one.
     (system / "boot.bin").write_bytes(bytes(EMPTY_BOOT_BYTES))
     (system / "fst.bin").write_bytes(EMPTY_FILE_TABLE)
     (output / "files").mkdir(exist_ok=True)

@@ -161,7 +161,7 @@ def find_one(finder, entry, found):
         if len(matches) == 1:
             return matches[0]
     matches = finder.exact(entry["hashes"])
-    if len(matches) == 1:
+    if len(matches) == 1 or (matches and entry.get("every_copy")):
         return matches[0]
     return None if matches else finder.similar(entry["hashes"])
 
@@ -225,6 +225,10 @@ def resolve(program, functions, entries):
                 idle_loops[loop] = entry["reason"]
         if "body" in entry:
             replaced[address] = (entry["reason"], entry["body"].format(**values))
+            # Some programs link the same small function twice, in their start-up code and in
+            # their OS library; with every_copy, each exact copy is replaced alike.
+            for copy in finder.exact(entry["hashes"]) if entry.get("every_copy") else []:
+                replaced[copy] = replaced[address]
     return replaced, idle_loops, values
 
 
