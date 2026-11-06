@@ -11,6 +11,7 @@
 
 #define VERTEX_RING_BYTES (32u * 1024u * 1024u)
 #define CONSTANT_RING_BYTES (16u * 1024u * 1024u)
+#define INDEX_RING_BYTES (4u * 1024u * 1024u)
 #define STAGING_RING_BYTES (64u * 1024u * 1024u)
 #define VALIDATION_LAYER "VK_LAYER_KHRONOS_validation"
 #define PORTABILITY_ENUMERATION "VK_KHR_portability_enumeration"
@@ -304,6 +305,7 @@ void vk_create_frames(void) {
     frame->vertices = vk_create_ring(VERTEX_RING_BYTES, VK_BUFFER_USAGE_VERTEX_BUFFER_BIT);
     frame->constants = vk_create_ring(CONSTANT_RING_BYTES, VK_BUFFER_USAGE_UNIFORM_BUFFER_BIT);
     frame->staging = vk_create_ring(STAGING_RING_BYTES, VK_BUFFER_USAGE_TRANSFER_SRC_BIT | VK_BUFFER_USAGE_TRANSFER_DST_BIT);
+    frame->indices = vk_create_ring(INDEX_RING_BYTES, VK_BUFFER_USAGE_INDEX_BUFFER_BIT);
     VkDescriptorSetAllocateInfo set = {.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO, .descriptorPool = vk.descriptor_pool,
                                        .descriptorSetCount = 1, .pSetLayouts = &vk.set_layouts[SET_CONSTANTS]};
     vk_check(vkAllocateDescriptorSets(vk.device, &set, &frame->constant_set), "allocating a descriptor set");
@@ -465,7 +467,7 @@ void vk_frame_begin(Frame *frame) {
   frame->retired_count = 0;
   for (int i = 0; i < frame->texture_pool_count; i++) vk_check(vkResetDescriptorPool(vk.device, frame->texture_pools[i], 0), "resetting a descriptor pool");
   frame->texture_sets_used = 0;
-  frame->vertices.used = frame->constants.used = frame->staging.used = 0;
+  frame->vertices.used = frame->constants.used = frame->staging.used = frame->indices.used = 0;
   frame->upload_started = 0;
   vk_check(vkResetCommandPool(vk.device, frame->pool, 0), "resetting commands");
   VkCommandBufferBeginInfo begin = {.sType = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO, .flags = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT};

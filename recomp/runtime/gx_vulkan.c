@@ -104,7 +104,25 @@ static Binding bindings[MAX_TEXTURE_MAPS];
 static VkDescriptorImageInfo maps_set[MAX_TEXTURE_MAPS];
 static Ring shape_indices;  // Strips, fans and quads as triangles: Metal has no fans, and one kind of pipeline serves all.
 static VkDeviceSize vertex_bytes, reserved_at;
-static int pass_open, indices_bound;
+static int pass_open;
+static VkBuffer index_buffer_bound, vertex_buffer_bound;
+// Galaxy 2 draws its models as hundreds of short strips a frame, one after another with
+// nothing set between them. Each is a draw to the card, and on the Pi a draw costs about
+// as much as its triangles. So strips that follow on in the frame's vertices, with nothing
+// recorded between them, are joined: their triangles' corners are written out as one list,
+// in the order and with the turn each strip's would have, and drawn once. Anything else
+// recorded first sends the strips gathered so far.
+static struct { int open; int32_t first, next; VkDeviceSize index_at; uint32_t indices; } run;
+static void flush_run(void) {
+  if (!run.open) return;
+  run.open = 0;
+  VkCommandBuffer commands = vk.frame->draw;
+  if (index_buffer_bound != vk.frame->indices.buffer) {
+    vkCmdBindIndexBuffer(commands, vk.frame->indices.buffer, 0, VK_INDEX_TYPE_UINT16);
+    index_buffer_bound = vk.frame->indices.buffer;
+  }
+  vkCmdDrawIndexed(commands, run.indices, 1, (uint32_t)(run.index_at / sizeof(uint16_t)), run.first, 0);
+}
 static VkRect2D pass_area;
 static unsigned restarts, reserved_restarts;  // How often the frame's memory has started over.
 
@@ -236,12 +254,13 @@ static void upload_pixels(GxTexture *texture, uint32_t width, uint32_t height, u
 static struct { Ring ring; VkDescriptorSet set; int bound; } box;
 
 static void forget_set_state(void) {
+  flush_run();
   pipeline_set = VK_NULL_HANDLE;
   box.bound = 0;
   memset(&viewport_set, 0, sizeof viewport_set);
   memset(&scissor_set, 0, sizeof scissor_set);
   memset(maps_set, 0, sizeof maps_set);
-  indices_bound = 0;
+  index_buffer_bound = vertex_buffer_bound = VK_NULL_HANDLE;
   for (int i = 0; i < GX_CONSTANT_BLOCKS; i++) {
     if (block_bytes[i]) blocks_waiting |= 1u << i;
   }
@@ -254,7 +273,13 @@ static void mark_frame_start(void);
 static uint32_t batch = 1, sent_batch[FRAMES_IN_FLIGHT], finished_batch;
 
 // Starts a set of commands after the last was sent, with nothing of the picture's own.
+static unsigned draws_since_submit;
 static void begin_batch(Frame *frame) {
+  draws_since_submit = 0;
+  if (run.open) {  // Its commands were sent without the strips; a bug, so said rather than drawn wrong quietly.
+    fprintf(stderr, "stop: vulkan: joined strips were left out of a batch\n");
+    exit(10);
+  }
   if (vk.frame && vk.frame->submitted) sent_batch[vk.frame - vk.frames] = batch++;
   int was_sent = frame->submitted;
   vk_frame_begin(frame);
@@ -296,6 +321,7 @@ static VkQueryPool mark_pool; static int marks, mark_on = -1, mark_frame, mark_p
 static unsigned mark_draws, recorded_draws;
 static void mark(const char *name, int w, int h) {
   if (!capturing || marks >= MARKS || in_strip) return;
+  flush_run();
   vkCmdWriteTimestamp(vk.frame->draw, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, mark_pool, (uint32_t)marks);
   snprintf(mark_names[marks], 48, "%s %dx%d draws %u", name, w, h, recorded_draws - mark_draws);
   mark_draws = recorded_draws;
@@ -336,6 +362,7 @@ static void start_pass_with_clear(void);
 static void end_pass(void);
 
 static void enter_strip(void) {
+  flush_run();
   scene_state.open = pass_open;
   scene_state.area = pass_area;
   scene_state.kind = waiting_clear.kind;
@@ -351,6 +378,7 @@ static void enter_strip(void) {
 
 static void leave_strip(void) {
   if (!in_strip) return;
+  flush_run();
   end_pass();
   in_strip = 0;
   vk.frame->draw = scene_commands;
@@ -438,6 +466,7 @@ static void start_pass_with_clear(void) {
 }
 
 static void end_pass(void) {
+  flush_run();
   if (!pass_open && waiting_clear.kind) start_pass_with_clear();
   if (!pass_open) return;
   vkCmdEndRenderPass(vk.frame->draw);
@@ -502,9 +531,44 @@ static void begin_pass(const VkRect2D *area) {
   gx_stats.passes++;
 }
 
+// Sends the pass so far to the card without waiting, and goes on in the next set of
+// commands. Galaxy 2 peeks at the picture as each frame ends, which waits for the card,
+// and the card started only when the frame was shown: about 26 ms of its drawing came
+// after about 25 ms of the game making the frame, with the card idle half the time.
+// Sent in parts as the game makes them, most of the drawing is done by then. The pass
+// goes on as the same one: what was learned about it holds, and its next part loads and
+// keeps both color and depth. A part costs the tile-based Pi a store and a load of the
+// picture, so parts are large. WII_RECOMP_KICK_DRAWS sets their draws; 0 never splits.
+enum { KICK_DRAWS = 6000 };
+static int kick_draws = -1;
+static int kick_due(const VkRect2D *area) {
+  if (kick_draws < 0) kick_draws = getenv("WII_RECOMP_KICK_DRAWS") ? atoi(getenv("WII_RECOMP_KICK_DRAWS")) : KICK_DRAWS;
+  return kick_draws > 0 && draws_since_submit >= (unsigned)kick_draws && pass_open && rectangle_holds(&pass_area, area) && !in_strip
+         && empty_layer.step == LAYER_IDLE && !(pass_began_as & DROPS_DEPTH);
+}
+
+static void kick(int count) {
+  flush_run();
+  vkCmdEndRenderPass(vk.frame->draw);
+  Frame *frame = vk.frame;
+  vk_frame_submit(frame, VK_NULL_HANDLE, VK_NULL_HANDLE);
+  begin_batch(&vk.frames[(frame - vk.frames + 1) % FRAMES_IN_FLIGHT]);
+  // The draw's vertices went to the last set's memory, which it doesn't share.
+  VkDeviceSize bytes = (VkDeviceSize)count * vertex_bytes, at = vk_ring_take(&vk.frame->vertices, bytes, vertex_bytes);
+  memcpy(vk.frame->vertices.mapped + at, frame->vertices.mapped + reserved_at, bytes);
+  reserved_at = at;
+  reserved_restarts = restarts;
+  VkClearValue values[2] = {{.color = {{0, 0, 0, 0}}}, {.depthStencil = {1.0f, 0}}};
+  VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = render_passes[0], .framebuffer = framebuffer_for(0, pass_depthless),
+                                .renderArea = pass_area, .clearValueCount = 2, .pClearValues = values};
+  vkCmdBeginRenderPass(vk.frame->draw, &info, VK_SUBPASS_CONTENTS_INLINE);
+  pass_open = 1;
+}
+
 // Sends what's recorded so far and waits for all of it, for when a frame's memory runs out.
 static void record_reads(void);
 static void finish_commands(void) {
+  flush_run();  // Strips gathered so far go first.
   gx_stats.drains++;
   record_reads();
   give_up_layer();
@@ -624,6 +688,7 @@ static VkRect2D drawn_area(void) {
 static uint32_t level_side(uint32_t size, uint32_t level) { return size >> level ? size >> level : 1; }
 
 static void upload_pixels(GxTexture *texture, uint32_t width, uint32_t height, uint32_t levels, const uint8_t *rgba) {
+  flush_run();  // Strips gathered so far go first.
   VkDeviceSize bytes = 0;
   for (uint32_t level = 0; level < levels; level++) bytes += (VkDeviceSize)level_side(width, level) * level_side(height, level) * BYTES_PER_PIXEL;
   VkDeviceSize at = vk_ring_take(&vk.frame->staging, bytes, BYTES_PER_PIXEL);
@@ -671,11 +736,19 @@ static void bind_maps(VkCommandBuffer commands) {
   memset(maps, 0, sizeof maps);
   for (int map = 0; map < MAX_TEXTURE_MAPS; map++) {
     const GxTexture *texture = bindings[map].texture && (bindings[map].texture->written || bindings[map].texture->flat_view) ? bindings[map].texture : blank_texture;
-    maps[map].sampler = vk_sampler_find(&bindings[map].sampling, texture->flat_view ? texture->flat.depth : texture->depth);
+    // Most draws sample as the last did, so each map keeps the sampler it last found.
+    static struct { GxSampling sampling; int depth; VkSampler sampler; } found[MAX_TEXTURE_MAPS];
+    int depth = texture->flat_view ? texture->flat.depth : texture->depth;
+    if (!found[map].sampler || found[map].depth != depth || memcmp(&found[map].sampling, &bindings[map].sampling, sizeof found[map].sampling)) {
+      found[map].sampler = vk_sampler_find(&bindings[map].sampling, depth);
+      found[map].sampling = bindings[map].sampling, found[map].depth = depth;
+    }
+    maps[map].sampler = found[map].sampler;
     maps[map].imageView = texture->flat_view ? texture->flat_view : texture->view;
     maps[map].imageLayout = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
   }
   if (!memcmp(maps, maps_set, sizeof maps)) return;
+  flush_run();
   VkWriteDescriptorSet writes[MAX_TEXTURE_MAPS];
   for (uint32_t map = 0; map < MAX_TEXTURE_MAPS; map++) {
     writes[map] = (VkWriteDescriptorSet){.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET, .dstBinding = map, .descriptorCount = 1,
@@ -697,6 +770,7 @@ static int place_constants(VkCommandBuffer commands) {
   Ring *ring = &vk.frame->constants;
   VkDeviceSize alignment = vk.limits.minUniformBufferOffsetAlignment;
   if (!blocks_waiting) return 1;
+  flush_run();
   for (int i = 0; i < GX_CONSTANT_BLOCKS; i++) {
     if (!(blocks_waiting & (1u << i))) continue;
     VkDeviceSize at = vk_ring_take(ring, GX_CONSTANT_BYTES, alignment);
@@ -714,16 +788,19 @@ static int place_constants(VkCommandBuffer commands) {
 
 static void set_pipeline(VkCommandBuffer commands, VkPipeline pipeline) {
   if (pipeline == pipeline_set) return;
+  flush_run();
   vkCmdBindPipeline(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, pipeline);
   pipeline_set = pipeline;
 }
 
 static void set_viewport_and_scissor(VkCommandBuffer commands, const VkViewport *viewport_now, const VkRect2D *scissor_now) {
   if (memcmp(viewport_now, &viewport_set, sizeof viewport_set)) {
+    flush_run();
     vkCmdSetViewport(commands, 0, 1, viewport_now);
     viewport_set = *viewport_now;
   }
   if (memcmp(scissor_now, &scissor_set, sizeof scissor_set)) {
+    flush_run();
     vkCmdSetScissor(commands, 0, 1, scissor_now);
     scissor_set = *scissor_now;
   }
@@ -905,6 +982,38 @@ static int reads_this_frames_copy(void) {
   return 0;
 }
 
+// Adds a strip to the run, starting one if it doesn't follow on. 0 where it can't be
+// joined, so it's drawn alone as before.
+enum { MOST_RUN_VERTICES = 65535 };
+static int join_strip(int32_t first, int count) {
+  if (count < 3) return 0;
+  int joins = run.open && first == run.next && first + count - run.first <= MOST_RUN_VERTICES;
+  if (!joins) flush_run();
+  uint32_t indices = (uint32_t)(count - 2) * INDICES_PER_TRIANGLE;
+  Ring *ring = &vk.frame->indices;
+  VkDeviceSize at = vk_ring_take(ring, indices * sizeof(uint16_t), sizeof(uint16_t));
+  if (at == (VkDeviceSize)-1) {
+    flush_run();
+    return 0;
+  }
+  if (joins && at != run.index_at + run.indices * sizeof(uint16_t)) {
+    flush_run();
+    joins = 0;
+  }
+  if (!joins) run.open = 1, run.first = first, run.index_at = at, run.indices = 0;
+  uint16_t *corners = (uint16_t *)(ring->mapped + at);
+  uint16_t base = (uint16_t)(first - run.first);
+  for (int i = 0; i + 2 < count; i++) {
+    // As the strip's own indices: every other triangle swaps two corners to keep its face.
+    *corners++ = (uint16_t)(base + i + (i & 1));
+    *corners++ = (uint16_t)(base + i + 1 - (i & 1));
+    *corners++ = (uint16_t)(base + i + 2);
+  }
+  run.indices += indices;
+  run.next = first + count;
+  return 1;
+}
+
 static void draw(int primitive, int count) {
   if (!count) return;
   {
@@ -943,6 +1052,10 @@ static void draw(int primitive, int count) {
   }
   if (!in_strip) newest_copy.frame = 0;
   watch_for_cover(count);
+  {
+    VkRect2D where = drawn_area();
+    if (kick_due(&where)) kick(count);  // Before anything of this draw is recorded.
+  }
   if (!place_constants(vk.frame->draw)) {
     finish_commands();
     place_constants(vk.frame->draw);
@@ -979,20 +1092,28 @@ static void draw(int primitive, int count) {
   set_viewport_and_scissor(commands, &viewport_wanted, &area);
   bind_maps(commands);
   if (box.set && !box.bound) {
+    flush_run();
     vkCmdBindDescriptorSets(commands, VK_PIPELINE_BIND_POINT_GRAPHICS, vk.pipeline_layout, SET_BOUNDING_BOX, 1, &box.set, 0, 0);
     box.bound = 1;
   }
-  VkDeviceSize start_of_buffer = 0;
-  vkCmdBindVertexBuffers(commands, 0, 1, &frame->vertices.buffer, &start_of_buffer);
+  if (vertex_buffer_bound != frame->vertices.buffer) {
+    flush_run();
+    VkDeviceSize start_of_buffer = 0;
+    vkCmdBindVertexBuffers(commands, 0, 1, &frame->vertices.buffer, &start_of_buffer);
+    vertex_buffer_bound = frame->vertices.buffer;
+  }
   int32_t first = (int32_t)(reserved_at / vertex_bytes);
   recorded_draws++;
+  draws_since_submit++;
+  if (primitive == PRIM_STRIP && join_strip(first, count)) return;
+  flush_run();
   if (primitive == PRIM_TRIANGLES) {
     vkCmdDraw(commands, (uint32_t)count, 1, (uint32_t)first, 0);
     return;
   }
-  if (!indices_bound) {
+  if (index_buffer_bound != shape_indices.buffer) {
     vkCmdBindIndexBuffer(commands, shape_indices.buffer, 0, VK_INDEX_TYPE_UINT16);
-    indices_bound = 1;
+    index_buffer_bound = shape_indices.buffer;
   }
   if (primitive == PRIM_STRIP || primitive == PRIM_FAN) {
     uint32_t triangles = (uint32_t)(count - 2);
@@ -1362,6 +1483,7 @@ static void hand_picture_over(Frame *frame) {
 }
 
 static void present(const GxRectangle *from) {
+  flush_run();  // Strips gathered so far go first.
   record_reads();
   give_up_layer();
   leave_strip();
@@ -1705,6 +1827,7 @@ static int lays_empty_layer_over(int count) {
 
 static int layer_draw(int count) {
   if (empty_layer.step == LAYER_IDLE || (in_strip && !reads_held())) return 0;
+  flush_run();
   static int side_off = -1;
   if (side_off < 0) side_off = getenv("WII_RECOMP_NO_SIDE") != 0;
   VkRect2D where = drawn_area();
@@ -1749,6 +1872,7 @@ static int layer_draw(int count) {
 }
 
 static void copy_color(GxTexture *to, const GxRectangle *from, int width, int height, GxChannels channels, int smooth) {
+  flush_run();  // Strips gathered so far go first.
   static int off = -1;
   if (off < 0) off = getenv("WII_RECOMP_KEEP_EMPTY_LAYERS") != 0;
   int step = empty_layer.step, usable = !off && !empty_layer.off && is_whole_picture(from) && width == EFB_WIDTH * EFB_SCALE && !smooth;
@@ -1785,6 +1909,7 @@ static void copy_color(GxTexture *to, const GxRectangle *from, int width, int he
 }
 
 static void copy_depth(GxTexture *to, const GxRectangle *from, int width, int height) {
+  flush_run();  // Strips gathered so far go first.
   // Depth is never drawn apart, so its copies go on as asked.
   if (empty_layer.step == LAYER_SIDE && !holds(to)) {
     copy_depth_requested(to, from, width, height);
@@ -1802,6 +1927,7 @@ static void copy_depth(GxTexture *to, const GxRectangle *from, int width, int he
 }
 
 static void clear(const GxClear *c) {
+  flush_run();  // Strips gathered so far go first.
   int step = empty_layer.step, whole = is_whole_picture(&c->area);
   int color = whole && c->color_write && c->alpha_write && !c->depth_write && c->color[3] == 0;
   if (color && (step == LAYER_PICTURE_COPIED || step == LAYER_EMPTY_COPIED)) {
@@ -1914,6 +2040,7 @@ static void shrink(VkCommandBuffer commands, VkImage source, int depth, const Vk
 }
 
 static unsigned read_texture(GxTexture *t, int width, int height, int smooth) {
+  flush_run();  // Strips gathered so far go first.
   if (width <= 0 || height <= 0 || width > EFB_WIDTH || height > EFB_HEIGHT) return 0;
   if (t->owed && !holds(t)) return 0;  // Its copy was left out, as nothing on screen would show it.
   if (t->flat_view) {
@@ -1968,6 +2095,7 @@ static void record_read(int slot) {
 // Every waiting read, just before the commands are sent. A copy a held-back layer still
 // owes is made first.
 static void record_reads(void) {
+  flush_run();
   if (!reads_waiting) return;
   reads_waiting = 0;
   for (int slot = 0; slot < READ_SLOTS; slot++) {
@@ -1982,6 +2110,7 @@ static void record_reads(void) {
 
 // The picture at the Wii's own size, through an image of that size the picture is scaled into.
 static unsigned read_picture(int depth, const GxRectangle *area) {
+  flush_run();  // Strips gathered so far go first.
   if (area->width <= 0 || area->height <= 0 || area->width > EFB_WIDTH || area->height > EFB_HEIGHT) return 0;
   ready_to_read();
   VkImageAspectFlags aspect = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
@@ -2019,6 +2148,7 @@ static int read_ready(unsigned ticket) {
 }
 
 static const void *read_finish(unsigned ticket, int *width, int *height) {
+  flush_run();  // Strips gathered so far go first.
   int slot = (int)(ticket % READ_SLOTS);
   if (reads[slot].ticket != ticket) return 0;
   if (!read_ready(ticket)) {
@@ -2039,6 +2169,7 @@ static const void *read_finish(unsigned ticket, int *width, int *height) {
 
 // A poke sets the game's pixel, as many of the picture's as cover it, from staging memory.
 static void poke(int depth, int x, int y, uint32_t rgba, float depth_value) {
+  flush_run();  // Strips gathered so far go first.
   ready_to_read();
   int left = x * EFB_SCALE, top = y * EFB_SCALE, width = (x + 1) * EFB_SCALE - left, height = (y + 1) * EFB_SCALE - top;
   VkDeviceSize bytes = (VkDeviceSize)width * (VkDeviceSize)height * BYTES_PER_PIXEL;
@@ -2069,6 +2200,7 @@ static void poke(int depth, int x, int y, uint32_t rgba, float depth_value) {
 
 // The game sets the bounding box between draws, so the values go in with the commands.
 static int bounding_box_set(int first, int a, int b) {
+  flush_run();  // Strips gathered so far go first.
   if (!box.set) return 0;
   leave_strip();
   end_pass();
@@ -2084,6 +2216,7 @@ static int bounding_box_set(int first, int a, int b) {
 }
 
 static void bounding_box_get(int values[4]) {
+  flush_run();  // Strips gathered so far go first.
   leave_strip();
   end_pass();
   VkMemoryBarrier to_host = {.sType = VK_STRUCTURE_TYPE_MEMORY_BARRIER, .srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT | VK_ACCESS_TRANSFER_WRITE_BIT,
