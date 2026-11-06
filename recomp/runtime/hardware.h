@@ -27,6 +27,9 @@ int ipc_read(uint32_t address, uint32_t *value);
 int ipc_write(uint32_t address, uint32_t value);
 void ipc_update(void);
 int graphics_write(uint32_t address, uint32_t value, int bytes);
+// A store to the graphics pipe (0xcc008000 to 0xcc008fff), the commonest write by far.
+void graphics_pipe_write(uint32_t value, int bytes);
+enum { GRAPHICS_PIPE = 0xcc008000u, GRAPHICS_PIPE_BYTES = 0x1000u };
 int graphics_read(uint32_t address, uint32_t *value);
 void graphics_update(void);
 void graphics_retrace(void);

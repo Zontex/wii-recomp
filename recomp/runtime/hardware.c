@@ -307,6 +307,12 @@ uint32_t hw_read(uint32_t address, int bytes) {
 }
 
 void hw_write(uint32_t address, uint32_t value, int bytes) {
+  // Commands for the graphics chip, a store at a time: straight to the pipe.
+  if (address - GRAPHICS_PIPE < GRAPHICS_PIPE_BYTES) {
+    if (!seen[offset_of(address)]) first_touch("write", address, value);
+    graphics_pipe_write(value, bytes);
+    return;
+  }
   if (gx_efb_write(address, value, bytes)) return;
   note_unmodelled(address, WRITES, first_touch("write", address, value));
   if (address == PI_CAUSE) {
