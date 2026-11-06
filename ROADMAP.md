@@ -143,11 +143,14 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 0 to 2.
 - [x] A virtual Bluetooth chip, driven by each game's own Bluetooth code, with four remote slots and the Balance Board's
 - [x] A simulated Wii Remote with an IR camera for the pointer, a Classic Controller with attachment encryption, and a simulated Balance Board
 - [x] Real Wii Remotes and the Balance Board passed straight through to the game's own code: raw Bluetooth sockets on Linux, IOKit's HID on the Mac, the board in its own slot, remotes keeping their player number, waking with a button, and staying connected across the console's hand-over. Tested with stand-ins and with Wii Fit Plus on `WII_RECOMP_REMOTES=loopback`
-- [ ] Real remotes and a real board tried on the Pi and the Mac, with the report rate measured
-- [ ] Switch Pro Controllers and Joy-Cons through SDL2, as a Classic Controller or a Wii Remote and Nunchuk, with motion as tilt and the gyro as the pointer
+- [ ] Real remotes and a real board tried on the Pi and the Mac, with the report rate measured (`docs/controllers_hardware_check.md`)
+- [x] Switch Pro Controllers, Joy-Cons and Switch 2 controllers through SDL3, as a Wii Remote and Nunchuk, a Classic Controller, or a remote held sideways, with motion as the remote's motion and the gyro as the pointer. Tested with SDL's virtual controllers, which play Wii Fit Plus's walk on the Pi; real ones wait for the hardware day
+- [x] A complete simulated remote: real motion, a Nunchuk, plugging attachments in and out as the game runs, rumble, lights and battery for the controller standing in, and a camera picture that turns with the remote
+- [x] Wii MotionPlus, alone or passing a Nunchuk or Classic Controller through, fed by a controller's gyro. Tested with made-up data; a game that uses one waits for the hardware day
 - [x] The keyboard steers the Classic Controller's left stick with the arrow keys
-- [ ] Keys for the Classic Controller's L, R, ZL and ZR, for drifting and items
-- [ ] Four players, and a settings file with sensible defaults
+- [x] Keys for the Classic Controller's L, R, ZL and ZR, for drifting and items (X, C, Z and V by default, any keys in `controllers.ini`)
+- [x] Four players, and a settings file with sensible defaults (`controllers.ini`, written by the console itself)
+- [x] Real remotes and wireless Switch controllers together on Linux: remotes read through the kernel's HID instead of raw sockets, so bluetoothd's input plugin stays on. Tested with stand-ins; real ones wait for the hardware day
 
 ### 9. The Wii Menu (in progress)
 

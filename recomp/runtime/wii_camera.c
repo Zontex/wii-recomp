@@ -2,8 +2,10 @@
 // game works out where the remote points from where they appear. The game sets it up
 // by writing its registers, then reads the dots in each data report. Formats follow
 // WiiBrew and Dolphin's Camera.cpp.
+#include <math.h>
 #include <string.h>
 
+#include "input.h"
 #include "wii_camera.h"
 
 enum {
@@ -23,29 +25,39 @@ static const float REACH_X = 250, REACH_Y = 226, LIGHTS_APART = 130;
 // the bar below; Wii Fit Plus puts its cursor at the middle of the screen with it too.
 static const float BAR_OFFSET = 132;
 
-static uint8_t registers[REGISTERS];
+static uint8_t registers[PLAYERS][REGISTERS];  // Each remote has its own camera.
 static int bar_above;  // The console setting BT.BAR: 1 above the TV, 0 below.
+
+static uint8_t *camera(int device) { return registers[device >= 0 && device < PLAYERS ? device : 0]; }
 
 void camera_set_bar_above(int above) { bar_above = above; }
 
-void camera_write(uint32_t address, const uint8_t *data, uint32_t bytes) {
-  for (uint32_t i = 0; i < bytes && address + i < REGISTERS; i++) registers[address + i] = data[i];
+void camera_write(int device, uint32_t address, const uint8_t *data, uint32_t bytes) {
+  for (uint32_t i = 0; i < bytes && address + i < REGISTERS; i++) camera(device)[address + i] = data[i];
 }
 
-void camera_read(uint32_t address, uint8_t *out, uint32_t bytes) {
-  for (uint32_t i = 0; i < bytes; i++) out[i] = address + i < REGISTERS ? registers[address + i] : 0;
+void camera_read(int device, uint32_t address, uint8_t *out, uint32_t bytes) {
+  for (uint32_t i = 0; i < bytes; i++) out[i] = address + i < REGISTERS ? camera(device)[address + i] : 0;
 }
 
-int camera_mode(void) { return registers[TRACKING] == TRACKING_ON ? registers[MODE] : 0; }
+int camera_mode(int device) { return camera(device)[TRACKING] == TRACKING_ON ? camera(device)[MODE] : 0; }
 
 // Pointing right moves the lights left in the camera's picture, and pointing down moves
-// them down, as the Wii Menu reads them.
-void camera_dots(float pointer_x, float pointer_y, int dots[4][2]) {
+// them down, as the Wii Menu reads them. Turning the remote clockwise turns the whole
+// picture the other way about its middle, so the game can tell the turn from the angle
+// between the lights and still find where it points.
+void camera_dots(float pointer_x, float pointer_y, float roll, int dots[4][2]) {
   float centre_x = WIDTH / 2.0f - pointer_x * REACH_X;
   float centre_y = HEIGHT / 2.0f + pointer_y * REACH_Y + (bar_above ? BAR_OFFSET : -BAR_OFFSET);
+  float turn_cos = cosf(roll), turn_sin = sinf(-roll);
   for (int i = 0; i < 4; i++) dots[i][0] = dots[i][1] = NO_DOT;
   for (int i = 0; i < 2; i++) {
+    float level_x = centre_x + (i ? LIGHTS_APART : -LIGHTS_APART) / 2 - WIDTH / 2.0f, level_y = centre_y - HEIGHT / 2.0f;
     int x = (int)(centre_x + (i ? LIGHTS_APART : -LIGHTS_APART) / 2), y = (int)centre_y;
+    if (roll != 0) {
+      x = (int)lroundf(WIDTH / 2.0f + level_x * turn_cos - level_y * turn_sin);
+      y = (int)lroundf(HEIGHT / 2.0f + level_x * turn_sin + level_y * turn_cos);
+    }
     if (x < 0 || x >= WIDTH || y < 0 || y >= HEIGHT) continue;  // Out of view, as when pointing off the screen.
     dots[i][0] = x;
     dots[i][1] = y;
@@ -53,11 +65,11 @@ void camera_dots(float pointer_x, float pointer_y, int dots[4][2]) {
 }
 
 // Basic: two dots in five bytes, twice. Extended: three bytes a dot.
-void camera_fill(float pointer_x, float pointer_y, uint8_t *out, uint32_t bytes) {
-  int dots[4][2], mode = camera_mode();
+void camera_fill(int device, float pointer_x, float pointer_y, float roll, uint8_t *out, uint32_t bytes) {
+  int dots[4][2], mode = camera_mode(device);
   memset(out, 0xff, bytes);
   if (mode != MODE_BASIC && mode != MODE_EXTENDED) return;  // Off, or full mode, which no data report carries.
-  camera_dots(pointer_x, pointer_y, dots);
+  camera_dots(pointer_x, pointer_y, roll, dots);
   if (mode == MODE_BASIC) {
     for (int pair = 0; pair < 2 && pair * 5 + 5 <= (int)bytes; pair++) {
       const int *a = dots[pair * 2], *b = dots[pair * 2 + 1];
@@ -79,4 +91,4 @@ void camera_fill(float pointer_x, float pointer_y, uint8_t *out, uint32_t bytes)
   }
 }
 
-void camera_reset(void) { memset(registers, 0, sizeof registers); }
+void camera_reset(int device) { memset(camera(device), 0, REGISTERS); }

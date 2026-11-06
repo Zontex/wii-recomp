@@ -14,7 +14,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 
+#include "controllers.h"
 #include "gx_backend.h"
+#include "pads.h"
 #include "input.h"
 
 enum { WINDOW_WIDTH = 1280, WINDOW_HEIGHT = 720 };
@@ -22,34 +24,49 @@ enum { WINDOW_WIDTH = 1280, WINDOW_HEIGHT = 720 };
 static GLFWwindow *window;
 static int frame_width, frame_height;
 
+// What each keyboard control presses on the keyboard's player's remote. C and Z work the
+// Nunchuk's buttons, and by default the same keys work the Classic Controller's R and ZL;
+// each attachment reads only its own.
+static const uint32_t control_buttons[KEY_CONTROLS] = {
+  [KEY_UP] = BUTTON_UP, [KEY_DOWN] = BUTTON_DOWN, [KEY_LEFT] = BUTTON_LEFT, [KEY_RIGHT] = BUTTON_RIGHT,
+  [KEY_A] = BUTTON_A, [KEY_B] = BUTTON_B, [KEY_ONE] = BUTTON_ONE, [KEY_TWO] = BUTTON_TWO, [KEY_PLUS] = BUTTON_PLUS,
+  [KEY_MINUS] = BUTTON_MINUS, [KEY_HOME] = BUTTON_HOME, [KEY_L] = BUTTON_CLASSIC_L, [KEY_R] = BUTTON_CLASSIC_R,
+  [KEY_ZL] = BUTTON_CLASSIC_ZL, [KEY_ZR] = BUTTON_CLASSIC_ZR, [KEY_C] = BUTTON_NUNCHUK_C, [KEY_Z] = BUTTON_NUNCHUK_Z,
+};
+
 static void on_key(GLFWwindow *from, int key, int scancode, int action, int mods) {
   (void)from; (void)scancode; (void)mods;
   if (action == GLFW_REPEAT) return;
-  static const struct { int key; uint32_t button; } keys[] = {
-    {GLFW_KEY_LEFT, BUTTON_LEFT}, {GLFW_KEY_RIGHT, BUTTON_RIGHT}, {GLFW_KEY_UP, BUTTON_UP}, {GLFW_KEY_DOWN, BUTTON_DOWN},
-    {GLFW_KEY_ENTER, BUTTON_A}, {GLFW_KEY_BACKSPACE, BUTTON_B}, {GLFW_KEY_1, BUTTON_ONE}, {GLFW_KEY_2, BUTTON_TWO},
-    {GLFW_KEY_EQUAL, BUTTON_PLUS}, {GLFW_KEY_MINUS, BUTTON_MINUS}, {GLFW_KEY_H, BUTTON_HOME},
-    // The Classic Controller's shoulders: in Mario Kart, L uses an item and R drifts.
-    {GLFW_KEY_X, BUTTON_CLASSIC_L}, {GLFW_KEY_C, BUTTON_CLASSIC_R}, {GLFW_KEY_Z, BUTTON_CLASSIC_ZL}, {GLFW_KEY_V, BUTTON_CLASSIC_ZR},
-  };
-  for (size_t i = 0; i < sizeof keys / sizeof keys[0]; i++) {
-    if (key == keys[i].key) input_hold(keys[i].button, action == GLFW_PRESS);
-  }
-  int down = action == GLFW_PRESS;
-  // The arrows also tilt the Classic Controller's stick, which games such as Mario Kart steer with.
-  static int left, right, up, low;
-  if (key == GLFW_KEY_LEFT) left = down;
-  if (key == GLFW_KEY_RIGHT) right = down;
-  if (key == GLFW_KEY_UP) up = down;
-  if (key == GLFW_KEY_DOWN) low = down;
-  if (key >= GLFW_KEY_RIGHT && key <= GLFW_KEY_UP) input_stick((float)(right - left), (float)(up - low));
-  if (key == GLFW_KEY_SPACE && down) input_board_toggle();
+  int down = action == GLFW_PRESS, player = controllers_keyboard_player();
+  KeyControl controls[KEY_CONTROLS];
+  int count = controllers_controls_for(key, controls, KEY_CONTROLS);
+  // The stick keys tilt the Classic Controller's left stick, which games such as Mario
+  // Kart steer with, and the Nunchuk's.
+  static int stick[4];
   static float lean_x, lean_y;
-  if (key == GLFW_KEY_A) lean_x = down ? -0.6f : 0;
-  if (key == GLFW_KEY_D) lean_x = down ? 0.6f : 0;
-  if (key == GLFW_KEY_W) lean_y = down ? 0.6f : 0;
-  if (key == GLFW_KEY_S) lean_y = down ? -0.6f : 0;
-  input_board_nudge(lean_x, lean_y);
+  for (int i = 0; i < count; i++) {
+    KeyControl control = controls[i];
+    if (control_buttons[control] && player >= 0) input_hold(player, control_buttons[control], down);
+    if (control >= KEY_STICK_UP && control <= KEY_STICK_RIGHT && player >= 0) {
+      stick[control - KEY_STICK_UP] = down;
+      float x = (float)(stick[KEY_STICK_RIGHT - KEY_STICK_UP] - stick[KEY_STICK_LEFT - KEY_STICK_UP]);
+      float y = (float)(stick[0] - stick[KEY_STICK_DOWN - KEY_STICK_UP]);
+      input_stick(player, x, y);
+      input_nunchuk_stick(player, x, y);
+    }
+    if (control == KEY_SHAKE && down && player >= 0) input_shake(player);
+    // The next attachment: none, a Nunchuk, a Classic Controller.
+    if (control == KEY_NEXT_ATTACHMENT && down && player >= 0) {
+      input_attach(player, (Attachment)((input_attachment(player) + 1) % ATTACHMENT_KINDS));
+    }
+    if (control == KEY_MOTIONPLUS && down && player >= 0) input_attach_motionplus(player, !input_motionplus(player));
+    if (control == KEY_BOARD && down) input_board_toggle();
+    if (control == KEY_LEAN_LEFT) lean_x = down ? -0.6f : 0;
+    if (control == KEY_LEAN_RIGHT) lean_x = down ? 0.6f : 0;
+    if (control == KEY_LEAN_FORWARD) lean_y = down ? 0.6f : 0;
+    if (control == KEY_LEAN_BACK) lean_y = down ? -0.6f : 0;
+    if (control >= KEY_LEAN_LEFT && control <= KEY_LEAN_BACK) input_board_nudge(lean_x, lean_y);
+  }
 }
 
 // A control script drives the remote alone, so a stray mouse can't move or click it.
@@ -59,14 +76,18 @@ static void on_mouse_move(GLFWwindow *from, double x, double y) {
   if (scripted()) return;
   int width, height;
   glfwGetWindowSize(from, &width, &height);
-  input_pointer((float)(x / width * 2 - 1), (float)(y / height * 2 - 1));
+  int player = controllers_mouse_player();
+  if (player >= 0 && controllers_player(player)->pointer & POINTER_MOUSE) {
+    input_pointer(player, (float)(x / width * 2 - 1), (float)(y / height * 2 - 1));
+  }
 }
 
 static void on_mouse_button(GLFWwindow *from, int button, int action, int mods) {
   (void)from; (void)mods;
   if (scripted()) return;
-  if (button == GLFW_MOUSE_BUTTON_LEFT) input_hold(BUTTON_A, action == GLFW_PRESS);
-  if (button == GLFW_MOUSE_BUTTON_RIGHT) input_hold(BUTTON_B, action == GLFW_PRESS);
+  int player = controllers_mouse_player();
+  if (player >= 0 && button == GLFW_MOUSE_BUTTON_LEFT) input_hold(player, BUTTON_A, action == GLFW_PRESS);
+  if (player >= 0 && button == GLFW_MOUSE_BUTTON_RIGHT) input_hold(player, BUTTON_B, action == GLFW_PRESS);
 }
 
 // A Mac slows down a program whose window is covered or out of sight, which stretches
@@ -114,6 +135,9 @@ void window_size(int *width, int *height) {
 }
 
 void window_run(void) {
-  while (!glfwWindowShouldClose(window)) glfwWaitEventsTimeout(0.05);
+  while (!glfwWindowShouldClose(window)) {
+    glfwWaitEventsTimeout(pads_wait_seconds());
+    pads_poll();
+  }
   exit(0);
 }

@@ -46,10 +46,26 @@ TITLE_LINK_FLAGS = {"darwin": "-shared -undefined dynamic_lookup", "linux": "-sh
 # What the console and a title share. A title built against other versions is refused.
 INTERFACE_HEADERS = ["cpu.h", "guest_memory.h", "title.h", "modules.h"]
 AUDIO_SOURCES = {"darwin": "audio_output_mac.c", "linux": "audio_output_linux.c"}
-# Real Wii Remotes: IOKit's HID on the Mac, Bluetooth sockets on Linux (remote_link.h).
-REMOTE_SOURCES = {"darwin": "remote_link_mac.c", "linux": "remote_link_linux.c"}
+# Real Wii Remotes: IOKit's HID on the Mac, Bluetooth sockets and the kernel's HID on Linux (remote_link.h).
+REMOTE_SOURCES = {"darwin": ["remote_link_mac.c"], "linux": ["remote_link_linux.c", "remote_link_hidraw.c"]}
 BACKEND_SOURCES = {"opengl": ["gx_gl.c"], "vulkan": ["gx_vulkan.c", "gx_vulkan_device.c", "gx_vulkan_pipeline.c", "gx_vulkan_window.c"]}
 LIBRARY_FOLDERS = ["/usr/local/lib", "/usr/lib", "/usr/lib/aarch64-linux-gnu"] + ([f"{VULKAN_SDK}/lib"] if VULKAN_SDK else [])
+# SDL3 reads Switch and other controllers (runtime/pads.c). On a Mac it's Homebrew's; on
+# Linux, recomp/tools/sdl3_setup.sh builds it into /usr/local, or ~/.local without root.
+SDL3_PREFIXES = [os.environ.get("SDL3_PREFIX"), "/usr/local", str(Path.home() / ".local"), "/usr"]
+
+
+def sdl3_flags():
+    """(compile flags, link flags) for SDL3, or stops with how to install it."""
+    for prefix in filter(None, SDL3_PREFIXES):
+        libraries = [Path(found).parent for found in glob(f"{prefix}/lib*/libSDL3.*") + glob(f"{prefix}/lib/*/libSDL3.*")]
+        if libraries and Path(f"{prefix}/include/SDL3/SDL.h").exists():
+            folder = libraries[0]
+            compile_flags = "" if prefix == "/usr" else f"-I{prefix}/include"
+            link_flags = "-lSDL3" if prefix == "/usr" else f"-L{folder} -Wl,-rpath,{folder} -lSDL3"
+            return compile_flags, link_flags
+    install = "brew install sdl3" if sys.platform == "darwin" else "recomp/tools/sdl3_setup.sh"
+    sys.exit(f"stop: SDL3 isn't installed, and the console reads controllers through it. Install it with {install}.")
 VULKAN_LIBRARIES = ["vulkan", SHADERC]
 
 
@@ -79,11 +95,12 @@ def main():
     generated = sorted((build / "generated").glob("*.c"))
     platform = PLATFORMS[sys.platform]
     backends = sys.argv[2].split(",") if len(sys.argv) > 2 else default_backends(platform)
-    link_flags = " ".join([COMMON_LINK_FLAGS, platform["system"]] + [platform[backend] for backend in backends])
+    sdl_compile, sdl_link = sdl3_flags()
+    link_flags = " ".join([COMMON_LINK_FLAGS, sdl_link, platform["system"]] + [platform[backend] for backend in backends])
     defines = " ".join(f"-DGX_WITH_{backend.upper()}" for backend in backends) + f" -DGX_FIRST_{backends[0].upper()} " + platform.get("defines", "")
     left_out = {name for backend, names in BACKEND_SOURCES.items() if backend not in backends for name in names}
     left_out |= {name for system, name in AUDIO_SOURCES.items() if system != sys.platform}
-    left_out |= {name for system, name in REMOTE_SOURCES.items() if system != sys.platform}
+    left_out |= {name for system, names in REMOTE_SOURCES.items() if system != sys.platform for name in names}
     lines = [f"cflags = {FLAGS}", "",
              "rule cc", "  command = clang $cflags -c $in -o $out", "  description = $in", "",
              # The runtime's headers change, and files that include them must follow.
@@ -105,7 +122,7 @@ def main():
         if source.name in left_out:
             continue
         target = f"obj/runtime_{source.stem}.o"
-        lines.append(f"build {target}: runtime_cc ../runtime/{source.name}\n  cflags = {RUNTIME_OPTIMIZATION} {FLAGS} {defines} {interface}")
+        lines.append(f"build {target}: runtime_cc ../runtime/{source.name}\n  cflags = {RUNTIME_OPTIMIZATION} {FLAGS} {sdl_compile} {defines} {interface}")
         objects.append(target)
     for data in sorted(Path(build / "../runtime/data").glob("*.bin")):
         symbol = f"data_{data.stem}"

@@ -25,12 +25,13 @@ python3 -m ruff check                    # Python lint, bug rules only (ruff.tom
 
 - Two build tiers with `emit.py --profile`: `part*.c` compile at `-O2`, `cold*.c` at `-O0` (~5x faster to compile) and count their runs via `POLL_COUNTED`. The console saves counts to `<title data>/<title ID>/profile.txt` (`title-data/` beside the console, `cache/titles/` in a console folder), with `discovered.txt` and `shaders.bin` (shader recipes, `gx_recipes.c`, packed into the `.wrd`) beside it; rerunning `add_game.py` promotes what ran. Nothing in the quick tier should matter for frame rate, so check a walk before changing `HOT_SHARE`.
 - Graphics work is measured on recordings, not by driving a game: `record <frames> <file>` through `WII_RECOMP_CONTROL` (or `WII_RECOMP_RECORD=<frame>:<frames>:<file>`) saves a scene, and `python3 recomp/tools/scene_bench.py <folder> [--reference DIR | --save-reference DIR]` times every recording in a folder and compares pictures. Recordings hold game data: keep them outside the repo. Memory is taken once a frame, so they suit timing and comparing our own versions, not cycle-exact checks.
+- The console links SDL3 for controllers: `brew install sdl3` on the Mac, `recomp/tools/sdl3_setup.sh --prefix ~/.local` on the Pi (no root); `build_file.py` finds either.
 - No CMake/top-level Makefile: `build_file.py` generates the ninja file. Pi vs Mac flags (cortex-a76, `EFB_SCALE=5/2`, Vulkan-only on Pi) all live there.
 - Output is `wii-recomp` (same for every game) + `title.dylib`/`title.so` (the game). Headers in `INTERFACE_HEADERS` (`cpu.h guest_memory.h title.h modules.h`) are hashed; a title built against different versions is refused, so rebuild both after touching them.
 - Builds compile with `-w`; warnings won't surface. `-fsigned-char -ffp-contract=off` keep Arm matching the Mac — don't drop them.
 - Tests use made-up data. C tests need clang, graphics replay tests need `VULKAN_SDK`, game-dependent tests skip without `extracted/`.
-- Wii Fit Plus needs `WII_RECOMP_ATTACHMENT=none` (otherwise the simulated Classic Controller hides the pointer).
-- On Linux, rerun `sudo recomp/tools/remotes_setup.sh` after every build. Delete `shader-cache/` beside the binary to reset shaders.
+- Controllers are set in `controllers.ini` beside the console (written on first run, every default commented). Remotes get a Nunchuk by default; `WII_RECOMP_ATTACHMENT=classic` puts a Classic Controller in, which makes Wii Fit Plus hide its pointer.
+- On Linux, `sudo recomp/tools/remotes_setup.sh` once sets up real remotes (through the kernel's HID) and Switch controllers; only its older `--sockets` way needs rerunning after every build. Delete `shader-cache/` beside the binary to reset shaders.
 
 ## Rules (from ROADMAP.md)
 
