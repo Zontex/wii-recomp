@@ -31,6 +31,8 @@ void watch_set_resolver(WatchResolver resolver);
 int watch_hold(uint32_t address, uint32_t bytes);
 void watch_release(uint32_t address, uint32_t bytes);  // Opens the pages for writing.
 int watch_held(uint32_t address, uint32_t bytes);  // Any page of it.
+// Pages let go so far, so a caller can tell nothing was let go since it last looked.
+unsigned watch_releases(void);
 // Each new picture, so pages written in frame after frame can be told apart.
 void watch_next_frame(void);
 // Turned off by WII_RECOMP_NO_WATCH=1, when every reader looks at the bytes.

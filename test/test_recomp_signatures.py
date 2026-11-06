@@ -4,7 +4,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent.parent / "recomp/translate"))
 
-from signatures import BOARD_LIBRARY, Finder, instruction_hashes, masked_words, resolve, small_data_references
+from signatures import BOARD_LIBRARY, Finder, idle_loop, instruction_hashes, masked_words, resolve, small_data_references
 
 BLR = 0x4e800020
 ADD = 0x7c632214
@@ -114,10 +114,16 @@ class Resolving(unittest.TestCase):
         replaced, _, _ = self.resolve(placed, entries)
         self.assertEqual(list(replaced), [0x2000])
 
-    def test_idle_loop_sits_at_its_offset_within_the_function(self):
+    def test_idle_loop_is_the_wait_near_its_offset(self):
+        scheduler = [ADD, NOP, load_small(0, -25312), 0x2c000000, 0x4182fff8, BLR]  # The wait is 8 bytes in.
+        entries = [entry("scheduler", scheduler, idle_offset=12)]
+        _, idle_loops, _ = self.resolve({0x5000: scheduler}, entries)
+        self.assertEqual(list(idle_loops), [0x5008])
+
+    def test_no_wait_means_no_idle_loop(self):
         entries = [entry("scheduler", self.TARGET, idle_offset=8)]
         _, idle_loops, _ = self.resolve({0x5000: self.TARGET}, entries)
-        self.assertEqual(list(idle_loops), [0x5008])
+        self.assertEqual(idle_loops, {})
 
 
 class Similarity(unittest.TestCase):
@@ -153,3 +159,27 @@ class SmallData(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+COMPARE_ZERO = 0x2c000000  # cmpwi r0, 0
+BEQ_BACK_8 = 0x4182fff8  # beq cr0 to two words back
+
+
+class IdleLoops(unittest.TestCase):
+    """The scheduler's wait for a ready thread, found by its shape, not one fixed place."""
+
+    SPIN = [load_small(0, -25312), COMPARE_ZERO, BEQ_BACK_8]
+
+    def test_found_where_the_hint_misses(self):
+        program = FakeProgram({0x5000: [NOP, NOP, *self.SPIN, BLR]})
+        self.assertEqual(idle_loop(program, program.functions[0x5000], 0x500c), 0x5008)
+
+    def test_the_hint_picks_between_two(self):
+        program = FakeProgram({0x5000: [*self.SPIN, NOP, NOP, NOP, *self.SPIN, BLR]})
+        self.assertEqual(idle_loop(program, program.functions[0x5000], 0x5000), 0x5000)
+        self.assertEqual(idle_loop(program, program.functions[0x5000], 0x5020), 0x5018)
+
+    def test_other_loops_are_not_waits(self):
+        not_small_data = 0x80000000 | 4 << 16  # lwz r0, 0(r4)
+        program = FakeProgram({0x5000: [not_small_data, COMPARE_ZERO, BEQ_BACK_8, load_small(0, 8), 0x2c000001, BEQ_BACK_8, BLR]})
+        self.assertIsNone(idle_loop(program, program.functions[0x5000], 0x5000))

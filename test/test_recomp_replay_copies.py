@@ -90,18 +90,31 @@ class CopiesInMemory(Played):
         self.assertEqual(data[:2], bytes([0xff, 0x12]))
         self.assertEqual(data[32:34], bytes([0x34, 0x56]))
 
-    def test_a_late_copy_leaves_what_was_written_after_it(self):
+    def test_a_late_copy_stays_off_a_page_written_after_it(self):
         # Data just past the copy, on its last page, is touched, so that page is let go and
         # the copy lands a frame later. A write into the copy's bytes there in the meantime
-        # came after the copy, and stays; the rest of the page takes the copy's bytes.
+        # means the game put that memory to another use, so the whole page keeps what the
+        # game left: a byte that only looks unchanged may be one it just set (Mario Kart
+        # keeps objects beside its copies and crashed when one took a copy's pixels).
         target = TARGET + 0x100
         made = flat_quad(RED, 0, 0, 64, 64) + copy_picture(target, COPY_RGB565)
         end = target + 64 * 64 * 2
         updates = [(len(made), end + 0x40, b"\x01\x02\x03\x04"), (len(made), end - 0x80, b"\x11\x22\x33\x44")]
         data = self.memory([(made, updates), b"", b""], end - 0x100, 0x100)
         self.assertEqual(data[0x80:0x84], b"\x11\x22\x33\x44")
-        self.assertEqual(data[:0x80], bytes([0xc8, 0xe7]) * 0x40)
-        self.assertEqual(data[0x84:], bytes([0xc8, 0xe7]) * 0x3e)
+        self.assertEqual(data[:0x80] + data[0x84:], bytes(0xfc))
+        self.assertIn("1 pages kept from a copy as the game wrote into them", self.log)
+        # The copy's other pages, still held, take it whole.
+        self.assertEqual(self.memory([(made, updates), b"", b""], target, 2), bytes([0xc8, 0xe7]))
+
+    def test_a_late_copy_lands_on_a_page_only_beside_it_written(self):
+        # Only data beside the copy on its last page is written: the copy lands there whole.
+        target = TARGET + 0x100
+        made = flat_quad(RED, 0, 0, 64, 64) + copy_picture(target, COPY_RGB565)
+        end = target + 64 * 64 * 2
+        data = self.memory([(made, [(len(made), end + 0x40, b"\x01\x02\x03\x04")]), b"", b""], end - 0x100, 0x144)
+        self.assertEqual(data[:0x100], bytes([0xc8, 0xe7]) * 0x80)
+        self.assertEqual(data[0x140:0x144], b"\x01\x02\x03\x04")
 
     def test_a_copy_read_once_is_read_back_as_it_is_made(self):
         # The first frame's smaller texture reads the copy from memory, so the next copy
@@ -110,7 +123,20 @@ class CopiesInMemory(Played):
         again = flat_quad(GREEN, 0, 0, 64, 64) + copy_picture(TARGET, COPY_RGB565)
         data = self.memory([first, again, b"", b""], TARGET, 2)
         self.assertEqual(data, bytes([0x15, 0xa5]))  # Green: 2, 45 and 5.
-        self.assertIn("1 read back early", self.log)
+        # Only the first, read as a texture in the frame it was made, waited for the card.
+        self.assertEqual(self.log.count("waited for the card"), 1)
+
+    def test_a_copy_partly_covered_keeps_its_bytes_apart(self):
+        # A big copy, then a small one at the same place, as a blur chain makes: nothing is
+        # read back while they're made, and memory has the small one's bytes over the big one's.
+        big = flat_quad(RED, 0, 0, 64, 64) + copy_picture(TARGET, COPY_RGB565)
+        small = flat_quad(GREEN, 0, 0, 64, 64) + copy_picture(TARGET, COPY_RGB565, 32, 32, stride=16 * 32)
+        data = self.memory([big + small], TARGET, 64 * 64 * 2)
+        self.assertEqual(data[:2], bytes([0x15, 0xa5]))  # Green, from the small copy's first tile.
+        self.assertEqual(data[256:258], bytes([0xc8, 0xe7]))  # The big one's, in the gap between the small one's rows.
+        self.assertEqual(data[512:514], bytes([0x15, 0xa5]))  # The small one's second row of tiles.
+        self.assertEqual(data[8 * 512:8 * 512 + 2], bytes([0xc8, 0xe7]))  # The big one's, past the small one's rows.
+        self.assertIn("1 kept apart from a later one, 0 landed early, 0 waited for", self.log)
 
 
 @unittest.skipUnless(shutil.which("clang") and shutil.which("make"), "needs clang and make")

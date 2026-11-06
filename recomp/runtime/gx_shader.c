@@ -170,14 +170,20 @@ void gx_shader_prepare(const GxRecipe *recipes, unsigned count) {
     free(kinds);
     free(texts);
   }
+  GxShader *programs_made = malloc((count + 1) * sizeof *programs_made);
+  GxRenderState *states = malloc((count + 1) * sizeof *states);
   for (unsigned i = 0; i < count; i++) {
     ProgramKey key;
     memset(&key, 0, sizeof key);
     key.fragment.tev = recipes[i].tev;
     key.vertex = recipes[i].vertex;
-    unsigned program = program_for(&key);
-    if (gx_backend->pipeline_prepare) gx_backend->pipeline_prepare(program, &recipes[i].state);
+    programs_made[i] = program_for(&key);
+    states[i] = recipes[i].state;
+    if (gx_backend->pipeline_prepare && !gx_backend->pipelines_prepare) gx_backend->pipeline_prepare(programs_made[i], &states[i]);
   }
+  if (gx_backend->pipelines_prepare) gx_backend->pipelines_prepare((int)count, programs_made, states);
+  free(programs_made);
+  free(states);
 }
 
 void gx_shader_use(const TevKey *tev, const VertexKey *vertex) {

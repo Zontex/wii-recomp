@@ -18,7 +18,9 @@ typedef struct {
 extern GxState gx;
 
 // Counters for the once-a-second report in debug.c.
-typedef struct { unsigned draws, copies, to_screen, draw_done, new_shaders, new_pipelines, passes; float slowest_shader_ms, worst_frame_ms; } GxStats;
+// Drains count the times the card was emptied in the middle of a frame; waited reads, the
+// copies the game's touch had to wait for. Both should be 0 in a smooth scene.
+typedef struct { unsigned draws, copies, to_screen, draw_done, new_shaders, new_pipelines, passes, drains, waited_reads; float slowest_shader_ms, worst_frame_ms; } GxStats;
 extern GxStats gx_stats;
 
 enum { VERTEX_MATRIX_POSITION = 0, VERTEX_MATRIX_COORDINATE = 1, VERTEX_MATRICES = 1 + MAX_TEXTURE_MAPS, VERTEX_MATRIX_SLOTS = 12, VERTEX_NORMALS_UV = 5 };
@@ -257,8 +259,12 @@ void gx_bounding_box_write(int reg, uint32_t data);
 int gx_bounding_box_read(uint32_t address, uint32_t *value);
 void gx_bounding_box_off(void);
 void gx_bounding_box_started(void);  // Sends what was set before the backend started.  // Anything drawn, cleared or poked, so peeks look again.
-// Runs work on the thread that owns the graphics backend, waiting for it (gx_fifo.c).
+// Runs work on the thread that owns the graphics backend, waiting for it (gx_fifo.c),
+// once every command sent before has run: for a look at the picture, which must show them.
 void gx_run_on_graphics(void (*work)(void *), void *argument);
+// The same, but between the next two commands, for work that needs only what has
+// already run, such as filling in a copy made earlier: it doesn't wait for the backlog.
+void gx_run_on_graphics_soon(void (*work)(void *), void *argument);
 // Frames shown so far, for work done once a frame.
 unsigned gx_frame_number(void);
 

@@ -24,7 +24,7 @@ static uint32_t *last_written;
 static uint8_t *streak;
 static atomic_flag watch_lock = ATOMIC_FLAG_INIT;
 static _Atomic uint32_t frame;
-static _Atomic unsigned faults;
+static _Atomic unsigned faults, releases;
 
 static void lock_watch(void) { while (atomic_flag_test_and_set_explicit(&watch_lock, memory_order_acquire)) {} }
 static void unlock_watch(void) { atomic_flag_clear_explicit(&watch_lock, memory_order_release); }
@@ -145,6 +145,7 @@ void watch_release(uint32_t address, uint32_t bytes) {
   for (uint32_t page = first >> page_shift; page <= last >> page_shift; page++) {
     if (!atomic_load_explicit(&page_held[page], memory_order_relaxed)) continue;
     atomic_store_explicit(&page_held[page], 0, memory_order_release);
+    atomic_fetch_add_explicit(&releases, 1, memory_order_release);
     open_page(page);
   }
   unlock_watch();
@@ -192,4 +193,5 @@ int watch_fault(uint64_t offset) {
   return 1;
 }
 
+unsigned watch_releases(void) { return atomic_load_explicit(&releases, memory_order_acquire); }
 unsigned watch_faults(void) { return atomic_load_explicit(&faults, memory_order_relaxed); }

@@ -6,6 +6,7 @@
 
 extern int timeline_on;
 void timeline_mark(const char *what, char phase);  // 'B' begins a span, 'E' ends it, 'i' is a moment.
+void timeline_request(unsigned frames, const char *file);  // Any thread: from the next frame shown.
 void timeline_frame_shown(void);                    // Counts frames, to know when to start and stop.
 
 #define TIMELINE_BEGIN(what) do { if (timeline_on) timeline_mark(what, 'B'); } while (0)
