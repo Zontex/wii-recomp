@@ -132,8 +132,9 @@ class Game:
     def board(self, standing, kilograms=60, lean_x=0, lean_y=0):
         self.send(f"board on {kilograms} {lean_x} {lean_y}" if standing else "board off")
 
-    def wait_for(self, pattern, seconds, what):
-        """Waits for a log line matching pattern, written after the last one found."""
+    def wait_for(self, pattern, seconds, what, fail=True):
+        """Waits for a log line matching pattern, written after the last one found. With
+        fail=False, returns None rather than failing when it doesn't come."""
         deadline = time.time() + seconds
         expression = re.compile(pattern, re.M)
         while True:
@@ -145,6 +146,8 @@ class Game:
                 return found
             self.check_running()
             if time.time() > deadline:
+                if not fail:
+                    return None
                 raise StepFailed(f"no sign of {what} after {seconds} s")
             time.sleep(0.25)
 

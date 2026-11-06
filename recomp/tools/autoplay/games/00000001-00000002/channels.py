@@ -29,7 +29,7 @@ def run(game):
             started.append(found.group(2))
             game.wait_for(r"^second \d+:", 60, "the channel drawing")
             game.wait(8)
-            menu.home_to_menu()
+            menu.leave_to_menu()
         else:
             refused.append(index)
         menu.to_grid()

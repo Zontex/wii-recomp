@@ -107,6 +107,17 @@ class Menu(Player):
             self.click_words(screen, "Wii Menu")
         self.game.wait(2)
 
+    def leave_to_menu(self, seconds=90):
+        """In a channel: its own Wii Menu button when its screen has one, as an error or an
+        agreement does, otherwise Home, Wii Menu, Yes. Until the console starts the menu."""
+        text, screen = self.look()
+        own = next((item for item in screen if item["text"] in ("Wii Menu", "Back to the")), None)
+        if own and not self.find(screen, "HOME Menu"):
+            self.click(own["x"], own["y"], then=2)
+            if self.game.wait_for(r"^console: starting the Wii Menu", 20, "the hand-over to the Wii Menu", fail=False):
+                return
+        self.home_to_menu(seconds)
+
     def home_to_menu(self, seconds=90):
         """In a game or channel: Home, Wii Menu, Yes, until the console starts the menu."""
         deadline = time.time() + seconds
