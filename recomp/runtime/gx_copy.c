@@ -295,8 +295,11 @@ static const uint8_t *encode(Copy *copy, const char *why) {
   CopyEncoding encoding = copy->encoding;
   encoding.half = 0;
   encoding.stride = copy->row_bytes;
+  // Read back at the copy's size, it's taken into the processor's own memory in one go
+  // first: the card's memory is slow to read a little at a time, as the filter reads it
+  // (31 ms for a whole filtered picture on a Raspberry Pi 5, against 7 ms brought over first).
+  if (direct) memcpy(pixels, read, need * sizeof *pixels);
   CopySource source = {pixels, (int)copy->width, (int)copy->height, 0, 0};
-  if (direct) source.pixels = (const uint32_t *)read;
   gx_encode_copy(&encoding, &source, encoded);
   return encoded;
 }
