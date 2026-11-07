@@ -184,7 +184,7 @@ It installs the tools, removes the desktop and the programs a console has no use
 
 Turning the Wii off, from the menu or a game, doesn't shut the Pi down. It goes into standby: no picture, the processor at its slowest speed, and Bluetooth still listening. The Pi's power button turns the console on again, and so does the power button of a Wii Remote paired with it (`sudo recomp/tools/remotes_setup.sh pair`), because a paired remote calls the console it knows. While the console is on, the Pi's button is the Wii's: the menu or game turns off its own way, saving what it needs to. Holding the Pi's button for three seconds shuts the Pi down, and pressing it again starts it, straight into the Wii Menu.
 
-ssh keeps working: `echo power | sudo tee /run/wii-recomp/control` presses the power button from there, the console's log is in `~/wii-console/logs/`, and games go in with `add_game.py --console ~/wii-console`. `/etc/wii-recomp/session.env` takes the console's settings, such as `WII_RECOMP_SCALE`, and `--resolution` sets the TV's picture, 1920x1080 at 60 Hz unless told otherwise. `recomp/tools/pi_setup.sh --undo` boots to the desktop again, if it's still installed.
+ssh keeps working: `echo power > /run/wii-recomp/control` presses the power button from there (`standby` and `on` turn the console off and on, as before timing a test run), the console's log is in `~/wii-console/logs/`, and games go in with `add_game.py --console ~/wii-console`. `/etc/wii-recomp/session.env` takes the console's settings, such as `WII_RECOMP_SCALE`, and `--resolution` sets the TV's picture, 1920x1080 at 60 Hz unless told otherwise. `recomp/tools/pi_setup.sh --undo` boots to the desktop again, if it's still installed.
 
 ### Sound
 

@@ -11,7 +11,9 @@ when
   - the Pi's own power button is pressed, or
   - a Wii Remote paired with the Pi (remotes_setup.sh pair) calls it, which is what a
     paired remote does when its power button is pressed, or
-  - "power" is written to /run/wii-recomp/control (for instance over ssh).
+  - "power" is written to /run/wii-recomp/control (for instance over ssh), which the
+    console's user can write to. "standby" turns the console off, "on" turns it on and
+    "off" shuts the Pi down.
 
 While the console is on, a press of the Pi's power button presses the Wii's: the program
 turns off its own way, saving what it needs to, and the Pi goes to standby. Holding the
@@ -25,6 +27,7 @@ remotes' connections need root to read and drop, the control file still works.
 """
 import glob
 import os
+import pwd
 import queue
 import struct
 import subprocess
@@ -146,6 +149,9 @@ def watch_control():
     if os.path.exists(CONTROL):
         os.unlink(CONTROL)
     os.mkfifo(CONTROL, 0o620)
+    owner = console_user()
+    if owner and not USER_MODE:  # The console's user may press the buttons too, over ssh, without sudo.
+        os.chown(CONTROL, owner.pw_uid, owner.pw_gid)
     while True:
         with open(CONTROL) as source:
             for line in source:
@@ -154,6 +160,15 @@ def watch_control():
                     events.put(word)
                 elif word:
                     log(f"control: {word!r} isn't power, on, standby or off")
+
+
+def console_user():
+    try:
+        with open("/etc/wii-recomp/console.conf") as source:
+            name = dict(line.strip().split("=", 1) for line in source if "=" in line and not line.startswith("#")).get("USER")
+        return pwd.getpwnam(name) if name else None
+    except (OSError, KeyError):
+        return None
 
 
 def next_event(timeout):

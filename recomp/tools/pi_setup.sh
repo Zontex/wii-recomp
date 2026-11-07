@@ -35,7 +35,7 @@
 # slowest, Bluetooth listening. The Pi's power button, or the power button of a Wii
 # Remote paired with it (sudo recomp/tools/remotes_setup.sh pair), turns it on again.
 # Holding the Pi's button for three seconds shuts the Pi down. ssh keeps working, and
-# `echo power | sudo tee /run/wii-recomp/control` presses the power button from there.
+# `echo power > /run/wii-recomp/control` presses the power button from there.
 # The console's log is in <console>/logs/, and `journalctl -u wii-standby` says what the
 # standby did. Games go in with add_game.py --console <console>, as on any computer.
 set -euo pipefail
