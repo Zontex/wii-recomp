@@ -528,7 +528,7 @@ void gx_present(void) {
   GxRectangle from;
   gx_copy_rectangle(&from.x, &from.y, &from.width, &from.height);
   gx_backend->present(&from);
-  gx_efb_changed();  // A backend may hold the picture's pixels apart until it's shown.
+  gx_efb_shown();  // A backend may hold the picture's pixels apart until it's shown.
   gx_copy_frame_shown();
   watch_next_frame();
   if (++frames <= 3 || frames % 300 == 0) {

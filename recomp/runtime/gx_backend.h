@@ -125,6 +125,10 @@ typedef struct {
   //   read_picture: the picture itself at the Wii's own size, `area` in its pixels.
   unsigned (*read_texture)(GxTexture *texture, int width, int height, int smooth);
   unsigned (*read_picture)(int depth, const GxRectangle *area);
+  // The same read_picture is expected as the next frame begins, before anything is drawn.
+  // A backend may make it early, once that much of the picture can't change, and give its
+  // ticket then if nothing changed it since. Null where it can't.
+  void (*expect_read)(int depth, const GxRectangle *area);
   int (*read_ready)(unsigned ticket);  // Finished on the card, so finishing won't wait.
   const void *(*read_finish)(unsigned ticket, int *width, int *height);
   // EFB pokes: one of the game's pixels set to a color, red in the low byte, or a depth.

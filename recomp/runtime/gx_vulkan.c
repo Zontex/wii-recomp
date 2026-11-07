@@ -266,6 +266,24 @@ static void forget_set_state(void) {
   }
 }
 
+// A peek as a frame begins reads the frame just shown (gx_efb.c), and a read waits for all
+// the work sent before it: in Galaxy 2, a pass of effects and four copies read back, about
+// 8 ms of the card's work after depth last changed. So when a frame begins with such a
+// read, the next is made where this frame's depth has changed as many times as last frame's
+// did, at the first draw after that leaves it alone, and sent at once. It answers the read
+// if depth hasn't changed since, and otherwise the read is made as before. Every draw that
+// writes depth, clear of it and poke counts, held back or not, so a miss only waits.
+static struct {
+  uint32_t armed_frame;  // The frame expecting it, plus 1; 0 for none.
+  int depth, unused, off;
+  GxRectangle area;
+  unsigned ticket, version, changes, last_changes;  // Depth changes this frame and last.
+} early_read;
+static unsigned depth_version;
+static void depth_changed(void) { depth_version++, early_read.changes++; }
+static int early_read_due(void);
+static void make_early_read(int count);
+
 static void mark_frame_start(void);
 // Commands go to the card in batches, one a picture and more when something must wait
 // for it. Each frame's set remembers the batch it was last sent as, and the newest batch
@@ -308,6 +326,8 @@ static void begin_frame(Frame *frame) {
   cover.next_shader = 0;
   depth_use.number = 0;
   depth_use.frame_began = 0;
+  early_read.last_changes = early_read.changes;
+  early_read.changes = 0;
   if (strip_rest) strip_rest--;
   mark_frame_start();
   forget_set_state();
@@ -547,9 +567,9 @@ static int kick_due(const VkRect2D *area) {
          && empty_layer.step == LAYER_IDLE && !(pass_began_as & DROPS_DEPTH);
 }
 
-static void kick(int count) {
-  flush_run();
-  vkCmdEndRenderPass(vk.frame->draw);
+// Sends what's recorded so far without waiting and goes on in the next set, during a
+// draw of `count` vertices already reserved.
+static void send_during_draw(int count) {
   Frame *frame = vk.frame;
   vk_frame_submit(frame, VK_NULL_HANDLE, VK_NULL_HANDLE);
   begin_batch(&vk.frames[(frame - vk.frames + 1) % FRAMES_IN_FLIGHT]);
@@ -558,6 +578,12 @@ static void kick(int count) {
   memcpy(vk.frame->vertices.mapped + at, frame->vertices.mapped + reserved_at, bytes);
   reserved_at = at;
   reserved_restarts = restarts;
+}
+
+static void kick(int count) {
+  flush_run();
+  vkCmdEndRenderPass(vk.frame->draw);
+  send_during_draw(count);
   VkClearValue values[2] = {{.color = {{0, 0, 0, 0}}}, {.depthStencil = {1.0f, 0}}};
   VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = render_passes[0], .framebuffer = framebuffer_for(0, pass_depthless),
                                 .renderArea = pass_area, .clearValueCount = 2, .pClearValues = values};
@@ -1016,6 +1042,7 @@ static int join_strip(int32_t first, int count) {
 
 static void draw(int primitive, int count) {
   if (!count) return;
+  if (state_in_use.depth_write) depth_changed();
   {
     // In the strip, a pass should touch only the small pictures being made, and those
     // draws are few and tiny, so it's worth working out exactly where they land.
@@ -1055,6 +1082,7 @@ static void draw(int primitive, int count) {
   {
     VkRect2D where = drawn_area();
     if (kick_due(&where)) kick(count);  // Before anything of this draw is recorded.
+    else if (early_read_due()) make_early_read(count);
   }
   if (!place_constants(vk.frame->draw)) {
     finish_commands();
@@ -1127,7 +1155,7 @@ static void draw(int primitive, int count) {
 static void clear_now(const GxClear *c) {
   if (!c->color_write && !c->alpha_write && !c->depth_write) return;
   route_work(clip_to_efb(&c->area).offset.y >= VISIBLE_HEIGHT * EFB_SCALE);
-  if (c->depth_write) early_depth_changed();
+  if (c->depth_write) early_depth_changed(), depth_changed();
   if (c->depth_write && !in_strip) {
     depth_touched(depth_use.number);
     VkRect2D wanted = clip_to_efb(&c->area);
@@ -2108,9 +2136,48 @@ static void record_reads(void) {
   }
 }
 
+static const void *read_finish(unsigned ticket, int *width, int *height);
+static unsigned read_picture(int depth, const GxRectangle *area);
+
+// WII_RECOMP_EARLY_READ_CHECK=1 makes each read again where it would have been, waiting
+// for it, says if the two differ, and answers with the second.
+static unsigned check_early_read(unsigned early, int depth, const GxRectangle *area) {
+  static uint8_t kept[EFB_WIDTH * EFB_HEIGHT * BYTES_PER_PIXEL];
+  static unsigned checked, differed;
+  int width = 0, height = 0;
+  const uint8_t *bytes = read_finish(early, &width, &height);
+  size_t size = (size_t)width * (size_t)height * BYTES_PER_PIXEL;
+  if (bytes) memcpy(kept, bytes, size);
+  unsigned ticket = read_picture(depth, area);
+  const uint8_t *now = ticket ? read_finish(ticket, &width, &height) : 0;
+  checked++;
+  if (!bytes || !now || memcmp(kept, now, size)) differed++, fprintf(stderr, "peek: a read made early differs from one made now, in frame %u\n", frame_serial);
+  if (checked % 600 == 0) fprintf(stderr, "peek: %u reads made early checked, %u differed\n", checked, differed);
+  return ticket;
+}
+
+static void early_read_unused(void) {
+  if (++early_read.unused < 30) return;
+  early_read.off = 1;
+  fprintf(stderr, "peek: reads made early went unused 30 times in a row, so they stop\n");
+}
+
 // The picture at the Wii's own size, through an image of that size the picture is scaled into.
 static unsigned read_picture(int depth, const GxRectangle *area) {
   flush_run();  // Strips gathered so far go first.
+  if (early_read.ticket) {
+    unsigned ticket = early_read.ticket;
+    early_read.ticket = 0;
+    if (depth == early_read.depth && depth_version == early_read.version && !memcmp(area, &early_read.area, sizeof *area)
+        && reads[ticket % READ_SLOTS].ticket == ticket) {
+      static int told, check = -1;
+      if (!told++) fprintf(stderr, "peek: a read as the frame begins was made early, where depth stopped changing\n");
+      early_read.unused = 0;
+      if (check < 0) check = getenv("WII_RECOMP_EARLY_READ_CHECK") != 0;
+      return check ? check_early_read(ticket, depth, area) : ticket;
+    }
+    early_read_unused();
+  }
   if (area->width <= 0 || area->height <= 0 || area->width > EFB_WIDTH || area->height > EFB_HEIGHT) return 0;
   ready_to_read();
   VkImageAspectFlags aspect = depth ? VK_IMAGE_ASPECT_DEPTH_BIT : VK_IMAGE_ASPECT_COLOR_BIT;
@@ -2131,6 +2198,29 @@ static unsigned read_picture(int depth, const GxRectangle *area) {
   to_host(commands);
   mark("read the picture back", area->width, area->height);
   return reads[slot].ticket;
+}
+
+static void expect_read(int depth, const GxRectangle *area) {
+  static int off = -1;  // WII_RECOMP_NO_EARLY_READ, for measuring.
+  if (off < 0) off = getenv("WII_RECOMP_NO_EARLY_READ") != 0;
+  if (!depth || early_read.off || off) return;  // Color changes with nearly every draw.
+  early_read.armed_frame = frame_serial + 1;
+  early_read.depth = depth;
+  early_read.area = *area;
+}
+
+static int early_read_due(void) {
+  return early_read.armed_frame == frame_serial + 1 && early_read.changes == early_read.last_changes && !state_in_use.depth_write && !in_strip
+         && !side.on && empty_layer.step == LAYER_IDLE;
+}
+
+static void make_early_read(int count) {
+  early_read.armed_frame = 0;
+  if (early_read.ticket) early_read.ticket = 0, early_read_unused();
+  unsigned ticket = read_picture(early_read.depth, &early_read.area);
+  if (!ticket) return;
+  early_read.ticket = ticket, early_read.version = depth_version;
+  send_during_draw(count);
 }
 
 static void note_finished(int frame_index) {
@@ -2194,6 +2284,7 @@ static void poke(int depth, int x, int y, uint32_t rgba, float depth_value) {
   if (depth) {
     flat_depth.known = 0;
     early_depth_changed();
+    depth_changed();
   }
   newest_copy.frame = 0;
 }
@@ -2254,6 +2345,7 @@ const GxBackend gx_backend_vulkan = {
   .present = present,
   .read_texture = read_texture,
   .read_picture = read_picture,
+  .expect_read = expect_read,
   .read_ready = read_ready,
   .read_finish = read_finish,
   .poke = poke,

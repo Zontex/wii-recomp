@@ -6,6 +6,10 @@
 // block of 32 by 32 pixels around it: Super Mario Galaxy 2 peeks once or twice a frame,
 // and reading the whole picture cost the Pi's card 1.9 ms of each. A second that falls
 // outside reads the whole picture, as games that peek many pixels at a time do.
+//
+// Galaxy 2 peeks as each frame begins, before drawing anything, at the depth of the frame
+// just shown. Such a read is told to the backend, which may make the next one early, as
+// soon as that part of the picture stops changing, so the peek doesn't wait for the work after.
 #include <stdlib.h>
 #include <string.h>
 
@@ -26,7 +30,9 @@ static unsigned changes = 1;  // Anything drawn, cleared or poked since the last
 enum { PEEK_BLOCK = 32 };
 static struct { unsigned seen; GxRectangle area; uint32_t pixels[EFB_WIDTH * EFB_HEIGHT]; } held[2];
 
-void gx_efb_changed(void) { changes++; }
+static int drawn;  // Anything since the last picture was shown.
+void gx_efb_changed(void) { changes++, drawn = 1; }
+void gx_efb_shown(void) { changes++, drawn = 0; }
 
 typedef struct { int depth, x, y; uint32_t value; } Access;
 
@@ -56,6 +62,7 @@ static void peek_work(void *argument) {
     }
     held[kind].seen = changes;
     *area = want;
+    if (!drawn && gx_backend->expect_read) gx_backend->expect_read(kind, &want);
   }
   uint32_t stored = held[kind].pixels[access->y * EFB_WIDTH + access->x], format = gx.bp[BP_PIXEL_FORMAT];
   if (kind) {
