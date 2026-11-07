@@ -11,6 +11,7 @@
 #include <objc/message.h>
 #include <objc/runtime.h>
 #endif
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 
@@ -146,11 +147,26 @@ void window_size(int *width, int *height) {
 // Closing the window is pressing the power button: the program turns the console off
 // its own way, writing what it needs to. One that doesn't listen, or takes too long,
 // has its power cut, with open files written out as IOS would.
+//
+// SIGTERM and SIGINT press it too, so a computer that is only the console (such as a
+// Raspberry Pi started by recomp/tools/pi_setup.sh) turns off as the Wii does when the
+// system stops it. The window wakes every 50 ms at most to see the flag; a second signal
+// is the system's default, which ends the console at once.
+static volatile sig_atomic_t stop_signal;
+
+static void on_stop_signal(int number) {
+  stop_signal = number;
+  signal(number, SIG_DFL);
+}
+
 void window_run(void) {
-  while (!glfwWindowShouldClose(window)) {
+  signal(SIGTERM, on_stop_signal);
+  signal(SIGINT, on_stop_signal);
+  while (!glfwWindowShouldClose(window) && !stop_signal) {
     glfwWaitEventsTimeout(pads_wait_seconds());
     pads_poll();
   }
+  if (stop_signal) fprintf(stderr, "console: asked to stop (signal %d)\n", (int)stop_signal);
   if (power_button_press()) {
     fprintf(stderr, "console: the power button is pressed\n");
     for (double until = glfwGetTime() + POWER_OFF_SECONDS; glfwGetTime() < until;) {
