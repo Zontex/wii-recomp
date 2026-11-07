@@ -193,6 +193,40 @@ int main(void) {
   gx_encode_copy(&e, &s, out);
   CHECK_EQ(out[0], 0x56);
 
+  // A whole row at a time gives what each texel on its own gives: filters, the edges held
+  // or not, and the picture formats, against gx_copy_texel on made-up pixels.
+  {
+    static uint32_t source_pixels[16 * 12];
+    uint32_t seed = 12345;
+    for (int i = 0; i < 16 * 12; i++) seed = seed * 1103515245u + 12345u, source_pixels[i] = seed ^ (seed >> 13);
+    CopySource source = {source_pixels, 16, 12, 3, 2};
+    const uint8_t filters[][7] = {{0, 0, 21, 22, 21, 0, 0}, {10, 11, 11, 10, 11, 10, 1}, {0, 30, 40, 30, 0, 20, 10}, {63, 63, 63, 63, 63, 63, 63}};
+    for (int f = 0; f < 4; f++) {
+      for (int edges = 0; edges < 4; edges++) {
+        for (int picture = 0; picture < 3; picture++) {
+          CopyEncoding each = plain(COPY_RGBA8, 8, 8, 128);
+          memcpy(each.filter, filters[f], 7);
+          each.clamp_top = edges & 1, each.clamp_bottom = (edges >> 1) & 1;
+          each.pixel_format = picture == 0 ? PICTURE_RGB8_Z24 : picture == 1 ? PICTURE_RGBA6_Z24 : PICTURE_RGB565_Z16;
+          uint8_t blocks[2 * 128];
+          gx_encode_copy(&each, &source, blocks);
+          int wrong = 0;
+          for (int y = 0; y < 8; y++) {
+            for (int x = 0; x < 8; x++) {
+              uint8_t want[4];
+              gx_copy_texel(&each, &source, x, y, want);
+              const uint8_t *block = blocks + (y / 4) * 128 + (x / 4) * 64;
+              int index = (y % 4) * 4 + x % 4;
+              uint8_t got[4] = {block[index * 2 + 1], block[32 + index * 2], block[32 + index * 2 + 1], block[index * 2]};
+              wrong += memcmp(got, want, 4) != 0;
+            }
+          }
+          CHECK_EQ(wrong, 0);
+        }
+      }
+    }
+  }
+
   // Formats with no shape.
   uint32_t across, rows, bytes;
   CHECK_EQ(gx_copy_shape(13, 4, 4, &across, &rows, &bytes), 0);

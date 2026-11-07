@@ -105,25 +105,45 @@ void gx_copy_texel(const CopyEncoding *e, const CopySource *s, int x, int y, uin
 
 // A row of texels. Most copies have no filter beyond the texel's own row, no gamma, no
 // YUV and no halving, and those take each pixel as it's stored, with no more working out.
-static void texel_row(const CopyEncoding *e, const CopySource *s, int y, int count, uint8_t *row) {
-  int middle = e->filter[2] + e->filter[3] + e->filter[4];
-  int plain = !e->half && !e->gamma && !e->intensity && !e->filter[0] && !e->filter[1] && !e->filter[5] && !e->filter[6];
-  if (!plain) {
-    for (int x = 0; x < count; x++) gx_copy_texel(e, s, x, y, row + x * 4);
-    return;
-  }
+// One row of pixels as stored, the copy's row `y` with its edges held as fetch holds them.
+static void stored_row(const CopyEncoding *e, const CopySource *s, int y, int count, int *out) {
   int top = e->clamp_top ? s->y : 0, bottom = (e->clamp_bottom ? s->y + (int)e->height : s->height) - 1;
   int at_y = clamp(clamp(s->y + y, top, bottom > top ? bottom : top), 0, s->height - 1);
   const uint32_t *line = s->pixels + (size_t)at_y * (size_t)s->width;
+  for (int x = 0; x < count; x++) as_stored(e, line[clamp(s->x + x, 0, s->width - 1)], out + x * 4);
+}
+
+// A row of texels. Most copies have no gamma, no YUV and no halving, and those take each
+// pixel as it's stored: the rows above and below the texel's, for the vertical filter,
+// are worked out once for the whole row rather than for each texel, which is what
+// gx_copy_texel does for the rest.
+static void texel_row(const CopyEncoding *e, const CopySource *s, int y, int count, uint8_t *row) {
+  if (e->half || e->gamma || e->intensity) {
+    for (int x = 0; x < count; x++) gx_copy_texel(e, s, x, y, row + x * 4);
+    return;
+  }
+  static int *rows;
+  static size_t rows_size;
+  if ((size_t)count * 12 > rows_size) rows = realloc(rows, (rows_size = (size_t)count * 12) * sizeof *rows);
+  int *previous = rows, *current = rows + count * 4, *next = rows + count * 8;
+  uint32_t above = (uint32_t)e->filter[0] + e->filter[1], middle = (uint32_t)e->filter[2] + e->filter[3] + e->filter[4];
+  uint32_t below = (uint32_t)e->filter[5] + e->filter[6];
+  int wraps = above + middle + below >= 128;  // Weights adding up to 128 or more wrap past 511, as in gx_copy_texel.
+  stored_row(e, s, y, count, current);
+  if (above || below) {
+    stored_row(e, s, y - 1, count, previous);
+    stored_row(e, s, y + 1, count, next);
+  }
   for (int x = 0; x < count; x++) {
-    int value[4];
-    as_stored(e, line[clamp(s->x + x, 0, s->width - 1)], value);
     for (int i = 0; i < 3; i++) {
-      int sum = (value[i] * middle) >> 6;
-      if (middle >= 128) sum &= 0x1ff;
-      row[x * 4 + i] = (uint8_t)(sum > 255 ? 255 : sum);
+      int at = x * 4 + i;
+      uint32_t sum = (uint32_t)current[at] * middle;
+      if (above || below) sum += (uint32_t)previous[at] * above + (uint32_t)next[at] * below;
+      sum >>= 6;
+      if (wraps) sum &= 0x1ff;
+      row[at] = (uint8_t)(sum > 255 ? 255 : sum);
     }
-    row[x * 4 + 3] = (uint8_t)value[3];
+    row[x * 4 + 3] = (uint8_t)current[x * 4 + 3];
   }
 }
 
