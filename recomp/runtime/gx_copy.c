@@ -15,6 +15,10 @@
 // copy a later one only partly covers stays held apart, on a texture of its own, and both
 // land in order when something reads there. Only a touch of a copy made in the same
 // picture waits for the card, and says so.
+// Galaxy 2 makes copies again at the same places every picture, beside data it touches,
+// so each read back for the page was covered by the next copy before it landed: four a
+// picture, 2.8 ms of the Pi's card for nothing. A place where that happened a few times
+// in a row starts the read back only once a picture has been shown with the copy still there.
 // WII_RECOMP_COPIES_ON_CARD=1 leaves memory alone, as before copies reached it.
 #include <stdio.h>
 #include <stdlib.h>
@@ -58,6 +62,8 @@ typedef struct {
   uint32_t made;             // In the order copies were made, so overlapping ones land oldest first.
   uint64_t watched, hash;    // Memory once written: the watch's count, or with none, the bytes' hash.
   unsigned checked_frame;    // The frame, plus 1, its memory was last checked in, when unwatched.
+  int unused_reads;          // Read backs for a page let go, covered by a newer copy before landing, in a row.
+  unsigned read_later;       // Plus 1: the picture shown after which such a read back is to start.
   // Pages let go before its bytes landed, for something beside it: what each held then, so
   // a byte the game has written there since isn't written over when the copy lands.
   uint8_t *before, *before_taken;
@@ -67,7 +73,9 @@ typedef struct {
 static Copy copies[MAX_COPIES], older[MAX_OLDER];
 static int copy_count;
 static uint32_t copies_made;
-static struct { unsigned held, landed_early, waited, kept_apart, kept_off; } counts;
+static struct { unsigned held, landed_early, waited, kept_apart, kept_off, unused_reads; } counts;
+static unsigned pictures_shown;
+enum { UNUSED_READS = 3 };
 
 // Textures an older copy gave back, usable again from the next picture, as the backend
 // may still be holding on to one for this one.
@@ -214,6 +222,7 @@ static uint64_t hash_bytes(const uint8_t *data, uint32_t bytes) {
 
 // An older copy, done with: its texture goes back for another.
 static void drop(Copy *copy) {
+  if (copy->ticket && was_let_go(copy)) copy->unused_reads++, counts.unused_reads++;
   copy->memory = MEMORY_NONE;
   copy->ticket = 0;
   if (!copy->older) return;
@@ -384,7 +393,11 @@ static void expose(Copy *copy, const char *why, uint32_t at) {
             copy->encoding.format, why, at, cpu.lr, gx_frame_number());
   }
   take_before(copy);
-  if (!copy->ticket) copy->ticket = read_copy(copy);
+  if (copy->ticket || copy->read_later) return;
+  static int always = -1;  // WII_RECOMP_EXPOSED_READS_ALWAYS, for measuring.
+  if (always < 0) always = getenv("WII_RECOMP_EXPOSED_READS_ALWAYS") != 0;
+  if (copy->unused_reads >= UNUSED_READS && !always) copy->read_later = pictures_shown + 1;
+  else copy->ticket = read_copy(copy);
   gap_note("pixel.copy_to_texture", copy_start(copy));  // Its bytes on a shared page may be late.
 }
 
@@ -454,11 +467,16 @@ static int read_back_with_others(Copy *copy) {
 void gx_copy_frame_shown(void) {
   // A copy let go early lands once its read back is there; the rest wait, held, for a touch.
   EACH_HELD(copy) {
+    if (copy->read_later && copy->read_later <= pictures_shown) copy->read_later = 0, copy->ticket = read_copy(copy);
+  }
+  EACH_HELD(copy) {
     if (copy->ticket && was_let_go(copy) && read_back_with_others(copy)) {
       write_back(copy, "let go early, read back already");
+      copy->unused_reads = 0;
       counts.landed_early++;
     }
   }
+  pictures_shown++;
   settle_pages();
   for (int depth = 0; depth < 2; depth++) {
     while (freed_count[depth] && spare_count[depth] < MAX_OLDER) spare[depth][spare_count[depth]++] = freed[depth][--freed_count[depth]];
@@ -468,8 +486,8 @@ void gx_copy_frame_shown(void) {
     int places = 0;
     for (int i = 0; i < copy_count; i++) places += learned(&copies[i]);
     fprintf(stderr, "copies: %u held, %u kept apart from a later one, %u landed early, %u waited for, %d places read back as made, "
-            "%u pages kept from a copy as the game wrote into them\n",
-            counts.held, counts.kept_apart, counts.landed_early, counts.waited, places, counts.kept_off);
+            "%u pages kept from a copy as the game wrote into them, %u read back but covered before landing\n",
+            counts.held, counts.kept_apart, counts.landed_early, counts.waited, places, counts.kept_off, counts.unused_reads);
   }
 }
 
@@ -682,6 +700,7 @@ void gx_copy_to_texture(uint32_t control, int from_depth) {
   else gx_backend->copy_color(copy->texture, &from, width, height, channels_for(control), half);
   copy->live = 1;
   copy->ticket = 0;
+  copy->read_later = 0;
   copy->made = ++copies_made;
   if (copy->before_taken) memset(copy->before_taken, 0, copy->before_size / page_size() + 2);
   // Leaving memory as it was, for measuring what landing costs.
