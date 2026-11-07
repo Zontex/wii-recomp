@@ -130,7 +130,8 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 0 to 2.
 - [x] Request tracing, and unknown requests answered with an error and a log line, never a fake success
 - [x] Titles, tickets and ES requests as the Wii Menu uses them
 - [x] A private console folder holding its own copy of the Wii storage, the Wii Menu and a drive slot (`recomp/tools/prepare_console.py`)
-- [x] Clean "no network" answers for WiiConnect24, the SD card slot and sockets
+- [x] Clean "no network" answers for the SD card slot, and for WiiConnect24 and sockets when the console is offline (`WII_RECOMP_SHOP_SERVER=off`)
+- [x] A network that reaches only the console's own server (`recomp/tools/shop/server.py`): sockets, polling, name lookups through its own DNS, IOS's secure connections passed through, and the console's certificate
 - [x] Each IOS version's own memory at the top of MEM2, so a game's heap gets the full arena it was sized for
 - [x] Your own Wii's BootMii NAND backup and keys decrypted into the storage the console reads (`recomp/tools/import_nand.py`, `wii/`)
 - [ ] Miis and saves from that backup used by every title, so a game picks up where it was left on the Wii
@@ -162,7 +163,10 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - [x] A recompiled disc image in the drive shows its banner, and Start hands over to the game, running natively
 - [x] Region free, without changing the disc
 - [x] Back to the menu from a game: Home, Wii Menu, Yes, tested from Mario Kart Wii with a scripted remote. Interrupts waiting when a game turns them back on are taken at once, as the processor does, so its shutdown finishes promptly
-- [x] Launching channels: each channel built with `add_game.py --nand` starts from the grid, natively, and goes back with Home. The Mii Channel, the Photo Channel and the Forecast and News Channels, which say they can't connect. The Wii Shop Channel stops as it starts
+- [x] Launching channels: each channel built with `add_game.py --nand` starts from the grid, natively, and goes back with Home. The Mii Channel, the Photo Channel and the Forecast and News Channels, which say they can't connect
+- [x] The Wii Network Services Agreement accepted in Wii Settings, and WiiConnect24's standby connection turned on, from the console's own server (`autoplay` session `online`)
+- [x] A look-only Wii Shop Channel: our own pages over Nintendo's pictures and catalogue kept in `wii/shop/`, every title browsable, Download refused, the Shop's music, and back to the menu (`autoplay` session `shop`). The Shop's browser trusts the console's own certificate authority, added as the channel reads its list
+- [ ] The Shop's account pages (Wii Points, Account Activity, Titles You've Downloaded) beyond a short note, and the welcome page's background picture, which the archive lacks
 - [x] The real clock: the computer's time, whatever the menu's date setting stored
 - [x] Power, reset and standby, from the control pipe or by closing the window, and discs changed as the console runs
 - [ ] Menu, disc channel, a game and back, 20 times in a row with real controllers. With the scripted remote, see `recomp/tools/autoplay/games/00000001-00000002/roundtrip.py`
@@ -213,7 +217,8 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - Real Wii Remotes and the Balance Board can drive a game's own Bluetooth code, and the Wii's memory became one window at a fixed address, making each load or store a few instructions.
 - One command turns a disc into a playable image. Code that has barely run compiles quickly and counts its runs, and the next build compiles what did the work for speed: Wii Fit Plus builds in under a minute and a half on a Raspberry Pi 5.
 - Mario Kart Wii, from the user's own disc, reaches its menus on a console that has never run the Wii Menu, once the files a new Wii makes on first start are there.
+- The recompiled Wii Menu goes to a game and back, starts its channels, accepts the network agreement, and opens a look-only Wii Shop Channel served by the console itself, all driven by script.
 
 ## Out of scope
 
-Nintendo's online services, GameCube discs, Windows, and anything that needs a console's private keys.
+Nintendo's online services beyond the few the console answers itself from its own server (the connection test, the agreement and a look-only Shop), downloading or buying anything, GameCube discs, Windows, and anything that needs a console's private keys.
