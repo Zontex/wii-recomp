@@ -1,6 +1,7 @@
 // The network devices. Nintendo's online services are gone, so this console is
 // never online, but WiiConnect24's scheduler and clock still answer as a real one does.
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -12,10 +13,10 @@
 
 enum {
   KD_SUSPEND_SCHEDULER = 1, KD_TRY_SUSPEND_SCHEDULER = 2, KD_RESUME_SCHEDULER = 3, KD_LOCK_SOCKET = 8, KD_UNLOCK_SOCKET = 9,
-  KD_SAVE_MAIL_NOW = 0x0d, KD_REQUEST_USER_ID = 0x0f, KD_GET_SCHEDULER_STAT = 0x1e, SCHEDULER_BYTES = 256, KD_SET_SCRIPT_MODE = 0x22, KD_REQUEST_SHUTDOWN = 0x28, USER_ID_BYTES = 16,
+  KD_SAVE_MAIL_NOW = 0x0d, KD_REQUEST_USER_ID = 0x0f, KD_GET_SCHEDULER_STAT = 0x1e, SCHEDULER_BYTES = 256, KD_SET_SCRIPT_MODE = 0x22, KD_REQUEST_SHUTDOWN = 0x28, KD_STARTUP_SOCKET = 0x06, KD_CLEANUP_SOCKET = 0x07, USER_ID_BYTES = 16,
   TIME_GET_UNIVERSAL = 0x14, TIME_SET_RTC_COUNTER = 0x17, TIME_GET_DIFFERENCE = 0x18,
   NCD_GET_CONFIG = 3, NCD_SET_CONFIG = 4, NCD_READ_CONFIG = 5, NCD_WRITE_CONFIG = 6, NCD_GET_LINK_STATUS = 7,
-  LINK_NONE = 2, CONFIG_BYTES = 0x1b5c,
+  LINK_NONE = 2, LINK_WIRED = 3, CONFIG_BYTES = 0x1b5c,
   NCD_GET_WIRELESS_MAC = 8, MAC_BYTES = 6,
 };
 
@@ -50,6 +51,8 @@ int net_kd_request(uint32_t command, uint32_t request) {
     case KD_UNLOCK_SOCKET:
     case KD_SAVE_MAIL_NOW:      // No mail arrives, so there's none to save.
     case KD_SET_SCRIPT_MODE:    // Scripts come from the network, so none ever run.
+    case KD_STARTUP_SOCKET:     // Starting and stopping WiiConnect24's use of the network, as Dolphin answers it.
+    case KD_CLEANUP_SOCKET:
     case KD_REQUEST_SHUTDOWN: { // Sent before the console resets or goes back to the Wii Menu. Nothing runs to stop.
       uint32_t out = ioctl_out(request, 4);
       if (out) wr32(out, 0);
@@ -78,10 +81,7 @@ static void save_config(void) {
   char full[1024];
   files_save_path(CONFIG_PATH, full, sizeof full);
   files_make_parents(full);
-  FILE *file = fopen(full, "wb");
-  if (!file) return;
-  fwrite(config, 1, sizeof config, file);
-  fclose(file);
+  if (!files_write_whole(full, config, sizeof config)) fprintf(stderr, "net: couldn't save %s\n", full);
 }
 
 // The network settings manager. The answer word goes in the first output.
@@ -96,11 +96,16 @@ int net_ncd_manage(uint32_t command, uint32_t request) {
     wr32(result, 0);
     return 0;
   }
-  if (rd32(request + 12) == NCD_GET_LINK_STATUS) {  // Never connected.
+  // A wired link, as Dolphin answers, while the console answers its own services
+  // (net_routes.c): only those names reach anything, so the rest of the internet looks
+  // as it does now that Nintendo's servers are gone. With WII_RECOMP_SHOP_SERVER=off,
+  // no link at all.
+  if (rd32(request + 12) == NCD_GET_LINK_STATUS) {
     uint32_t out = ios_out_sized(&vectors, 0, 8);
     if (!out) return IOS_EINVAL;
+    const char *setting = getenv("WII_RECOMP_SHOP_SERVER");
     wr32(out, 0);
-    wr32(out + 4, LINK_NONE);
+    wr32(out + 4, setting && !strcmp(setting, "off") ? LINK_NONE : LINK_WIRED);
     return 0;
   }
   uint32_t code = rd32(request + 12);

@@ -417,7 +417,7 @@ def emit_any(address, word, name):
     if name == "mfmsr":
         return f"cpu.r[{d}] = cpu.msr;"
     if name == "mtmsr":
-        return f"cpu.msr = cpu.r[{d}];"
+        return f"cpu.msr = cpu.r[{d}]; if (cpu.msr & 0x8000u) interrupts_turned_on();"
     if name == "mfcr":
         return f"{{ uint32_t v = 0; for (int i = 0; i < 8; i++) v = (v << 4) | cpu.cr[i]; cpu.r[{d}] = v; }}"
     if name == "mtcrf":
@@ -1049,6 +1049,12 @@ def choose_fast(counts, share=HOT_SHARE):
     return chosen
 
 
+def virtual_bluetooth_keeps(entry):
+    """Whether the program's own code stays for this entry with --virtual-bluetooth."""
+    return (entry.get("body") in DIRECT_INPUT or "Bluetooth" in entry["name"] or entry["name"].startswith("KPADRead")
+            or entry.get("group") == "board")
+
+
 def main():
     dol = Path(sys.argv[1])
     program = Program(dol.read_bytes())
@@ -1056,12 +1062,18 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     functions, _ = find_functions(program)
     entries = load_entries()
+    board = {entry["reason"] for entry in entries if entry.get("group") == "board"}
+    if "--virtual-bluetooth" in sys.argv:
+        # What's dropped below needn't be found at all: a program may have no KPAD, as some
+        # channels haven't, and nothing of it would be replaced anyway.
+        entries = [dict(entry, group="optional") if virtual_bluetooth_keeps(entry) else entry for entry in entries]
     replaced, idle_loops, values = resolve(program, functions, entries)
     if "--virtual-bluetooth" in sys.argv:
         # The program's own controller code runs, including an older KPADRead left as a stub,
         # and so does its board code, which the simulated board answers. WPADRead reads the
         # remote too, so standing in for it with the board's sensors blanks the remote.
-        board = {entry["reason"] for entry in entries if entry.get("group") == "board"}
+        # The board's entries are told apart by their reasons, noted before they were made
+        # optional above.
         replaced = {address: entry for address, entry in replaced.items()
                     if entry[1] not in DIRECT_INPUT and "Bluetooth" not in entry[0] and not entry[0].startswith("KPADRead")
                     and entry[0] not in board}

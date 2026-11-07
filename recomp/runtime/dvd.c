@@ -3,6 +3,7 @@
 #include <string.h>
 
 #include "cpu.h"
+#include "console.h"
 #include "debug.h"
 #include "drive.h"
 #include "gaps.h"
@@ -105,7 +106,7 @@ int dvd_request(uint32_t command, uint32_t request) {
   switch (code) {
     case STOP_MOTOR:
       // Throwing the disc out, so another can go in. The disc here never changes.
-      if (input != 0x80000000u && rd8(input + EJECT_AT) & EJECT) gap_hit("hw.second_disc_layer_disc_swap", code);
+      if (input != 0x80000000u && rd8(input + EJECT_AT) & EJECT) console_eject();
       return DRIVE_OK;
     case RESET: return DRIVE_OK;
     case GET_STATUS_REGISTER: if (word_out) wr32(word_out, 0); return DRIVE_OK;

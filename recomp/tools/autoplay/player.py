@@ -5,7 +5,6 @@ person would pick to keep going, or presses A. When a screen hasn't changed for 
 it tries each piece of text on it in turn, as someone unsure would. A game's own player
 (games/<game ID>/) adds what's particular to it, such as stepping on the board.
 """
-import re
 
 # Buttons a person picks to keep going, best first.
 BUTTONS = ["OK", "Correct", "Yes", "Next", "Start", "Begin", "Confirm", "Done", "Continue", "Save"]
@@ -21,6 +20,9 @@ class Player:
         self.last_text = None
         self.same = 0
         self.tried = 0
+
+    def click(self, x, y):
+        self.game.click(x, y)
 
     def look(self):
         """Reads the screen. Returns the text, joined, and the pieces with where they are."""
@@ -38,7 +40,7 @@ class Player:
         item = screen[self.tried % len(screen)]
         self.tried += 1
         self.game.note(f"stuck, trying {item['text']!r}")
-        self.game.click(item["x"], item["y"])
+        self.click(item["x"], item["y"])
         return True
 
     def react(self, text, screen):
@@ -47,6 +49,6 @@ class Player:
         words = {item["text"]: item for item in screen}
         button = next((words[b] for b in self.buttons if b in words), None)
         if button:
-            self.game.click(button["x"], button["y"])
+            self.click(button["x"], button["y"])
         else:
             self.game.press("a")

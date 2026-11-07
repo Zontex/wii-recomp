@@ -3,6 +3,7 @@
 
 Usage: recomp/tools/add_game.py <disc image | extracted disc folder | game ID> [--console FOLDER]
                                 [--fifo-breakpoints] [--scale N[/D] | default] [--no-pack] [--jobs N]
+       recomp/tools/add_game.py <title ID, as 00010002-48414341> --nand <Wii storage folder> --console FOLDER
 
 It extracts the disc (an .iso, .rvz or .wbfs), translates its program with every piece of
 code it can find and the game's own Wii Remote code, builds the console if needed and the
@@ -23,6 +24,11 @@ Each game builds in recomp/build-<game ID>/, which keeps its settings in setting
 --scale sets the picture's size against the Wii's for this game, such as 3/2 for a game
 too heavy for a small graphics chip at the console's 2; it's remembered there too, and
 --scale default goes back to the console's own. WII_RECOMP_SCALE still wins when set.
+
+With --nand, the title is a channel installed in that Wii storage folder rather than a
+disc, such as the Mii Channel (00010002-48414341). It builds in recomp/build-<title ID>/
+the same way, and is installed in each console's titles/ folder, where the Wii Menu
+starts it. Run it again after playing for the second, faster build, as with a disc.
 """
 import argparse
 import json
@@ -107,6 +113,34 @@ def extract(image):
     disc.rename(build / "disc")
     shutil.rmtree(incoming, ignore_errors=True)
     return build / "disc"
+
+
+def prepare_channel(storage, key):
+    """Writes a channel's program from the storage as an extracted disc, in its build folder."""
+    high, low = key.split("-")
+    if not (Path(storage) / "title" / high / low / "content/title.tmd").is_file():
+        fail(f"{storage} has no title {key} installed")
+    build = RECOMP / f"build-{key}"
+    disc = build / "disc"
+    run("write the channel's program", [sys.executable, str(RECOMP / "translate/prepare_title.py"), str(storage), high, low, str(disc)])
+    return build, disc
+
+
+def install(build, disc, key, console):
+    """The title's program files and native code, swapped into a console's titles/ whole."""
+    titles = Path(console) / "titles"
+    if not titles.parent.is_dir():
+        fail(f"{console} isn't a console folder; make one with recomp/tools/prepare_console.py")
+    sources = [disc / "sys" / name for name in ("main.dol", "boot.bin", "fst.bin")] + [build / LIBRARY]
+    target = titles / key
+    partial = titles / (key + ".partial")
+    shutil.rmtree(partial, ignore_errors=True)
+    partial.mkdir(parents=True)
+    for path in sources:
+        shutil.copy2(path, partial / path.name)
+    shutil.rmtree(target, ignore_errors=True)
+    partial.rename(target)
+    print(f"installed {key} in {target}")
 
 
 def find_game(source):
@@ -222,13 +256,24 @@ def main():
     parser.add_argument("--scale", help="the picture's size against the Wii's for this game, such as 3/2, or default; remembered")
     parser.add_argument("--no-pack", action="store_true", help="build the native code but don't pack a disc image")
     parser.add_argument("--jobs", type=int, default=os.cpu_count(), help="compiles at once")
+    parser.add_argument("--nand", help="a Wii storage folder the title is installed in, for a channel")
     options = parser.parse_args()
 
     started = time.monotonic()
-    build, settings = find_game(options.source)
-    disc = Path(settings["disc"])
-    check_disc(disc)
-    code, key = game_id(disc), title_key(disc)
+    channel = options.nand or (RECOMP / f"build-{options.source}" / "settings.json").is_file() and \
+        json.loads((RECOMP / f"build-{options.source}" / "settings.json").read_text()).get("nand")
+    if channel:
+        if not options.console and not (RECOMP / f"build-{options.source}" / "settings.json").is_file():
+            fail("a channel needs --console, the console to install it in")
+        build, disc = prepare_channel(channel, options.source)
+        settings = json.loads((build / "settings.json").read_text()) if (build / "settings.json").is_file() else {}
+        settings["nand"], settings["disc"] = str(Path(channel).resolve()), str(disc)
+        code = key = options.source
+    else:
+        build, settings = find_game(options.source)
+        disc = Path(settings["disc"])
+        check_disc(disc)
+        code, key = game_id(disc), title_key(disc)
     settings["fifo_breakpoints"] = settings.get("fifo_breakpoints", False) or options.fifo_breakpoints
     if options.scale == "default":
         settings.pop("scale", None)
@@ -262,6 +307,13 @@ def main():
     (build / "obj").mkdir(exist_ok=True)
     run("compile the title", ["ninja", "-j", str(options.jobs), LIBRARY], cwd=build)
 
+    if channel:
+        for console in settings["consoles"]:
+            install(build, disc, key, console)
+        print(f"\n{key} is ready in {time.monotonic() - started:.0f} s. Start it from the Wii Menu, or with:\n"
+              f"  {CONSOLE_BUILD.relative_to(ROOT) / 'wii-recomp'} --console <console> --title {key}\n"
+              "Run this again after playing to compile the code that ran most for speed.")
+        return
     if options.no_pack:
         print(f"\n{code} is built in {build / LIBRARY}: {time.monotonic() - started:.0f} s in all")
         return

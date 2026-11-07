@@ -51,6 +51,7 @@ void decrementer_set(uint32_t value) { effects.decrementer_writes++; effects.dec
 uint32_t decrementer_get(void) { return DECREMENTER_NOW; }
 void locked_cache_transfer(void) { effects.cache_transfers++; }
 void poll_interrupts(void) { interrupt_budget = 0; effects.polls++; }
+void interrupts_turned_on(void) {}
 void fpscr_mode_changed(uint32_t fpscr) { (void)fpscr; }
 void system_call(uint32_t address) { effects.system_calls++; effects.system_call_address = address; }
 void trap_taken(uint32_t address) { effects.traps++; effects.trap_address = address; }

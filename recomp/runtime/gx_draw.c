@@ -346,6 +346,10 @@ int gx_output_is_opaque(void) {
 
 int gx_draw_started(void) { return started; }
 
+void gx_draw_start(void) {
+  if (!started) start();
+}
+
 // Draws the vertices just decoded into the reserved room.
 void gx_draw(int primitive, int count) {
   if (!gx_draw_wanted(primitive, count)) return;  // Too many were left out.

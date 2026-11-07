@@ -13,6 +13,7 @@ int irq_pending(void) { return 0; }
 int ios_find_device(const char *path) { return -1; }
 const char *ios_device_name(int device) { return "?"; }
 int ios_device_request(int device, uint32_t command, uint32_t request) { return IOS_UNHANDLED; }
+void ios_device_closed(int device) {}
 int files_open(const char *path, uint32_t mode) { return FS_ENOENT; }
 void files_close(int id) {}
 const char *files_name(int id) { return "?"; }
@@ -24,6 +25,7 @@ int drive_read(uint64_t offset, uint32_t bytes, uint8_t *out) { return 0; }
 int drive_read_raw(uint64_t offset, uint32_t bytes, uint8_t *out) { return 0; }
 size_t drive_tmd(uint8_t *out, size_t limit) { return 0; }
 int console_setting(const char *name, char *out, size_t limit) { return 0; }
+void console_eject(void) {}
 void stage_add(int stage, uint64_t ticks) {}
 uint64_t time_base(void) { return 0; }
 int ipc_read(uint32_t address, uint32_t *value);

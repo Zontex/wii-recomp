@@ -16,11 +16,16 @@ int drive_read(uint64_t o, uint32_t b, uint8_t *out) { return 1; }
 int drive_read_raw(uint64_t o, uint32_t b, uint8_t *out) { return 1; }
 size_t drive_tmd(uint8_t *out, size_t limit) { return 0; }
 int console_setting(const char *name, char *out, size_t limit) { return 0; }
+static int ejects;
+void console_eject(void) { ejects++; }
+void console_power_off(const char *how) { exit(20); }
+void console_hot_reset(void) { exit(21); }
 void stage_add(int stage, uint64_t ticks) {}
 uint64_t time_base(void) { return 0; }
 int ios_find_device(const char *path) { return -1; }
 const char *ios_device_name(int device) { return "?"; }
 int ios_device_request(int device, uint32_t command, uint32_t request) { return IOS_UNHANDLED; }
+void ios_device_closed(int device) {}
 void ios_trace(const char *device, uint32_t command, uint32_t request, int result) {}
 int files_open(const char *path, uint32_t mode) { (void)mode; return FS_ENOENT; }
 void files_close(int id) {}
@@ -60,10 +65,12 @@ static void test_reported_requests(void) {
   CHECK(!strcmp(last_gap, "hw.other_hollywood_interrupts_timer_gpio"));
   ipc_write(0xcd800024u, 0x10808001u);
   CHECK(!strcmp(last_gap, "hw.vi_solid_color_hollywood_0x24"));
-  ipc_write(0xcd0000c0u, 0x200);
-  CHECK(!strcmp(last_gap, "hw.second_disc_layer_disc_swap"));
+  ipc_write(0xcd0000c0u, 0x200);  // The eject pin going up throws the disc out.
+  CHECK_EQ(ejects, 1);
+  ipc_write(0xcd0000c0u, 0x200);  // Held up, it doesn't again.
+  CHECK_EQ(ejects, 1);
   ipc_write(0xcd000004u, 0x38);  // What the SDK writes after every reply: not a gap.
-  CHECK_EQ(gaps, 3);
+  CHECK_EQ(gaps, 2);
 }
 
 enum { HOOK = 0x80001000u, RELEASE = 0x80001100u, HOOK_OUT = 0x00001200u };
@@ -104,9 +111,10 @@ static void test_eject(void) {
   CHECK_EQ(dvd_request(IOS_IOCTL, REQUEST), 1);  // Stopping the motor is fine.
   CHECK_EQ(gaps, before);
   wr32(0x80000004u | INPUT, 1);
-  dvd_request(IOS_IOCTL, REQUEST);  // Throwing the disc out is reported.
-  CHECK_EQ(gaps, before + 1);
-  CHECK(!strcmp(last_gap, "hw.second_disc_layer_disc_swap"));
+  int ejected = ejects;
+  dvd_request(IOS_IOCTL, REQUEST);  // Throwing the disc out.
+  CHECK_EQ(gaps, before);
+  CHECK_EQ(ejects, ejected + 1);
 }
 
 int main(void) {

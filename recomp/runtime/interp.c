@@ -281,7 +281,7 @@ static void execute_31(uint32_t address, uint32_t word, int extended) {
       }
       return;
     case 83: cpu.r[d] = cpu.msr; return;  // mfmsr
-    case 146: cpu.msr = rs; return;       // mtmsr
+    case 146: cpu.msr = rs; if (rs & 0x8000u) interrupts_turned_on(); return;  // mtmsr
     case 339: cpu.r[d] = read_spr(spr_of(word)); return;  // mfspr
     case 467: write_spr(spr_of(word), rs); return;        // mtspr
     case 371: cpu.r[d] = spr_of(word) == SPR_TBU_READ ? read_spr(SPR_TBU_READ) : read_spr(SPR_TBL_READ); return;  // mftb

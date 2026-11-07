@@ -23,11 +23,7 @@ The same system runs on macOS, which is where most of it is developed, with othe
 
 ## What runs today
 
-| Title | Where it stands |
-| --- | --- |
-| **Wii Fit Plus** (RFPE01) | Plays through setup and the Body Test with simulated controllers, at 60 fps on an Intel Mac. On a Raspberry Pi 5 at 1080p, the Body Test and the step-off screen hold 60 fps. |
-| **Wii Menu 4.3** | Runs natively at 60 fps on an Intel Mac through the health warning, first-time setup, channel grid and settings. With a recompiled disc image in its drive, it shows the game's banner and starts it. |
-| **The Last Story** (SLSEXJ) | Reaches gameplay with a simulated Wii Remote and Classic Controller, through the game's own Bluetooth code. Some surfaces draw wrong, and heavy scenes are slow. |
+Games translated with `add_game.py` play directly or from the recompiled Wii Menu, which starts them from its Disc Channel and takes them back with Home. The menu's own channels start from its grid, and the Wii Shop Channel opens a look-only copy of the Shop from the console's own server: nothing can be bought or downloaded, on purpose. Which games have been tried, and how they run, will be listed in a file of their own.
 
 Real Wii Remotes and the Balance Board connect over Bluetooth on Linux and the Mac, and their reports go straight to the game's own code. That path is tested with stand-ins and hasn't met real hardware yet; see [Real Wii Remotes](recomp/README.md#real-wii-remotes-and-the-balance-board). When a game uses a hardware feature the runtime doesn't have, the runtime logs the feature by name. Each one is fixed once, for every game.
 
@@ -151,7 +147,29 @@ recomp/build/wii-recomp --console console
 
 A **`.wrd` disc image** is a game prepared for the console: the disc's files, unencrypted, plus the game's translated code for each computer it was built for (`darwin-x86_64` on an Intel Mac, `linux-aarch64` on a Pi). The console reads it like a disc in its drive. It holds the game, so it's yours alone: don't share it.
 
-The menu shows the game's banner in the Disc Channel, and Start runs it. The simulated Wii Remote has a Nunchuk plugged in. A game that sees a Classic Controller may hide its pointer, so plug one in (F2) only for games played with it. The console stays a single program: when you start a game, it restarts itself with the game's code, as a Wii does.
+The menu shows the game's banner in the Disc Channel, and Start runs it. Home, then Wii Menu, goes back. The simulated Wii Remote has a Nunchuk plugged in. A game that sees a Classic Controller may hide its pointer, so plug one in (F2) only for games played with it. The console stays a single program: when you start a game, it restarts itself with the game's code, as a Wii does.
+
+**Channels** installed in your storage are built the same way, by title ID, and the menu starts them from its grid:
+
+```sh
+python3 recomp/tools/add_game.py 00010002-48414341 --nand wii/nand --console console   # the Mii Channel
+```
+
+A channel the console has no native code for is refused, and the menu says it can't start it. Channels that need the internet, such as the Forecast and News Channels, show their own message that they can't connect.
+
+**The console's own online services.** Nintendo's Wii services have closed, so the console answers a few of them itself, from a small server on this computer (`recomp/tools/shop/server.py`, started by the console when needed). Nothing else is reached. It runs the connection test, shows a Wii Network Services Agreement of our own, which Wii Settings can accept as on a Wii, and serves a look-only Wii Shop Channel: browse every Virtual Console, WiiWare and Wii Channels title, with its details and price. Nothing can be bought or downloaded, and that's on purpose, not something missing: this Shop is for looking round, the console's server has no titles to hand out, and the Shop's download servers aren't reached. Download and Gift lead to a page saying so. The Shop's pages are ours; their pictures, style sheet and catalogue are Nintendo's, so they're gathered into the git-ignored `wii/shop/` once:
+
+```
+git clone --depth 1 --filter=blob:none --sparse https://github.com/WiiMart/WiiMart.git wii/shop/sources/WiiMart
+git -C wii/shop/sources/WiiMart sparse-checkout set www/oss/oss/common
+python3 recomp/tools/shop/assets.py wii/shop/sources/WiiMart
+```
+
+The Shop's browser trusts only the certificate authorities it carries, so each console makes its own (`certificates/` in the console folder) and the console adds it to the browser's list as the channel reads it; the stored channel is never changed. `WII_RECOMP_SHOP_SERVER=off` takes the console offline.
+
+**The console's buttons and drive.** Closing the window presses the power button: the menu or game turns the console off its own way, saving what it needs to. Through the control pipe (`WII_RECOMP_CONTROL`), `power` and `reset` press the buttons, `eject` empties the drive, and `insert <name>` puts in a disc image from the console's `shelf/`. `--title <high>-<low>` starts an installed title directly, as `--boot-disc` starts the disc.
+
+The window takes the shape of the console's TV setting, 4:3 or 16:9, and the console runs at the rate the menu or game sets: a European menu runs at 50 Hz unless EURGB60 is chosen in Wii Settings.
 
 ### Sound
 
@@ -165,7 +183,7 @@ The console recognises the game's audio program by a checksum of its code and ru
 ### What doesn't work yet
 
 - **A plain ISO in the drive.** Each game goes through `add_game.py` first.
-- **Going back to the Wii Menu.** Home, then Wii Menu, freezes. Close the window instead.
+- **A framebuffer a program draws into itself**, rather than with the graphics chip, isn't shown yet; the console reports it.
 - **The simulated board in a game's own setup.** With the game's own Wii Remote code, as `add_game.py` builds it, Wii Fit Plus's first-time setup gets to the Balance Board and then drops the simulated board, asking for its power button again. A build without `--virtual-bluetooth` gets through.
 - **Real Wii Remotes and the Balance Board** are built but haven't been tried with real hardware. Until then the keyboard and mouse drive a simulated remote and board. See [Real Wii Remotes](recomp/README.md#real-wii-remotes-and-the-balance-board).
 - **Playing from the Wii Menu** has been tested on an Intel Mac only. On a Raspberry Pi 5, games have been played directly.

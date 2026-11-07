@@ -8,6 +8,7 @@
 #include "cpu.h"
 #include "gaps.h"
 #include "hardware.h"
+#include "ios.h"
 
 enum {
   FIRST = 0x6800, CHANNEL_BYTES = 0x14, CHANNELS = 3, BLOCK_MASK = 0xffffff,
@@ -65,8 +66,18 @@ static void sram_checksum(void) {
   chip.sram[SRAM_CHECKSUM + 3] = (uint8_t)complement;
 }
 
-// Seconds since 2000 in local time, the same clock the time base starts from.
-static uint32_t clock_now(void) { return (uint32_t)((int64_t)(time_base() / TICKS_PER_SECOND) + chip.clock_offset); }
+// Seconds since 2000 in local time, the same clock the time base starts from. A Wii adds
+// the settings' counter bias (IPL.CB) to the chip's count, and its date and time setting
+// changes only the bias, so the count here leaves the bias out, as Dolphin's does: the
+// console shows the computer's own time, whatever the bias says.
+static uint32_t clock_now(void) {
+  uint8_t bias[4];
+  int32_t counter_bias = 0;
+  if (files_system_setting("IPL.CB", bias, sizeof bias) == 4) {
+    counter_bias = (int32_t)((uint32_t)bias[0] << 24 | bias[1] << 16 | bias[2] << 8 | bias[3]);
+  }
+  return (uint32_t)((int64_t)(time_base() / TICKS_PER_SECOND) + chip.clock_offset - counter_bias);
+}
 
 // One byte each way. The command comes first, then bytes from where it points.
 static uint8_t clock_chip_byte(uint8_t in) {

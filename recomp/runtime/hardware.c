@@ -7,11 +7,13 @@
 
 #include "timeline.h"
 #include "audio.h"
+#include "console.h"
 #include "cpu.h"
 #include "dsp.h"
 #include "gaps.h"
 #include "gx.h"
 #include "hardware.h"
+#include "vi.h"
 #include "ios.h"
 
 #define REGISTER_SPACE 0x01000000u
@@ -24,6 +26,9 @@
 #define PI_CAUSE 0xcc003000u
 #define PI_MASK 0xcc003004u
 #define VI_DISPLAY_INTERRUPT 0xcc002030u
+#define VI_TIMING_FIRST 0xcc002000u  // Vertical and horizontal timing, and the blanking intervals.
+#define VI_TIMING_END 0xcc002014u
+#define VI_CLOCK_SELECT 0xcc00206cu
 #define VI_INTERRUPT_COUNT 4
 #define VI_INTERRUPT_FLAG 0x80000000u
 #define VI_INTERRUPT_ENABLE 0x10000000u
@@ -68,12 +73,13 @@
 // sets them (VideoInterface.cpp).
 #define VI_DTV_STATUS 0xcc00206eu
 #define DTV_NTSC_J 0x0002u
+#define DTV_COMPONENT 0x0001u  // A component cable is in, so 480p can be chosen (Dolphin's VideoInterface.h).
 
 static uint8_t *registers;  // Big-endian, as the game sees them, so any width works.
 static uint8_t *seen;
 static uint32_t cause;
 static uint32_t audio_counter_start, audio_counter_last;  // In 48 kHz samples since the time base began.
-static atomic_int reset_pressed;  // From the control pipe's thread.
+static atomic_int reset_pressed, power_pressed;  // From the control pipe's or the window's thread.
 static uint64_t reset_up_at;
 
 static uint32_t offset_of(uint32_t address) { return address & (REGISTER_SPACE - 1); }
@@ -106,7 +112,6 @@ static int first_touch(const char *kind, uint32_t address, uint32_t value) {
 enum { READS = 1, WRITES = 2 };
 static const struct { uint32_t start, end; int on; const char *id; } unmodelled[] = {
   {0xcc001018u, 0xcc001030u, READS, "gx.pe_performance_counters"},
-  {0xcc00202cu, 0xcc002030u, READS, "hw.beam_position_0x2c_0x2e"},
 };
 
 static void note_unmodelled(uint32_t address, int on, int first) {
@@ -134,18 +139,18 @@ void raise_irq(int bit) {
 void clear_irq(int bit) { cause &= ~(1u << bit); }
 int irq_pending(void) { return (cause & get(PI_MASK, 4)) != 0; }
 
+void hardware_describe(void) {
+  fprintf(stderr, "state: msr %08x, interrupts %s, cause %08x, mask %08x\n", cpu.msr, cpu.msr & 0x8000 ? "on" : "off", cause, get(PI_MASK, 4));
+  ipc_describe();
+}
+
 // The screen finished a frame: flag each enabled display interrupt.
-void video_retrace(void) {
-  TIMELINE_MOMENT("retrace");
-  graphics_retrace();
-  for (int i = 0; i < VI_INTERRUPT_COUNT; i++) {
-    uint32_t address = VI_DISPLAY_INTERRUPT + (uint32_t)i * 4;
-    uint32_t value = get(address, 4);
-    if (value & VI_INTERRUPT_ENABLE) {
-      put(address, value | VI_INTERRUPT_FLAG, 4);
-      raise_irq(IRQ_VI);
-    }
-  }
+// The beam reached a display interrupt's line (vi.c).
+void vi_display_interrupt(int i) {
+  TIMELINE_MOMENT("display interrupt");
+  uint32_t address = VI_DISPLAY_INTERRUPT + (uint32_t)i * 4;
+  put(address, get(address, 4) | VI_INTERRUPT_FLAG, 4);
+  raise_irq(IRQ_VI);
 }
 
 static void update_video_interrupt(void) {
@@ -268,7 +273,13 @@ static void audio_interface_update(void) {
 
 void reset_button_press(void) { atomic_store(&reset_pressed, 1); }
 
+int power_button_press(void) {
+  atomic_store(&power_pressed, 1);
+  return stm_listening();
+}
+
 void hardware_update(uint64_t now) {
+  console_update_drive();
   audio_interface_update();
   dsp_update(now);
   if (atomic_exchange(&reset_pressed, 0)) {
@@ -276,6 +287,7 @@ void hardware_update(uint64_t now) {
     raise_irq(IRQ_RESET_SWITCH);
     stm_reset_button();  // The other half of a press on a Wii, as Dolphin sends both.
   }
+  if (atomic_exchange(&power_pressed, 0)) stm_power_button();
 }
 
 static uint32_t interrupt_cause(void) { return cause | (time_base() >= reset_up_at ? PI_RESET_BUTTON_UP : 0); }
@@ -287,6 +299,10 @@ static uint32_t dtv_status(void) {
   if (!looked) {
     looked = 1;
     if (console_setting("GAME", region, sizeof region) && !strcmp(region, "JP")) status |= DTV_NTSC_J;
+    // The window shows progressive pictures as well as any, so the cable is a component one,
+    // unless WII_RECOMP_CABLE=composite asks for the plain cable most Wiis came with.
+    const char *cable = getenv("WII_RECOMP_CABLE");
+    if (!cable || strcmp(cable, "composite")) status |= DTV_COMPONENT;
   }
   return status;
 }
@@ -298,6 +314,7 @@ uint32_t hw_read(uint32_t address, int bytes) {
   if (address == PI_CAUSE) value = interrupt_cause();
   else if (is_register(address, AI_SAMPLE_COUNT)) value = audio_samples();
   else if (is_register(address, VI_DTV_STATUS)) value = dtv_status();
+  else if (vi_read(address, &value)) {}
   else if (address == PI_HARDWARE_REVISION) value = HARDWARE_REVISION;
   else if (address == DSP_CONTROL) value = (value & ~DSP_CONTROL_OWN) | (dsp_control_read() & DSP_CONTROL_OWN);
   else if (dsp_read(address, bytes, &value) || audio_dma_read(address, bytes, &value)) {}
@@ -339,4 +356,5 @@ void hw_write(uint32_t address, uint32_t value, int bytes) {
   if (address >= VI_DISPLAY_INTERRUPT && address < VI_DISPLAY_INTERRUPT + VI_INTERRUPT_COUNT * 4) {
     update_video_interrupt();
   }
+  if (address - VI_TIMING_FIRST < VI_TIMING_END - VI_TIMING_FIRST || is_register(address, VI_CLOCK_SELECT)) vi_timing_changed();
 }

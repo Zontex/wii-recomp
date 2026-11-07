@@ -15,6 +15,8 @@
 #include "debug.h"
 #include "dsp.h"
 #include "hardware.h"
+#include "vi.h"
+#include "net.h"
 
 #define CHECK_EVERY 2000
 #define INTERRUPTS_ENABLED 0x8000u
@@ -22,7 +24,6 @@
 #define EXCEPTION_EXTERNAL 4
 #define EXCEPTION_DECREMENTER 8
 #define TIME_BASE_HZ 60750000ull
-#define RETRACE_TICKS (TIME_BASE_HZ / 60)
 #define IDLE_SLEEP_TICKS (TIME_BASE_HZ / 250)  // 4 ms, the longest sleep with nothing due.
 #define NANOSECONDS 1000000000ull
 #define BUSY_SLEEP_TICKS (TIME_BASE_HZ / 10000)  // 100 microseconds.
@@ -32,7 +33,6 @@ int interrupt_budget = CHECK_EVERY;
 
 static uint64_t decrementer_deadline;
 static int decrementer_armed;
-static uint64_t next_retrace;
 static uint64_t time_base_offset;
 static uint64_t guest_time_offset;
 
@@ -88,26 +88,34 @@ void decrementer_set(uint32_t value) {
 
 uint32_t decrementer_get(void) { return (uint32_t)(decrementer_deadline - time_base()); }
 
+void interrupts_turned_on(void) {
+  if (irq_pending()) interrupt_budget = 0;
+}
+
+static unsigned long long interrupts_taken, interrupt_polls, interrupt_polls_masked;
+
+void interrupts_describe(void) {
+  fprintf(stderr, "state: %llu checks, %llu with interrupts off, %llu interrupts taken\n", interrupt_polls, interrupt_polls_masked, interrupts_taken);
+}
+
 void poll_interrupts(void) {
+  interrupt_polls++;
   interrupt_budget = CHECK_EVERY;
   uint64_t now = time_base();
   static uint64_t started;
   if (!started) started = now;
   debug_poll((now - started) / TIME_BASE_HZ);
-  if (now >= next_retrace) {
-    // Counted from the last retrace, so a late check doesn't push every later one back.
-    next_retrace += RETRACE_TICKS;
-    if (now >= next_retrace) next_retrace = now + RETRACE_TICKS;
-    video_retrace();
-  }
+  vi_update(now);  // Display interrupts and retraces, as the beam passes them.
+  net_update(now);
   if (title->virtual_bluetooth) bluetooth_update(now);
   ipc_update();
   graphics_update();
   audio_update(now);
   hardware_update(now);
   floating_point_exceptions_check();
-  if (!(cpu.msr & INTERRUPTS_ENABLED)) return;
+  if (!(cpu.msr & INTERRUPTS_ENABLED)) { interrupt_polls_masked++; return; }
   if (irq_pending()) {
+    interrupts_taken++;
     uint32_t handler = rd32(EXCEPTION_TABLE + EXCEPTION_EXTERNAL * 4);
     TIMELINE_MOMENT("interrupt taken");
     if (handler) enter_exception(EXCEPTION_EXTERNAL, handler);
@@ -130,12 +138,12 @@ void idle_wait(void) {
   if (spin < 0) spin = getenv("WII_RECOMP_IDLE_SPIN") != 0;
   if (spin) { POLL(); return; }
   uint64_t now = time_base(), wait = IDLE_SLEEP_TICKS;
-  wait = sooner(wait, now, next_retrace);
+  wait = sooner(wait, now, vi_next_due(now));
   if (decrementer_armed) wait = sooner(wait, now, decrementer_deadline);
   wait = sooner(wait, now, graphics_next_due());
   wait = sooner(wait, now, audio_next_due());
   wait = sooner(wait, now, dsp_next_due());
-  if (graphics_busy()) wait = sooner(wait, now, now + BUSY_SLEEP_TICKS);  // A signal may come at any time.
+  if (graphics_busy() || net_waiting()) wait = sooner(wait, now, now + BUSY_SLEEP_TICKS);  // A signal may come at any time.
   // An interrupt is taken ahead of the timer, and most sleeps end by raising one, so
   // sleeping past a timer that's due could put it off for good.
   int timer_due = decrementer_armed && decrementer_deadline <= now;

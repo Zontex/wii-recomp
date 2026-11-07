@@ -367,7 +367,7 @@ def prepare(module, base, import_base):
     if module.kind == "rel" and module.external:
         others = sorted({r.symbol[0] for r in module.external})
         raise Unsupported(f"{module.name}: links against other modules ({', '.join(map(str, others))}), not handled yet")
-    pending_ha = {}
+    pending_ha, pending_lo = {}, {}
     for reloc in module.external:
         at = reloc.offset - start
         if not 0 <= at < size:
@@ -378,14 +378,13 @@ def prepare(module, base, import_base):
             import_sites.setdefault(reloc.symbol, ("branch", at))
         elif reloc.kind in (LO, HA):
             fields[base + (at & ~3)] = ("lo" if reloc.kind == LO else "ha", None, reloc.symbol, reloc.addend)
-            if reloc.kind == HA:
-                pending_ha[reloc.symbol] = (at, reloc.addend)
-            elif reloc.symbol in pending_ha and reloc.symbol not in import_sites:
-                high, addend = pending_ha[reloc.symbol]
-                if addend == reloc.addend:
-                    import_sites[reloc.symbol] = ("pair", high & ~3, at & ~3, addend)
+            # The halves of an address can come in either order in the list.
+            (pending_ha if reloc.kind == HA else pending_lo).setdefault((reloc.symbol, reloc.addend), at)
         else:
             raise Unsupported(f"{module.name}: import relocation type {reloc.kind} isn't handled")
+    for (symbol, addend), high in pending_ha.items():
+        if symbol not in import_sites and (symbol, addend) in pending_lo:
+            import_sites[symbol] = ("pair", high & ~3, pending_lo[(symbol, addend)] & ~3, addend)
     fixed_calls = prepare_fixed(module, base, import_base, code, start, size, import_sites, relocated)
     missing = [module.imports[i] for i in {r.symbol for r in module.external} if i not in import_sites]
     if missing:

@@ -1,6 +1,7 @@
 // Starts the console's titles, and hands over between them with exec, so every title
 // starts as cleanly as on a real Wii: see "one program per title" in docs/native_ios.md.
 #include <dirent.h>
+#include <pthread.h>
 #include <limits.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -10,11 +11,11 @@
 
 #include "console.h"
 #include "drive.h"
+#include "ios.h"
 #include "profile.h"
 #include "remote_link.h"
 #include "title.h"
 
-#define MENU_TITLE "00000001-00000002"
 #ifdef __APPLE__
 #define LIBRARY_NAME "title.dylib"
 #else
@@ -22,6 +23,8 @@
 #endif
 
 static char program_path[PATH_MAX], console_folder[PATH_MAX];
+static char **started_with;
+static char inserted[PATH_MAX * 3];  // The image in the drive, in a console.
 
 int console_running(void) { return console_folder[0] != 0; }
 
@@ -55,10 +58,15 @@ static void insert_from_slot(void) {
   closedir(folder);
   if (!best[0]) return;
   snprintf(chosen, sizeof chosen, "%s/%s", slot, best);
-  drive_insert(chosen);
+  if (drive_insert(chosen)) snprintf(inserted, sizeof inserted, "%s", chosen);
 }
 
-void console_start(const char *program, const char *folder, int boot_disc, Boot *boot) {
+// Where an installed title's program and native code are.
+static void title_folder(uint64_t title, char *out, size_t size) {
+  snprintf(out, size, "%s/titles/%08x-%08x", console_folder, (uint32_t)(title >> 32), (uint32_t)title);
+}
+
+void console_start(const char *program, const char *folder, uint64_t start, Boot *boot) {
   if (!realpath(program, program_path) || !realpath(folder, console_folder)) {
     perror(folder);
     exit(1);
@@ -70,11 +78,12 @@ void console_start(const char *program, const char *folder, int boot_disc, Boot 
   set_default("WII_RECOMP_GAPS", "cache/gaps.txt");
   set_default("WII_RECOMP_REMOTE_SLOTS", "remotes.txt");
   set_default("WII_RECOMP_CONTROLLERS", "controllers.ini");
+  set_default("WII_RECOMP_CERTIFICATES", "certificates");
   char path[PATH_MAX * 2];
   snprintf(path, sizeof path, "%s/cache", console_folder);
   mkdir(path, 0755);
   insert_from_slot();
-  if (boot_disc) {
+  if (start == CONSOLE_DISC) {
     if (!drive_has_disc()) {
       fprintf(stderr, "stop: there's no disc in the drive to start\n");
       exit(10);
@@ -87,11 +96,23 @@ void console_start(const char *program, const char *folder, int boot_disc, Boot 
     boot_from_disc(boot);
     return;
   }
-  char menu[PATH_MAX * 2];
-  snprintf(menu, sizeof menu, "%s/titles/" MENU_TITLE, console_folder);
-  snprintf(path, sizeof path, "%s/" LIBRARY_NAME, menu);
+  char folder_path[PATH_MAX * 2];
+  title_folder(start, folder_path, sizeof folder_path);
+  snprintf(path, sizeof path, "%s/" LIBRARY_NAME, folder_path);
+  if (start != CONSOLE_MENU && !console_has_title(start)) {
+    fprintf(stderr, "stop: %s isn't installed with native code\n", folder_path);
+    exit(10);
+  }
   title_load(path);
-  boot_from_folder(menu, boot);
+  boot_from_folder(folder_path, boot);
+}
+
+int console_has_title(uint64_t title) {
+  char folder[PATH_MAX * 2], path[PATH_MAX * 3];
+  struct stat info;
+  title_folder(title, folder, sizeof folder);
+  snprintf(path, sizeof path, "%s/" LIBRARY_NAME, folder);
+  return console_running() && !stat(path, &info);
 }
 
 // Where the disc's program starts, from its header, or 0.
@@ -104,19 +125,104 @@ static uint32_t disc_entry(void) {
 }
 
 void console_hand_over(uint32_t address) {
-  static uint32_t entry;
   if (!console_running() || !drive_has_disc()) return;
-  if (!entry) entry = disc_entry();
-  if (entry && address == entry) console_restart(1);
+  uint32_t entry = disc_entry();  // Read each time: the disc can change.
+  if (entry && address == entry) console_restart(CONSOLE_DISC);
 }
 
-void console_restart(int boot_disc) {
-  char *arguments[] = {program_path, "--console", console_folder, boot_disc ? "--boot-disc" : 0, 0};
-  fprintf(stderr, "console: starting %s\n", boot_disc ? "the disc" : "the Wii Menu");
+void console_restart(uint64_t start) {
+  char title_argument[24];
+  snprintf(title_argument, sizeof title_argument, "%08x-%08x", (uint32_t)(start >> 32), (uint32_t)start);
+  char *arguments[] = {program_path, "--console", console_folder, 0, 0, 0};
+  if (start == CONSOLE_DISC) arguments[3] = "--boot-disc";
+  else if (start != CONSOLE_MENU) arguments[3] = "--title", arguments[4] = title_argument;
+  fprintf(stderr, "console: starting %s\n", start == CONSOLE_DISC ? "the disc" : start == CONSOLE_MENU ? "the Wii Menu" : title_argument);
+  files_save_all();  // What the title wrote, such as NANDBOOTINFO, is on disk for the next.
   link_prepare_handover();  // Real remotes stay connected into the next title.
   profile_save();  // exec skips the exit handlers.
   fflush(stderr);
   execv(program_path, arguments);
   perror(program_path);
   exit(1);
+}
+
+void console_remember(char **arguments) { started_with = arguments; }
+
+void console_power_off(const char *how) {
+  fprintf(stderr, "console: turning %s\n", how);
+  files_save_all();
+  exit(0);
+}
+
+void console_hot_reset(void) {
+  if (console_running()) console_restart(CONSOLE_MENU);
+  fprintf(stderr, "console: hot reset, starting again\n");
+  files_save_all();
+  profile_save();
+  fflush(stderr);
+  char path[PATH_MAX];
+  execv(realpath(started_with[0], path) ? path : started_with[0], started_with);
+  perror(started_with[0]);
+  exit(1);
+}
+
+// Changing the disc. The control pipe asks from its own thread; the change happens on the
+// game's, between its reads, in console_update_drive. In a console, the image moves
+// between the drive and shelf folders, so the drive still holds it after a restart.
+static pthread_mutex_t change_lock = PTHREAD_MUTEX_INITIALIZER;
+static int change_wanted;           // 1 to eject, 2 to insert change_path.
+static char change_path[PATH_MAX];
+
+void console_request_disc(const char *path) {
+  pthread_mutex_lock(&change_lock);
+  change_wanted = path ? 2 : 1;
+  snprintf(change_path, sizeof change_path, "%s", path ? path : "");
+  pthread_mutex_unlock(&change_lock);
+}
+
+// Moves an image between a console's drive and shelf folders, by name.
+static int move_image(const char *from_folder, const char *name, const char *to_folder, char *moved, size_t size) {
+  char from[PATH_MAX * 3];
+  snprintf(from, sizeof from, "%s/%s/%s", console_folder, from_folder, name);
+  snprintf(moved, size, "%s/%s/%s", console_folder, to_folder, name);
+  if (!strcmp(from, moved)) return 1;
+  char folder[PATH_MAX * 2];
+  snprintf(folder, sizeof folder, "%s/%s", console_folder, to_folder);
+  mkdir(folder, 0755);
+  if (rename(from, moved)) { perror(from); return 0; }
+  return 1;
+}
+
+static void eject_now(void) {
+  if (console_running() && inserted[0]) {
+    const char *name = strrchr(inserted, '/') ? strrchr(inserted, '/') + 1 : inserted;
+    char moved[PATH_MAX * 3];
+    move_image("drive", name, "shelf", moved, sizeof moved);
+    inserted[0] = 0;
+  }
+  drive_eject();
+  fprintf(stderr, "console: the disc is out\n");
+}
+
+void console_eject(void) { eject_now(); }
+
+void console_update_drive(void) {
+  if (!change_wanted) return;
+  pthread_mutex_lock(&change_lock);
+  int wanted = change_wanted;
+  char path[PATH_MAX];
+  snprintf(path, sizeof path, "%s", change_path);
+  change_wanted = 0;
+  pthread_mutex_unlock(&change_lock);
+  if (drive_has_disc()) eject_now();
+  if (wanted != 2) return;
+  // In a console, a bare name is an image on the shelf, which goes into the drive.
+  char chosen[PATH_MAX * 3];
+  if (console_running() && !strchr(path, '/')) {
+    if (!move_image("shelf", path, "drive", chosen, sizeof chosen)) return;
+    snprintf(inserted, sizeof inserted, "%s", chosen);
+  } else {
+    snprintf(chosen, sizeof chosen, "%s", path);
+  }
+  if (drive_insert(chosen)) fprintf(stderr, "console: %s is in the drive\n", chosen);
 }

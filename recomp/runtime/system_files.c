@@ -14,7 +14,8 @@ enum {
   MAX_PATH = 1024, CONFIG_BYTES = 0x400, URL_BYTES = 0x80, MAIL_ENTRY_BYTES = 0x80,
   VFF_HEADER_BYTES = 0x20, VFF_ROOT_BYTES = 0x1000, VFF_CLUSTER_BYTES = 0x200, FAT12_MOST_CLUSTERS = 4084,
   FAT_ENTRY_BYTES = 32, FAT_FOLDER = 0x10, FAT_LONG_NAME = 0x0f, FAT_DATE_2010_01_01 = 0x3c21,
-  MII_DATABASE_BYTES = 0x1f1e0, MII_PARADE = 0x1d00,
+  MII_DATABASE_BYTES = 0xbe6c0, MII_CHECKED_BYTES = 0x1f1e0, MII_PARADE = 0x1d00, MII_FLAG = 0x1cec,
+  MII_PARADE_SLOTS = 10000, MII_PARADE_SLOT_BYTES = 12,
 };
 
 static void put32(uint8_t *at, uint32_t value) {
@@ -122,16 +123,26 @@ static void fill_mailbox(uint8_t *data, uint32_t bytes) {
   folder_entry(data + folder + FAT_ENTRY_BYTES, "..         ", 0);
 }
 
-// The Mii database with no Miis: its two parts' marks, then a CRC-16 of the rest.
+// The Mii database with no Miis, as the Mii Channel writes one when there's none: the
+// Miis' part, marked RNOD, then the Mii Parade's, marked RNHD, with every one of its
+// slots empty, a CRC-16 of both, and the rest of the file zero.
 static void fill_miis(uint8_t *data, uint32_t bytes) {
   memcpy(data, "RNOD", 4);
+  data[MII_FLAG] = 0x80;
   memcpy(data + MII_PARADE, "RNHD", 4);
+  memset(data + MII_PARADE + 4, 0xff, 4);
+  for (uint32_t slot = 0; slot < MII_PARADE_SLOTS; slot++) {
+    uint8_t *at = data + MII_PARADE + 16 + slot * MII_PARADE_SLOT_BYTES;
+    put16(at, 0x7fff);
+    put16(at + 2, 0x7fff);
+  }
   uint16_t crc = 0;
-  for (uint32_t i = 0; i < bytes - 2; i++) {
+  for (uint32_t i = 0; i < MII_CHECKED_BYTES - 2; i++) {
     crc ^= (uint16_t)(data[i] << 8);
     for (int bit = 0; bit < 8; bit++) crc = crc & 0x8000 ? (uint16_t)(crc << 1 ^ 0x1021) : (uint16_t)(crc << 1);
   }
-  put16(data + bytes - 2, crc);
+  put16(data + MII_CHECKED_BYTES - 2, crc);
+  (void)bytes;
 }
 
 // The system settings, as Dolphin's SysConf.cpp writes for a new Wii: "SCv0", how many
@@ -222,6 +233,7 @@ static const SystemFile system_files[] = {
 };
 
 void system_files_make(void) {
+  if (getenv("WII_RECOMP_NO_SYSTEM_FILES")) return;  // To see what a program makes itself.
   for (size_t i = 0; i < sizeof system_files / sizeof *system_files; i++) {
     const SystemFile *file = &system_files[i];
     char full[MAX_PATH];
@@ -230,13 +242,11 @@ void system_files_make(void) {
     file->fill(data, file->bytes);
     files_save_path(file->path, full, sizeof full);
     files_make_parents(full);
-    FILE *out = fopen(full, "wb");
-    if (out && fwrite(data, 1, file->bytes, out) == file->bytes) {
+    if (files_write_whole(full, data, file->bytes)) {
       fprintf(stderr, "storage: made a new %s, as the Wii Menu does when a Wii first starts\n", file->path);
     } else {
       fprintf(stderr, "storage: couldn't make %s in the save folder\n", file->path);
     }
-    if (out) fclose(out);
     free(data);
   }
 }

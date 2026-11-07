@@ -20,6 +20,10 @@ void floating_point_exceptions_check(void) {}
 uint64_t audio_next_due(void) { return 0; }
 uint64_t dsp_next_due(void) { return 0; }
 int irq_pending(void) { return 0; }
+void vi_update(uint64_t now) {}
+uint64_t vi_next_due(uint64_t now) { return 0; }
+void net_update(uint64_t now) {}
+int net_waiting(void) { return 0; }
 void enter_exception(uint32_t k, uint32_t h) {}
 int main(void) {
   memory_start();

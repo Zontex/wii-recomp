@@ -1,5 +1,6 @@
 // /dev/es requests about installed titles: lists, metadata, tickets and contents,
 // answered from the console's storage through titles.c.
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -158,6 +159,25 @@ static int get_consumption(const IosVectors *vectors) { return write_count(vecto
 
 static int get_device_id(const IosVectors *vectors) { return write_count(vectors, 0, IOS_DEVICE_ID); }
 
+// The console's own certificate, which the Wii Shop Channel sends to its servers. A real
+// one is signed by Nintendo and holds the console's public key; here the layout is
+// Dolphin's (IOSC::GetDeviceCertificate, GPL-2.0+), with an empty signature and a made-up
+// key, as the only server that reads it is the console's own (recomp/tools/shop).
+enum { DEVICE_CERT_BYTES = 0x180, ECC_SIGNATURE = 0x00010002, ECC_KEY = 2 };
+
+static int get_device_cert(const IosVectors *vectors) {
+  uint32_t out = ios_out_sized(vectors, 0, DEVICE_CERT_BYTES);
+  if (!out) return ES_EINVAL;
+  uint8_t *cert = host(out);
+  memset(cert, 0, DEVICE_CERT_BYTES);
+  wr32(out, ECC_SIGNATURE);
+  snprintf((char *)cert + 0x80, 0x40, "Root-CA00000001-MS00000002");
+  wr32(out + 0xc0, ECC_KEY);
+  snprintf((char *)cert + 0xc4, 0x40, "NG%08x", IOS_DEVICE_ID);
+  for (int i = 0; i < 0x3c; i++) cert[0x108 + i] = (uint8_t)(0x5a ^ i * 7);  // The made-up public key.
+  return 0;
+}
+
 // Sets which title's files the program may use. Our storage has no owners yet.
 static int set_uid(const IosVectors *vectors) { return ios_in_sized(vectors, 0, 8) ? 0 : ES_EINVAL; }
 
@@ -174,6 +194,7 @@ const EsRequest es_title_requests[] = {
   {0x14, 1, 1, get_tmd_view_size},
   {0x15, 2, 1, get_tmd_views},
   {0x16, 1, 2, get_consumption},
+  {0x1e, 0, 1, get_device_cert},
   {0x21, 1, 0, set_uid},
   {0x32, 1, 1, get_stored_content_count},
   {0x33, 2, 1, get_stored_contents},

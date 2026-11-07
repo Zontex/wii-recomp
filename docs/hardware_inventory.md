@@ -23,13 +23,13 @@ Statuses:
 |---|---|---|---|---|---|---|---|
 | 1. CPU | 73 | 21 | 5 | 1 | 4 | 16 | 120 |
 | 2. Graphics commands and registers | 65 | 22 | 4 | 0 | 9 | 10 | 110 |
-| 3. TEV and pixel features | 51 | 17 | 3 | 0 | 4 | 1 | 76 |
+| 3. TEV and pixel features | 51 | 19 | 1 | 0 | 4 | 1 | 76 |
 | 4. Vertex and texture | 50 | 10 | 0 | 3 | 1 | 2 | 66 |
-| 5. Hardware blocks | 30 | 9 | 6 | 0 | 5 | 15 | 65 |
+| 5. Hardware blocks | 36 | 7 | 3 | 0 | 5 | 14 | 65 |
 | 6. Audio microcodes | 21 | 2 | 12 | 0 | 5 | 1 | 41 |
-| 7. IOS | 33 | 16 | 3 | 0 | 7 | 6 | 65 |
+| 7. IOS | 36 | 15 | 3 | 0 | 8 | 6 | 68 |
 | 8. Controllers | 50 | 8 | 3 | 0 | 6 | 2 | 69 |
-| **All** | **373** | **105** | **36** | **4** | **41** | **53** | **612** |
+| **All** | **382** | **104** | **31** | **4** | **42** | **52** | **615** |
 
 ## Biggest gaps
 
@@ -37,7 +37,7 @@ Ordered by how likely a real game is to hit them.
 
 1. **`.rel` modules aren't translated ahead of time** (`cpu.code_loaded_at_run_time_rel_oslink`). Only `.rso` modules are. A `.rel` runs under the interpreter until the next build translates what it reached. Many commercial games keep most of their code in `.rel` modules.
 2. **Disc images are read only in this project's own format** (`hw.disc_image_files_iso_wbfs_rvz`). ISO, WBFS and RVZ need extracting first.
-3. **ES and DI answer errors to much of what a Wii does** (`ios.identify_ticket_tmd_verify`, `ios.getlength_seek_readdvd`, `ios.openpartition_with_tmd_0x93_0x94`, `ios.encrypt_decrypt`, `ios.launch_return_to_menu_start_title`). Launching works only between the Wii Menu and a disc.
+3. **ES and DI answer errors to some of what a Wii does** (`ios.identify_ticket_tmd_verify`, `ios.getlength_seek_readdvd`, `ios.openpartition_with_tmd_0x93_0x94`, `ios.encrypt_decrypt`). Launching works between the Wii Menu, a disc and any channel built for the console; a title without native code is refused (`ios.launch_untranslated_title`).
 4. **The Zelda family's audio program hasn't been checked against the real one** (`audio.zelda_*`). AX in every version has a C version, equal to the real program on Mario Kart Wii; any program without one runs on the interpreter. The Zelda family's C version, which Super Mario Galaxy 2 uses, follows Dolphin's but has no recording to be compared with yet, and Galaxy 2 reports four mix buffers it doesn't know.
 5. **`setjmp`, C++ exceptions and fibers are at risk** (`cpu.bclr`). `blr` is a host `return`, so code that switches stacks leaves the host stack out of step.
 6. **Self-modifying code** (`cpu.self_modifying_code_icbi`). `icbi` is a no-op, so translated code is never replaced.
@@ -51,7 +51,7 @@ Ordered by how likely a real game is to hit them.
 
 ## Regressions
 
-Since 7691d88 ("stop faking success"), STM shutdown, reset and idle answer an error (`ios.dev_stm_immediate`). The other two found then, DI's cover status and the stop past 64 queued replies, are fixed.
+None open. The three found at 7691d88 ("stop faking success"), STM shutdown, reset and idle, DI's cover status and the stop past 64 queued replies, are fixed.
 
 ## 1. CPU
 
@@ -433,14 +433,14 @@ Dolphin lists 223 instruction handlers in `Interpreter_Tables.cpp`. Every one is
 | `pixel.copy_formats_rg8_gb8` | Copy formats RG8, GB8 | done | `runtime/gx_encode.c:130`, `gx_copy.c:204` | RG8 is green then red, GB8 blue then green, in memory and in the card's copy. |
 | `pixel.depth_copy` | Depth copy | partial | `runtime/gx_encode.c:36`, `gx_copy.c:274` | In memory, depth's three bytes read as red, green and blue, for Z4, Z8, Z8M, Z8L, Z16, Z16L and Z24X8. RA4, RA8, RGB565, RGB5A3 and A8 from depth, which Dolphin's software encoder has no answer for, name this row. Drawn from the card, depth reads as one value. |
 | `pixel.copy_half_size` | Copy half size | done | `runtime/gx_copy.c:316`, `gx_encode.c:52` | In memory each texel is the mean of its 2 by 2 box. |
-| `pixel.copy_y_scale` | Copy Y scale | missing |  |  |
+| `pixel.copy_y_scale` | Copy Y scale | partial | `runtime/gx_fifo.c` (`copy_gaps`) | A copy to the screen fills the window at any height, so its Y scale shows as it would on a TV. A texture copy that asks for one is reported. |
 | `pixel.copy_clear` | Copy clear | done | `runtime/gx_fifo.c:124` |  |
 | `pixel.copy_intensity_rgb_to_yuv` | Copy intensity (RGB to YUV) | partial | `runtime/gx_copy.c:274`, `gx_encode.c:72` | Bits 15 and 16. In memory, Y, U and V from Dolphin's constants, which it found by testing hardware, rounding a half up, for the intensity formats. The card's copy, drawn as a texture, reads red and says so. Other formats asking for it name this row, as Dolphin's two encoders disagree there. |
 | `pixel.copy_clamp_top_and_bottom` | Copy clamp top and bottom | partial | `runtime/gx_encode.c:52` | In memory the filter's rows above and below stop at the copy's edge when asked. A copy read back from the card has no rows beyond its own, so both edges stop there. |
 | `pixel.copy_filter_aa_and_deflicker` | Copy filter (AA and deflicker) | partial | `runtime/gx_encode.c:72` | The vertical filter applies in memory (`gx.0x53_0x54_vertical_copy_filter`). Anti-aliasing doesn't (`pixel.multisample_and_aa_modes`). |
 | `pixel.gamma_on_xfb_copy_1_0_1_7_2_2` | Gamma on XFB copy (1.0, 1.7, 2.2) | partial | `runtime/gx_encode.c:72` | Texture copies in memory follow it, as Dolphin's encoder does. Copies to the screen and the card's copy drawn as a texture don't, and say so. |
 | `pixel.copy_to_xfb` | Copy to XFB | partial | `runtime/gx_fifo.c:118`, `gx_draw.c:216` | Present directly. XFB memory unused. |
-| `pixel.field_copy_frame_to_field` | Field copy (frame to field) | missing |  |  |
+| `pixel.field_copy_frame_to_field` | Field copy (frame to field) | partial | `runtime/gx_fifo.c` (`copy_gaps`) | A field copied to the screen is shown stretched over the window, each field in turn. A texture copy that asks for one is reported. |
 | `pixel.scissor` | Scissor | done | `runtime/gx_draw.c:142-149` |  |
 | `pixel.cull_none_front_back_all` | Cull none, front, back, all | done | `runtime/gx_draw.c:125`, `gx_gl.c:212` |  |
 | `pixel.vulkan_draw_shortcuts` | Vulkan draw shortcuts | partial | `runtime/gx_vulkan.c:117`, `:662`, `:689` | Tuned on Wii Fit. Anything landing at y >= 456 runs before the scene, which is wrong for a game drawing real picture there. Cover skipping needs `WII_RECOMP_COVER`. |
@@ -541,16 +541,16 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
-| `hw.retrace_timing` | Retrace timing | partial | `runtime/interrupts.c:23`, `:84-89` | Fixed 60 Hz. PAL 50 Hz games run at the wrong rate. |
-| `hw.display_interrupts_0_3` | Display interrupts 0-3 | partial | `runtime/hardware.c:75-85` | All enabled ones fire together at retrace, ignoring their line settings. |
+| `hw.retrace_timing` | Retrace timing | done | `runtime/vi.c` | From the program's timing registers and clock select, with Dolphin's sums: PAL at 50 fields a second, NTSC, EURGB60 and progressive at 60. The 60 Hz modes are shown at the display's 60 rather than 59.94, so the window and the game keep in step. |
+| `hw.display_interrupts_0_3` | Display interrupts 0-3 | done | `runtime/vi.c`, `runtime/hardware.c` (`vi_display_interrupt`) | Each fires as the beam reaches its line, and its half-line when its horizontal count is past the middle. |
 | `hw.interrupt_clear` | Interrupt clear | done | `runtime/hardware.c:87-92` |  |
-| `hw.beam_position_0x2c_0x2e` | Beam position (0x2C, 0x2E) | missing |  | Reads 0. |
-| `hw.framebuffer_addresses_0x1c_0x2a` | Framebuffer addresses (0x1C-0x2A) | missing |  | Picture comes from EFB copy (`gx_fifo.c:118`). A game writing XFB by CPU shows nothing. |
-| `hw.timing_registers_0x00_0x04_0x1a` | Timing registers (0x00, 0x04-0x1A) | not needed |  | Host window sets the output. |
-| `hw.interlace_progressive_field_order` | Interlace, progressive, field order | missing |  |  |
+| `hw.beam_position_0x2c_0x2e` | Beam position (0x2C, 0x2E) | done | `runtime/vi.c` (`vi_read`) | The line and the sample within it, from the time since the frame began. |
+| `hw.framebuffer_addresses_0x1c_0x2a` | Framebuffer addresses (0x1C-0x2A) | partial | `runtime/vi.c` (`check_shown_picture`), `runtime/gx_fifo.c` | The picture comes from the graphics chip's copies to the screen, shown as they're made. A framebuffer the program fills itself, which no recent copy went to, isn't shown, and is reported after two seconds of showing it. |
+| `hw.timing_registers_0x00_0x04_0x1a` | Timing registers (0x00, 0x04-0x1A) | done | `runtime/vi.c` | Set the field's length and the beam's pace. The window's size stays the host's. |
+| `hw.interlace_progressive_field_order` | Interlace, progressive, field order | done | `runtime/vi.c` | Interlaced frames are two fields, each its own retrace and half the frame's lines; progressive ones one field at the 54 MHz clock. The window is progressive, so either is shown whole. |
 | `hw.horizontal_scaler_filter_0x48_0x6c` | Horizontal scaler, filter (0x48-0x6C) | missing |  | Stored only. |
 | `hw.display_latch_0x40_0x46` | Display latch (0x40-0x46) | missing |  | Light gun only. |
-| `hw.clock_select_dtv_status` | Clock select, DTV status | done | `runtime/hardware.c:295`, `:312` | No component cable, and the NTSC-J bit on a Japanese console, as Dolphin answers without progressive scan. Clock select only times a signal the window replaces. |
+| `hw.clock_select_dtv_status` | Clock select, DTV status | done | `runtime/hardware.c` (`dtv_status`), `runtime/vi.c` | A component cable is in, so 480p can be chosen (`WII_RECOMP_CABLE=composite` takes it out), and the NTSC-J bit on a Japanese console. Clock select sets the beam's pace (`vi.c`). |
 | `hw.vi_solid_color_hollywood_0x24` | VI solid color (Hollywood 0x24) | on demand | `runtime/ios.c:189` | Only system software blanks the screen this way, and Dolphin ignores it. Reported when turned on. |
 
 ### PI (processor interface)
@@ -619,7 +619,7 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 | `hw.control_busy_bit` | Control busy bit | done | `runtime/exi.c` | Transfers finish at once. |
 | `hw.status_dma_address_length_immediate_data` | Status, DMA address, length, immediate data | done | `runtime/exi.c` | Immediate and DMA transfers, both directions. Devices other than the clock chip are empty. |
 | `hw.exi_interrupt` | EXI interrupt | done | `runtime/exi.c` | Transfer done, EXI and insert interrupts, each behind its mask. |
-| `hw.rtc_and_sram_channel_0` | RTC and SRAM (channel 0) | done | `runtime/exi.c` | The clock is local time since 2000, as the time base, and the game can move it. SRAM holds a new Wii's settings with correct checksums. |
+| `hw.rtc_and_sram_channel_0` | RTC and SRAM (channel 0) | done | `runtime/exi.c` | The clock is local time since 2000, as the time base, less the settings' counter bias (`IPL.CB`), as in Dolphin: a Wii adds the bias, so the Wii Menu shows the computer's time whatever its date setting stored. The game can move it. SRAM holds a new Wii's settings with correct checksums. |
 | `hw.gc_memory_card` | GC memory card | on demand |  | GameCube titles only. |
 | `hw.microphone` | Microphone | on demand |  | A handful of titles. |
 | `hw.ethernet_adapter` | Ethernet adapter | on demand |  | Online services the adapter reached are gone. |
@@ -632,7 +632,7 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 | `hw.registers_0xcd006000` | Registers 0xCD006000 | not needed |  | Wii games go through `/dev/di`. |
 | `hw.reads_through_extracted_files` | Reads through extracted files | done | `runtime/dvd.c:110-136` | See area 7. |
 | `hw.disc_image_files_iso_wbfs_rvz` | Disc image files (ISO, WBFS, RVZ) | partial | `runtime/drive.c:1-40`, `tools/make_disc.py` | Only this project's own `.wrd` image or an extracted folder. |
-| `hw.second_disc_layer_disc_swap` | Second disc layer, disc swap | partial | `runtime/drive.c:280`, `runtime/dvd.c:105`, `runtime/ios.c:193` | The second layer works, as offsets are 64-bit. Swapping discs isn't done, and ejecting is reported. |
+| `hw.second_disc_layer_disc_swap` | Second disc layer, disc swap | done | `runtime/console.c` (`console_update_drive`), `runtime/dvd.c`, `runtime/ios.c` | The second layer works, as offsets are 64-bit. The control pipe's `eject` and `insert <image>` change the disc as the game runs, between its reads; the cover reads open while the drive is empty. A program throwing the disc out (the eject pin, or stopping the motor with eject) empties the drive. In a console the image moves between `drive/` and `shelf/`, so a restart finds the same disc. |
 
 ### IPC and Hollywood
 
@@ -702,7 +702,8 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
 | `ios.open_close` | Open, close | done | `runtime/ios.c:34`, `:55-76` | Device names match by prefix (`devices.c:19`). 32 handles. |
-| `ios.read_write_seek` | Read, write, seek | done | `runtime/files.c:121-140` | Files only. Devices get "fine". |
+| `ios.read_write_seek` | Read, write, seek | done | `runtime/files.c` (`files_request`) | Every handle on a file shares its contents. A seek outside the file answers -101, as in Dolphin. Changed files are written whole and renamed into place, so a power cut can't leave half a file. |
+| `ios.file_handle_other_requests` | Other requests on a file handle | on demand | `runtime/files.c` | Only GETFILESTATS is a file's own ioctl; anything else answers -101 and is reported. |
 | `ios.ioctl_ioctlv_dispatch` | Ioctl, ioctlv dispatch | done | `runtime/devices.c:24` |  |
 | `ios.unknown_device` | Unknown device | done | `runtime/ios.c:44` | Returns not found. |
 | `ios.asynchronous_replies` | Asynchronous replies | done | `runtime/ios.c:101` | The reply queue grows as needed, so there's no limit. |
@@ -714,16 +715,17 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
 | `ios.format` | FORMAT | not needed |  | Only the system menu's reset. |
-| `ios.getstats` | GETSTATS | done | `runtime/fs.c:138` | Fixed free space. |
-| `ios.createdir_createfile` | CREATEDIR, CREATEFILE | done | `runtime/fs.c:26` |  |
+| `ios.getstats` | GETSTATS | done | `runtime/fs.c` (`write_stats`) | Clusters and inodes used and free, counted through the save and storage folders, with Dolphin's sizes: 16 KiB clusters, 0x7ec0 of them less 0x300 kept for IOS, and 0x17ff inodes. |
+| `ios.createdir_createfile` | CREATEDIR, CREATEFILE | done | `runtime/fs.c` (`create`) | A name must start at the top and each part be at most 12 characters (-101), and its folder must be there (-106). |
 | `ios.readdir` | READDIR | done | `runtime/fs.c:112` |  |
 | `ios.setattr` | SETATTR | done | `runtime/fs.c:157`, `:267` | Owner, group, permissions and flags kept in `saves/.attributes`, used by create, GETATTR, rename and delete. The caller always has full rights. |
 | `ios.getattr` | GETATTR | partial | `runtime/fs.c:85` | Fixed owner and read-write. |
 | `ios.delete` | DELETE | done | `runtime/fs.c:56` |  |
-| `ios.rename` | RENAME | done | `runtime/fs.c:74` |  |
+| `ios.rename` | RENAME | done | `runtime/fs.c` (`move`) | Valid names, the new name's folder there (-106), and anything already there of the same type, which it replaces (-101 otherwise). A file only in the Wii storage folder is copied into the save folder whole. |
+| `ios.rename_folder_from_storage` | RENAME of a folder only in the Wii storage folder | on demand | `runtime/fs.c` (`move`) | The storage folder is never written, and folders aren't copied out of it, so this answers -101 and is reported. A console has no separate storage folder. |
 | `ios.setfileverctrl` | SETFILEVERCTRL | on demand | `runtime/ios_trace.c:44` | No source says what it changes, so it answers an error and is reported. |
 | `ios.getfilestats` | GETFILESTATS | done | `runtime/files.c:141` |  |
-| `ios.getusage` | GETUSAGE | partial | `runtime/fs.c:147` | Always 0 used. |
+| `ios.getusage` | GETUSAGE | done | `runtime/fs.c` (`get_usage`) | A folder's clusters and inodes, itself included, as Dolphin counts them. A file answers -101. |
 | `ios.shutdown` | SHUTDOWN | done | `runtime/fs.c:268`, `runtime/files.c` | Every changed open file is written out, then 0 is answered. |
 | `ios.file_open_modes` | File open modes | done | `runtime/files.c:85`, `:165`, `:173`, `runtime/ios.c` | A forbidden read or write answers -102, a folder -101, a missing file -106, and no free handle -109. |
 | `ios.permissions_error_codes` | Permissions, error codes | partial | `runtime/fs.c:15` | Only not found and exists. |
@@ -739,7 +741,8 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | `ios.title_lists_and_counts` | Title lists and counts | done | `runtime/es_titles.c:166-169` | From the console's storage (`titles.c`). |
 | `ios.views_stored_tmd` | Views, stored TMD | done | `runtime/es_titles.c:172-181`, `runtime/es.c:44` | Ticket and TMD views. |
 | `ios.content_open_read_seek_close` | Content open, read, seek, close | done | `runtime/es_content.c:91-96` | No downloadable content or channels. |
-| `ios.launch_return_to_menu_start_title` | LAUNCH (return to menu, start title) | partial | `runtime/es.c:70-78` | Wii Menu to disc and back only. Other titles get an error. |
+| `ios.launch_return_to_menu_start_title` | LAUNCH (return to menu, start title) | partial | `runtime/es.c`, `runtime/console.c` | The Wii Menu, the disc and any title installed in the console with native code start, each in a fresh console. |
+| `ios.launch_untranslated_title` | LAUNCH of a title with no native code | on demand | `runtime/es.c` | A title in the storage but not built for the console (`add_game.py --nand`) can't run, so it's refused with an error and reported. |
 | `ios.title_install_delete` | Title install, delete | not needed |  | System tools only. |
 | `ios.encrypt_decrypt` | Encrypt, decrypt | on demand | `runtime/ios_trace.c:47` | Needs the console's own secret keys, which can't be shipped. Answers an error and is reported. |
 | `ios.set_uid` | Set UID | done | `runtime/es_titles.c:162` | Fine without permissions. |
@@ -764,8 +767,8 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
-| `ios.dev_stm_immediate` | `/dev/stm/immediate` | partial | `runtime/stm.c:8-15` | Dimming and the disc light only. **Regression:** shutdown, reset and idle answer an error since 7691d88. |
-| `ios.dev_stm_eventhook` | `/dev/stm/eventhook` | partial | `runtime/devices.c:33` | Held open forever. Power and reset never sent. |
+| `ios.dev_stm_immediate` | `/dev/stm/immediate` | done | `runtime/stm.c` | Dimming and the disc light are answered. Shutdown and idle (standby) turn the console off, writing open files first; hot reset starts it again from the Wii Menu, or the same title when it was started alone. Codes from Dolphin's STM.h. |
+| `ios.dev_stm_eventhook` | `/dev/stm/eventhook` | done | `runtime/stm.c` | Held until a button: the control pipe's `reset` and `power`, or closing the window, which presses power and cuts it after 5 seconds if the program doesn't turn off. Closing the handle drops the held request, as Dolphin does. |
 | `ios.dev_aes` | `/dev/aes` | done | `runtime/crypto.c:145` | Copy, and AES-128-CBC both ways with the game's key; the IV carries on, so a message can come in pieces. Checked against the FIPS-197 and SP 800-38A vectors. |
 | `ios.dev_sha` | `/dev/sha` | partial | `runtime/crypto.c:227` | SHA-1 start, add and finish. The HMAC requests answer an error and are reported. |
 | `ios.dev_sdio_slot0` | `/dev/sdio/slot0` | done | `runtime/sdio.c` | No card: status says empty, and insert waits are held. |
@@ -778,10 +781,10 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | `ios.dev_usb_kbd` | `/dev/usb/kbd` | done | `runtime/usb.c:145` | Event requests wait for a keyboard that never comes; writes answer 0, as Dolphin does. |
 | `ios.dev_usb_wfssrv_dev_wfsi` | `/dev/usb/wfssrv`, `/dev/wfsi` | not needed |  | Wii U mode. |
 | `ios.dev_net_kd_request_dev_net_kd_time` | `/dev/net/kd/request`, `/dev/net/kd/time` | partial | `runtime/net.c:30-58`, `:127`, `runtime/wc24.c:112` | Scheduler, user ID, UTC and the real-time clock. |
-| `ios.dev_net_ncd_manage` | `/dev/net/ncd/manage` | done | `runtime/net.c:87-124` | Not connected, the MAC address, and settings load and save. |
+| `ios.dev_net_ncd_manage` | `/dev/net/ncd/manage` | done | `runtime/net.c` | A wired link (none with `WII_RECOMP_SHOP_SERVER=off`), the MAC address, and settings load and save. |
 | `ios.dev_net_wd_command` | `/dev/net/wd/command` | on demand | `runtime/devices.c:40-45` | Answered with an error, so the game sees no network. |
-| `ios.dev_net_ip_top` | `/dev/net/ip/top` | on demand | `runtime/devices.c:40-45` | Answered with an error, so the game sees no network. |
-| `ios.dev_net_ssl` | `/dev/net/ssl` | on demand | `runtime/devices.c:40-45` | Answered with an error, so the game sees no network. |
+| `ios.dev_net_ip_top` | `/dev/net/ip/top` | partial | `runtime/net_ip.c`, `runtime/net_routes.c` | Sockets, polling, socket options, name lookups (its own and through a built-in DNS server) and address text. Only the names the console answers itself reach anything: its local server for the connection test, the agreement and the Wii Shop Channel (`tools/shop/server.py`). Everything else finds no host. |
+| `ios.dev_net_ssl` | `/dev/net/ssl` | partial | `runtime/net_ssl.c` | Every secure connection goes to the console's own server, so the bytes pass as they are, with no TLS, and certificates are accepted. Opera, in the Shop, speaks TLS itself; `runtime/opera_trust.c` adds the console's own authority to its trusted list. |
 | `ios.dev_wl0` | `/dev/wl0` | on demand | `runtime/devices.c:40-45` | Answered with an error, so the game sees no network. |
 | `ios.dev_dolphin` | `/dev/dolphin` | not needed |  | Dolphin's own. |
 | `ios.mios_gamecube_mode` | MIOS (GameCube mode) | not needed |  |  |

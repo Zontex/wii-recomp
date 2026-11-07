@@ -636,6 +636,7 @@ static void keep_apart(Copy *copy, uint32_t width, uint32_t height) {
 }
 
 void gx_copy_to_texture(uint32_t control, int from_depth) {
+  gx_draw_start();
   static int resolver_set;
   if (!resolver_set) {
     resolver_set = 1;

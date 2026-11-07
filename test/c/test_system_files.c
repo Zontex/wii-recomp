@@ -77,16 +77,21 @@ int main(int count, char **arguments) {
   CHECK(!memcmp(data + 0x20, fat16, sizeof fat16));
   CHECK(!memcmp(data + 0xe040, "MB         ", 11));
 
-  // The Mii database, with its CRC-16 over everything before it.
-  CHECK_EQ(load(saves, "/shared2/menu/FaceLib/RFL_DB.dat"), 0x1f1e0);
+  // The Mii database as the Mii Channel makes it: the whole file, the Mii Parade's slots
+  // all empty, and a CRC-16 over the two parts.
+  CHECK_EQ(load(saves, "/shared2/menu/FaceLib/RFL_DB.dat"), 0xbe6c0);
   CHECK(!memcmp(data, "RNOD", 4));
-  CHECK(!memcmp(data + 0x1d00, "RNHD", 4));
+  CHECK_EQ(data[0x1cec], 0x80);
+  CHECK(!memcmp(data + 0x1d00, "RNHD\xff\xff\xff\xff", 8));
+  CHECK_EQ(at16(0x1d10), 0x7fff);
+  CHECK_EQ(at16(0x1d10 + 12 * 9999 + 2), 0x7fff);
   uint16_t crc = 0;
   for (uint32_t i = 0; i < 0x1f1de; i++) {
     crc ^= (uint16_t)(data[i] << 8);
     for (int bit = 0; bit < 8; bit++) crc = crc & 0x8000 ? (uint16_t)(crc << 1 ^ 0x1021) : (uint16_t)(crc << 1);
   }
   CHECK_EQ(at16(0x1f1de), crc);
+  CHECK_EQ(crc, 0x9aff);  // The same bytes, so the same CRC, as the Mii Channel's own.
 
   // The system settings, with every item Dolphin's SysConf.cpp gives a new Wii.
   CHECK_EQ(load(saves, "/shared2/sys/SYSCONF"), 0x4000);
