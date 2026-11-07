@@ -305,9 +305,12 @@ static int poll_sockets(uint32_t request) {
   uint32_t in = rd32(request + 16) | 0x80000000u, entries = rd32(request + 28) / 12;
   if (!entries || entries > MAX_SOCKETS) return -E_INVAL;
   int64_t timeout = (int64_t)((uint64_t)rd32(in) << 32 | rd32(in + 4));
-  int ready = poll_now(request);
-  if (ready || timeout == 0) return ready;
-  net_hold(request, SO_POLL, 0, timeout > 0 ? time_base() + (uint64_t)timeout * 60750 : 0);
+  // Answered from net_update, a moment later even when something is ready already, as
+  // IOS takes a while to answer and Dolphin answers from its periodic update too. The
+  // thread asking waits meanwhile, as on a Wii, so a thread that polls in a loop, as the
+  // Shop's browser does, leaves time for the others.
+  uint64_t now = time_base();
+  net_hold(request, SO_POLL, 0, timeout > 0 ? now + (uint64_t)timeout * 60750 : timeout == 0 ? now : 0);
   return IOS_NO_REPLY;
 }
 
