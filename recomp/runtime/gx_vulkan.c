@@ -103,7 +103,7 @@ static GxTexture *blank_texture;
 static Binding bindings[MAX_TEXTURE_MAPS];
 static VkDescriptorImageInfo maps_set[MAX_TEXTURE_MAPS];
 static Ring shape_indices;  // Strips, fans and quads as triangles: Metal has no fans, and one kind of pipeline serves all.
-static VkDeviceSize vertex_bytes, reserved_at;
+static VkDeviceSize reserved_at, reserved_stride;
 static int pass_open;
 static VkBuffer index_buffer_bound, vertex_buffer_bound;
 // Galaxy 2 draws its models as hundreds of short strips a frame, one after another with
@@ -673,7 +673,7 @@ static void send_during_draw(int count) {
   vk_frame_submit(frame, VK_NULL_HANDLE, VK_NULL_HANDLE);
   begin_batch(&vk.frames[(frame - vk.frames + 1) % FRAMES_IN_FLIGHT]);
   // The draw's vertices went to the last set's memory, which it doesn't share.
-  VkDeviceSize bytes = (VkDeviceSize)count * vertex_bytes, at = vk_ring_take(&vk.frame->vertices, bytes, vertex_bytes);
+  VkDeviceSize bytes = (VkDeviceSize)count * reserved_stride, at = vk_ring_take(&vk.frame->vertices, bytes, reserved_stride);
   memcpy(vk.frame->vertices.mapped + at, frame->vertices.mapped + reserved_at, bytes);
   reserved_at = at;
   reserved_restarts = restarts;
@@ -723,7 +723,7 @@ static void write_shape_indices(void) {
 }
 
 static void start(const GxAttribute *attributes, int attribute_count, size_t bytes) {
-  vertex_bytes = bytes;
+  (void)bytes;  // Each program packs its own (vk_shader_packing).
   viewport_wanted = (VkViewport){0, EFB_PIXEL_HEIGHT, EFB_PIXEL_WIDTH, -(float)EFB_PIXEL_HEIGHT, 0, 1};
   vk_create_device();
   create_render_pass();
@@ -933,15 +933,42 @@ static void set_viewport_and_scissor(VkCommandBuffer commands, const VkViewport 
   }
 }
 
+// Copies of a known size become a few wide loads and stores, where a call per run cost more.
+static inline void copy_words(uint32_t *to, const uint32_t *from, unsigned words) {
+  switch (words) {
+#define WORDS(n) case n: memcpy(to, from, n * 4); break;
+    WORDS(1) WORDS(2) WORDS(3) WORDS(4) WORDS(5) WORDS(6) WORDS(7) WORDS(8) WORDS(9) WORDS(10) WORDS(11) WORDS(12)
+    WORDS(13) WORDS(14) WORDS(15) WORDS(16) WORDS(17) WORDS(18) WORDS(19) WORDS(20)
+#undef WORDS
+    default: memcpy(to, from, words * 4);
+  }
+}
+
+// Only what the shader reads goes to the card, packed (vk_shader_packing): about a third of
+// a whole Vertex, in memory the processor writes to without caching.
 static void vertices_send(const void *vertices, int count) {
-  VkDeviceSize bytes = (VkDeviceSize)count * vertex_bytes;
-  reserved_at = vk_ring_take(&vk.frame->vertices, bytes, vertex_bytes);
+  static GxShader packed_for;
+  static const VkVertexPacking *packing;
+  if (packed_for != shader_in_use || !packing) packing = vk_shader_packing(shader_in_use), packed_for = shader_in_use;
+  uint32_t stride = packing->stride ? packing->stride : 4;
+  VkDeviceSize bytes = (VkDeviceSize)count * stride;
+  reserved_at = vk_ring_take(&vk.frame->vertices, bytes, stride);
   if (reserved_at == (VkDeviceSize)-1) {
     finish_commands();
-    reserved_at = vk_ring_take(&vk.frame->vertices, bytes, vertex_bytes);
+    reserved_at = vk_ring_take(&vk.frame->vertices, bytes, stride);
   }
   reserved_restarts = restarts;
-  memcpy(vk.frame->vertices.mapped + reserved_at, vertices, (size_t)bytes);
+  reserved_stride = stride;
+  uint32_t *to = (uint32_t *)(vk.frame->vertices.mapped + reserved_at);
+  const uint32_t *from = vertices;
+  _Static_assert(sizeof(Vertex) % 4 == 0, "a Vertex is whole words");
+  for (int n = 0; n < count; n++, from += sizeof(Vertex) / 4) {
+    for (uint32_t r = 0; r < packing->run_count; r++) {
+      const VkVertexRun *run = &packing->runs[r];
+      copy_words(to, from + run->from, run->words);
+      to += run->words;
+    }
+  }
 }
 
 static void early_depth_changed(void);
@@ -1193,7 +1220,7 @@ static void draw(int primitive, int count) {
   // The vertices are still there, but must be claimed again before anything lands on them.
   Frame *frame = vk.frame;
   if (restarts != reserved_restarts) {
-    VkDeviceSize bytes = (VkDeviceSize)count * vertex_bytes, at = vk_ring_take(&frame->vertices, bytes, vertex_bytes);
+    VkDeviceSize bytes = (VkDeviceSize)count * reserved_stride, at = vk_ring_take(&frame->vertices, bytes, reserved_stride);
     memmove(frame->vertices.mapped + at, frame->vertices.mapped + reserved_at, bytes);
     reserved_at = at;
   }
@@ -1231,7 +1258,7 @@ static void draw(int primitive, int count) {
     vkCmdBindVertexBuffers(commands, 0, 1, &frame->vertices.buffer, &start_of_buffer);
     vertex_buffer_bound = frame->vertices.buffer;
   }
-  int32_t first = (int32_t)(reserved_at / vertex_bytes);
+  int32_t first = (int32_t)(reserved_at / reserved_stride);
   recorded_draws++;
   draws_since_submit++;
   if (primitive == PRIM_STRIP && join_strip(first, count)) return;

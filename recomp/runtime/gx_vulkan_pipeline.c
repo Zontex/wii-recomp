@@ -36,7 +36,19 @@ static const char *const prefix =
 typedef struct {
   uint64_t hash;
   VkShaderModule module;
+  uint32_t inputs;  // The locations its SPIR-V reads as vertex inputs, a bit each.
+  int layout;       // Into layouts, once looked for; -1 before.
 } Stage;
+
+// The vertex layout for one set of inputs: only those attributes, packed.
+typedef struct {
+  uint32_t inputs, attribute_count;
+  VkVertexInputAttributeDescription attributes[16];
+  VkVertexPacking packing;
+} Layout;
+enum { MOST_LAYOUTS = 256 };
+static Layout layouts[MOST_LAYOUTS];
+static int layout_count;
 
 typedef struct {
   uint32_t vertex, fragment;  // Indexes into stages.
@@ -64,7 +76,6 @@ static uint32_t shader_count, shader_capacity;
 static PipelineSlot *pipelines;
 static uint32_t pipeline_slots, pipeline_count;
 static VkPipelineCache pipeline_cache;
-static VkVertexInputBindingDescription vertex_binding;
 static VkVertexInputAttributeDescription vertex_attributes[MAX_ATTRIBUTES];
 static uint32_t vertex_attribute_count;
 static struct { uint64_t key; VkSampler sampler; } samplers[SAMPLER_SLOTS];
@@ -234,6 +245,30 @@ static void stage_slots_fill(void) {
   }
 }
 
+// The locations of a module's inputs, from its OpDecorate Location and OpVariable Input.
+// A fragment stage's are its varyings, which no layout is made from.
+static uint32_t spirv_inputs(const uint32_t *code, size_t bytes) {
+  enum { HEADER_WORDS = 5, OP_DECORATE = 71, OP_VARIABLE = 59, DECORATION_LOCATION = 30, STORAGE_INPUT = 1, MOST_IDS = 1 << 16 };
+  size_t words = bytes / 4;
+  if (words < HEADER_WORDS || code[3] > MOST_IDS) return 0;
+  static int16_t location_of[MOST_IDS];
+  uint32_t bound = code[3], inputs = 0;
+  for (uint32_t i = 0; i < bound; i++) location_of[i] = -1;
+  for (size_t at = HEADER_WORDS; at < words;) {
+    uint32_t count = code[at] >> 16, op = code[at] & 0xffff;
+    if (!count || at + count > words) break;
+    if (op == OP_DECORATE && count >= 4 && code[at + 2] == DECORATION_LOCATION && code[at + 1] < bound && code[at + 3] < 32) location_of[code[at + 1]] = (int16_t)code[at + 3];
+    at += count;
+  }
+  for (size_t at = HEADER_WORDS; at < words;) {
+    uint32_t count = code[at] >> 16, op = code[at] & 0xffff;
+    if (!count || at + count > words) break;
+    if (op == OP_VARIABLE && count >= 4 && code[at + 3] == STORAGE_INPUT && code[at + 2] < bound && location_of[code[at + 2]] >= 0) inputs |= 1u << location_of[code[at + 2]];
+    at += count;
+  }
+  return inputs;
+}
+
 static uint32_t stage_keep(uint64_t hash, const uint32_t *code, size_t bytes) {
   if (stage_count == stage_capacity) {
     stage_capacity = stage_capacity ? stage_capacity * 2 : FIRST_STAGE_SLOTS;
@@ -242,6 +277,8 @@ static uint32_t stage_keep(uint64_t hash, const uint32_t *code, size_t bytes) {
   VkShaderModuleCreateInfo info = {.sType = VK_STRUCTURE_TYPE_SHADER_MODULE_CREATE_INFO, .codeSize = bytes, .pCode = code};
   vk_check(vkCreateShaderModule(vk.device, &info, 0, &stages[stage_count].module), "creating a shader");
   stages[stage_count].hash = hash;
+  stages[stage_count].inputs = spirv_inputs(code, bytes);
+  stages[stage_count].layout = -1;
   stage_count++;
   if (stage_count * 2 > stage_slot_count) {
     free(stage_slots);
@@ -317,7 +354,7 @@ void vk_pipelines_start(const GxAttribute *attributes, int attribute_count, size
     vk_check(vkCreatePipelineCache(vk.device, &cache, 0, &pipeline_cache), "creating a pipeline cache");
   }
   free(driver_data);
-  vertex_binding = (VkVertexInputBindingDescription){0, (uint32_t)vertex_bytes, VK_VERTEX_INPUT_RATE_VERTEX};
+  (void)vertex_bytes;  // Each layout has its own (layout_of).
   static const VkFormat floats[] = {[2] = VK_FORMAT_R32G32_SFLOAT, [3] = VK_FORMAT_R32G32B32_SFLOAT, [4] = VK_FORMAT_R32G32B32A32_SFLOAT};
   static const VkFormat bytes[] = {[1] = VK_FORMAT_R8_UINT, [2] = VK_FORMAT_R8G8_UINT, [4] = VK_FORMAT_R8G8B8A8_UINT};
   vertex_attribute_count = (uint32_t)attribute_count;
@@ -434,6 +471,44 @@ void vk_stages_prepare(int count, const int *kinds, const char *const *texts) {
 }
 
 // Nothing is built until a pipeline needs it, as only then is the rest of the state known.
+// Each attribute read, in the order of its location, follows the last; neighbours in a
+// Vertex that stay neighbours are copied as one run.
+static const Layout *layout_of(uint32_t stage) {
+  Stage *s = &stages[stage];
+  if (s->layout >= 0) return &layouts[s->layout];
+  for (int i = 0; i < layout_count; i++) {
+    if (layouts[i].inputs == s->inputs) return &layouts[s->layout = i];
+  }
+  if (layout_count == MOST_LAYOUTS) {
+    fprintf(stderr, "stop: vulkan: more than %d vertex layouts\n", MOST_LAYOUTS);
+    exit(10);
+  }
+  Layout *l = &layouts[layout_count];
+  memset(l, 0, sizeof *l);
+  l->inputs = s->inputs;
+  static const uint32_t format_bytes[] = {[VK_FORMAT_R32G32_SFLOAT] = 8, [VK_FORMAT_R32G32B32_SFLOAT] = 12, [VK_FORMAT_R32G32B32A32_SFLOAT] = 16,
+                                          [VK_FORMAT_R8_UINT] = 1, [VK_FORMAT_R8G8_UINT] = 2, [VK_FORMAT_R8G8B8A8_UINT] = 4};
+  for (uint32_t location = 0; location < 32; location++) {
+    if (!(s->inputs & (1u << location))) continue;
+    const VkVertexInputAttributeDescription *full = 0;
+    for (uint32_t i = 0; i < vertex_attribute_count; i++) if (vertex_attributes[i].location == location) full = &vertex_attributes[i];
+    if (!full) {
+      fprintf(stderr, "stop: vulkan: a vertex shader reads location %u, which no attribute fills\n", location);
+      exit(10);
+    }
+    uint32_t words = (format_bytes[full->format] + 3) / 4;
+    l->attributes[l->attribute_count++] = (VkVertexInputAttributeDescription){location, 0, full->format, l->packing.stride};
+    VkVertexRun *last = l->packing.run_count ? &l->packing.runs[l->packing.run_count - 1] : 0;
+    if (last && last->from + last->words == full->offset / 4) last->words = (uint8_t)(last->words + words);
+    else l->packing.runs[l->packing.run_count++] = (VkVertexRun){(uint8_t)(full->offset / 4), (uint8_t)words};
+    l->packing.stride += words * 4;
+  }
+  s->layout = layout_count++;
+  return l;
+}
+
+const VkVertexPacking *vk_shader_packing(GxShader shader) { return &layout_of(shaders[shader - 1].vertex)->packing; }
+
 GxShader vk_shader_link(GxStage vertex, GxStage fragment) {
   if (shader_count == shader_capacity) {
     shader_capacity = shader_capacity ? shader_capacity * 2 : FIRST_SHADER_SLOTS;
@@ -466,14 +541,17 @@ static VkPipeline build_pipeline(const PipelineKey *key) {
   static const VkCullModeFlags culls[] = {[GX_CULL_NONE] = VK_CULL_MODE_NONE, [GX_CULL_FRONT] = VK_CULL_MODE_FRONT_BIT,
                                           [GX_CULL_BACK] = VK_CULL_MODE_BACK_BIT, [GX_CULL_ALL] = VK_CULL_MODE_FRONT_AND_BACK};
   const GxRenderState *state = &key->state;
-  VkShaderModule vertex = stages[stage_find(key->vertex) - 1].module, fragment = stages[stage_find(key->fragment) - 1].module;
+  uint32_t vertex_stage = stage_find(key->vertex) - 1;
+  VkShaderModule vertex = stages[vertex_stage].module, fragment = stages[stage_find(key->fragment) - 1].module;
+  const Layout *layout = layout_of(vertex_stage);
+  VkVertexInputBindingDescription binding = {0, layout->packing.stride, VK_VERTEX_INPUT_RATE_VERTEX};
   VkPipelineShaderStageCreateInfo stage_info[2] = {
     {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_VERTEX_BIT, .module = vertex, .pName = "main"},
     {.sType = VK_STRUCTURE_TYPE_PIPELINE_SHADER_STAGE_CREATE_INFO, .stage = VK_SHADER_STAGE_FRAGMENT_BIT, .module = fragment, .pName = "main"},
   };
-  VkPipelineVertexInputStateCreateInfo input = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO, .vertexBindingDescriptionCount = 1,
-                                                .pVertexBindingDescriptions = &vertex_binding, .vertexAttributeDescriptionCount = vertex_attribute_count,
-                                                .pVertexAttributeDescriptions = vertex_attributes};
+  VkPipelineVertexInputStateCreateInfo input = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+                                                .vertexBindingDescriptionCount = layout->attribute_count ? 1 : 0, .pVertexBindingDescriptions = &binding,
+                                                .vertexAttributeDescriptionCount = layout->attribute_count, .pVertexAttributeDescriptions = layout->attributes};
   VkPipelineInputAssemblyStateCreateInfo assembly = {.sType = VK_STRUCTURE_TYPE_PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO, .topology = VK_PRIMITIVE_TOPOLOGY_TRIANGLE_LIST};
   VkPipelineViewportStateCreateInfo viewport = {.sType = VK_STRUCTURE_TYPE_PIPELINE_VIEWPORT_STATE_CREATE_INFO, .viewportCount = 1, .scissorCount = 1};
   // The viewport's negative height keeps triangles facing as they do in OpenGL.
