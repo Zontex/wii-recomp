@@ -202,7 +202,9 @@ def welcome(catalogue):
   <div style="color:#333333; font-size:24px; margin-top:12px">Start Shopping</div></div>
 <div class="at" style="left:129px; top:375px; width:352px; height:56px; z-index:5">
   {hover("GoShop", "banner/GifA_GoShop_noAction.png", "banner/GifA_GoShop_Over.png", "W_03.jsp", 352, 56)}</div>"""
-    return page("Wii Shop Channel", body, wallpaper=0)
+    # The Shop's own music starts here, as on the original first page, and plays on.
+    music = '<script type="text/javascript">function pageStarted() { if (snd) snd.playBGM(); }</script>'
+    return page("Wii Shop Channel", music + body, wallpaper=0)
 
 
 def main_menu(catalogue):
