@@ -111,6 +111,18 @@ class CopiesInMemory(Played):
         landed = target // page != (end - 0x80) // page
         self.assertEqual(self.memory([(made, updates), b"", b""], target, 2), bytes([0xc8, 0xe7]) if landed else bytes(2))
 
+    def test_a_copy_made_again_each_frame_still_lands_when_it_stops(self):
+        # Made again at the same place every frame beside data the game writes, as Galaxy 2
+        # does, the last copy lands on the page let go. (Here the card keeps up, as the
+        # replay saves each picture, so read backs are never covered before landing.)
+        target = TARGET + 0x100
+        end = target + 64 * 64 * 2
+        made = [flat_quad(RED if i < 7 else GREEN, 0, 0, 64, 64) + copy_picture(target, COPY_RGB565) for i in range(8)]
+        frames = [(commands, [(len(commands), end + 0x40, bytes([i]))]) for i, commands in enumerate(made)]
+        data = self.memory(frames + [b"", b"", b""], end - 0x100, 0x100)
+        self.assertEqual(data, bytes([0x15, 0xa5]) * 0x80)
+        self.assertNotIn("waited for the card", self.log)
+
     def test_a_late_copy_lands_on_a_page_only_beside_it_written(self):
         # Only data beside the copy on its last page is written: the copy lands there whole.
         target = TARGET + 0x100

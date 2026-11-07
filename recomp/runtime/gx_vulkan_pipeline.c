@@ -512,6 +512,7 @@ static uint32_t hash_key(const PipelineKey *key) {
   return hash;
 }
 
+static VkPipeline vk_pipeline_find_new(GxShader shader, const GxRenderState *state);
 static PipelineSlot *find_slot(const PipelineKey *key) {
   uint32_t slot = hash_key(key) & (pipeline_slots - 1);
   while (pipelines[slot].pipeline && memcmp(&pipelines[slot].key, key, sizeof *key)) slot = (slot + 1) & (pipeline_slots - 1);
@@ -530,6 +531,15 @@ static void grow_pipelines(void) {
 }
 
 VkPipeline vk_pipeline_find(GxShader shader, const GxRenderState *state) {
+  // Most draws ask for the last draw's pipeline: that answer is kept.
+  static struct { GxShader shader; GxRenderState state; VkPipeline pipeline; } last;
+  if (last.pipeline && shader == last.shader && !memcmp(state, &last.state, sizeof *state)) return last.pipeline;
+  last.pipeline = vk_pipeline_find_new(shader, state);
+  last.shader = shader, last.state = *state;
+  return last.pipeline;
+}
+
+static VkPipeline vk_pipeline_find_new(GxShader shader, const GxRenderState *state) {
   PipelineKey key;
   memset(&key, 0, sizeof key);
   key.vertex = stages[shaders[shader - 1].vertex].hash;

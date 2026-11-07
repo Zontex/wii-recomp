@@ -231,6 +231,7 @@ void gx_constants_send(int binding, const void *data, size_t bytes);
 // multiply by it, as in width * EFB_SCALE, which leaves the division for last.
 extern int gx_scale_numerator, gx_scale_denominator;
 #define EFB_SCALE gx_scale_numerator / gx_scale_denominator
+void gx_choose_scale(void);  // Once the title is loaded, before anything is drawn.
 #define MAX_VERTICES 65536
 struct GxTexture;
 void gx_copy_rectangle(int *x, int *y, int *width, int *height);
@@ -251,6 +252,7 @@ void gx_copy_frame_shown(void);
 int gx_efb_read(uint32_t address, int bytes, uint32_t *value);
 int gx_efb_write(uint32_t address, uint32_t value, int bytes);
 void gx_efb_changed(void);
+void gx_efb_shown(void);  // A picture was shown: changed, with nothing drawn since.
 int gx_draw_started(void);  // The backend has started, so it can be asked to read.
 // The bounding box (gx_efb.c): on from a write to BP 0x55 or 0x56 until it's read or a
 // picture is shown, while every pixel drawn widens it.

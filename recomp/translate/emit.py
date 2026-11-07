@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Translate each function of a Wii program into C.
 
-Usage: recomp/translate/emit.py extracted/sys/main.dol recomp/build/generated [--all-code] [--fifo-breakpoints] [--virtual-bluetooth]
+Usage: recomp/translate/emit.py extracted/sys/main.dol recomp/build/generated [--all-code] [--fifo-breakpoints] [--virtual-bluetooth] [--scale N[/D]]
                                 [--profile FILE] [--discovered FILE]...
 
 --all-code also translates code that nothing visibly points at, which games with C++
@@ -746,6 +746,18 @@ def emit_apploader(system, out, program):
     return len(code), fnv1a64(code), len(addresses)
 
 
+def picture_scale():
+    """--scale N or N/D: the picture's size against the Wii's for this game, or (0, 0) for the console's own."""
+    if "--scale" not in sys.argv:
+        return 0, 0
+    text = sys.argv[sys.argv.index("--scale") + 1]
+    numerator, _, denominator = text.partition("/")
+    numerator, denominator = int(numerator), int(denominator or 1)
+    if denominator < 1 or not denominator <= numerator <= 4 * denominator:
+        sys.exit(f"--scale {text} isn't a scale from 1 to 4, such as 2 or 3/2")
+    return numerator, denominator
+
+
 def title_description(program_bytes, tmd, values, function_count, module_count, apploader, counting=False):
     """What the console needs to know about this title, as the one symbol its library exports."""
     high = int.from_bytes(tmd[TITLE_ID_OFFSET:TITLE_ID_OFFSET + 4], "big")
@@ -759,7 +771,7 @@ def title_description(program_bytes, tmd, values, function_count, module_count, 
             "__attribute__((visibility(\"default\"))) const Title wii_recomp_title = {\n"
             f"  TITLE_INTERFACE, 0x{fnv1a64(program_bytes[:program_length(program_bytes)]):016x}ull, 0x{high:08x}u, 0x{low:08x}u, {ios},\n"
             f"  0x{values.get('calibration_flag', 0):x}u,\n"
-            f"  {int('--virtual-bluetooth' in sys.argv)}, {int('--fifo-breakpoints' in sys.argv)},\n"
+            f"  {int('--virtual-bluetooth' in sys.argv)}, {int('--fifo-breakpoints' in sys.argv)}, {picture_scale()[0]}, {picture_scale()[1]},\n"
             f"  title_functions, {function_count}, title_modules, {module_count},\n"
             f"  0x{APPLOADER_AT if apploader[0] else 0:x}u, 0x{apploader[0]:x}u, 0x{apploader[1]:016x}ull, title_apploader, {apploader[2]},\n"
             f"  {'title_counts' if counting else '0'},\n"

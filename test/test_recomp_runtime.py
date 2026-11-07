@@ -48,6 +48,9 @@ class Runtime(unittest.TestCase):
     def test_interpreter(self):
         self.build_and_run(INTERPRETER)
 
+    def test_planned_vertex_decoding_matches_the_general(self):
+        self.build_and_run([HERE / "c/test_vertex_decode.c"])
+
     def test_guest_memory_window(self):
         self.build_and_run([HERE / "c/test_guest_memory.c", RUNTIME / "guest_memory.c", RUNTIME / "memory_watch.c"])
 

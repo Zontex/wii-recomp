@@ -105,6 +105,8 @@ recomp/build/wii-recomp games/RFPE01.wrd
 
 The first build compiles everything quickly, and the game counts how often each part of it runs while you play. Run the same command again, or `add_game.py RFPE01` with the game's ID, and the parts that did the work are compiled for speed. Only those files are compiled again, and the image's native code is swapped without copying the disc. Counts from every run add up, so the build keeps up with what you play. Each game builds in `recomp/build-<game ID>/`, and any code that had to run on the interpreter is translated by the next build.
 
+The console draws every picture at twice the Wii's size. A game too heavy for a small graphics chip at that size can be built with its own, such as `add_game.py SB4E01 --scale 3/2`, which is remembered for later builds; `--scale default` goes back to the console's. `WII_RECOMP_SCALE` still overrides it for a run.
+
 #### Step by step
 
 The same, one step at a time, for a single game built beside the console:

@@ -160,6 +160,7 @@ int main(int count, char **arguments) {
     }
   }
   use_folders_beside(arguments[0]);  // For the console, whatever its own folders leave unset.
+  gx_choose_scale();
   profile_start();
   guest_memory_init();
   time_start();

@@ -2,7 +2,7 @@
 """Turn a Wii disc into a game the console plays, in one command.
 
 Usage: recomp/tools/add_game.py <disc image | extracted disc folder | game ID> [--console FOLDER]
-                                [--fifo-breakpoints] [--no-pack] [--jobs N]
+                                [--fifo-breakpoints] [--scale N[/D] | default] [--no-pack] [--jobs N]
 
 It extracts the disc (an .iso, .rvz or .wbfs), translates its program with every piece of
 code it can find and the game's own Wii Remote code, builds the console if needed and the
@@ -20,6 +20,9 @@ first picture, so they don't hold up frames during play.
 
 Each game builds in recomp/build-<game ID>/, which keeps its settings in settings.json.
 --fifo-breakpoints is remembered there, for games that keep several frames in the FIFO.
+--scale sets the picture's size against the Wii's for this game, such as 3/2 for a game
+too heavy for a small graphics chip at the console's 2; it's remembered there too, and
+--scale default goes back to the console's own. WII_RECOMP_SCALE still wins when set.
 """
 import argparse
 import json
@@ -216,6 +219,7 @@ def main():
     parser.add_argument("source", help="a disc image, an extracted disc folder, or the ID of a game added before")
     parser.add_argument("--console", action="append", default=[], help="a console folder to put the game in, and to read its runs from")
     parser.add_argument("--fifo-breakpoints", action="store_true", help="for games that keep several frames in the FIFO; remembered")
+    parser.add_argument("--scale", help="the picture's size against the Wii's for this game, such as 3/2, or default; remembered")
     parser.add_argument("--no-pack", action="store_true", help="build the native code but don't pack a disc image")
     parser.add_argument("--jobs", type=int, default=os.cpu_count(), help="compiles at once")
     options = parser.parse_args()
@@ -226,6 +230,10 @@ def main():
     check_disc(disc)
     code, key = game_id(disc), title_key(disc)
     settings["fifo_breakpoints"] = settings.get("fifo_breakpoints", False) or options.fifo_breakpoints
+    if options.scale == "default":
+        settings.pop("scale", None)
+    elif options.scale:
+        settings["scale"] = options.scale
     settings["consoles"] = sorted(set(settings.get("consoles", [])) | {str(Path(folder).resolve()) for folder in options.console})
     build.mkdir(exist_ok=True)
     (build / "settings.json").write_text(json.dumps(settings, indent=2) + "\n")
@@ -246,6 +254,7 @@ def main():
     emit = [sys.executable, str(RECOMP / "translate/emit.py"), str(disc / "sys/main.dol"), str(build / "generated"),
             "--all-code", "--virtual-bluetooth", "--profile", str(profile)]
     emit += ["--fifo-breakpoints"] if settings["fifo_breakpoints"] else []
+    emit += ["--scale", settings["scale"]] if settings.get("scale") else []
     for path in discovered:
         emit += ["--discovered", str(path)]
     run("translate the program", emit)

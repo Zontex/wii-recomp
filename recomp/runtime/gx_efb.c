@@ -2,8 +2,14 @@
 // 0x08000000 to 0x08ffffff. Each word is one pixel: x in bits 2 to 11, y in bits 12 to
 // 21, and bit 22 picks depth over color, as Dolphin's MMU.cpp decodes it (CREDITS.md).
 //
-// A peek waits for the card, so the whole picture is read back at the first peek after
-// anything changed it, and later peeks read that, as games peek many pixels at a time.
+// A peek waits for the card. The first after anything changed the picture reads back the
+// block of 32 by 32 pixels around it: Super Mario Galaxy 2 peeks once or twice a frame,
+// and reading the whole picture cost the Pi's card 1.9 ms of each. A second that falls
+// outside reads the whole picture, as games that peek many pixels at a time do.
+//
+// Galaxy 2 peeks as each frame begins, before drawing anything, at the depth of the frame
+// just shown. Such a read is told to the backend, which may make the next one early, as
+// soon as that part of the picture stops changing, so the peek doesn't wait for the work after.
 #include <stdlib.h>
 #include <string.h>
 
@@ -21,27 +27,42 @@ enum {
 };
 
 static unsigned changes = 1;  // Anything drawn, cleared or poked since the last read back.
-static struct { unsigned seen; uint32_t pixels[EFB_WIDTH * EFB_HEIGHT]; } held[2];
+enum { PEEK_BLOCK = 32 };
+static struct { unsigned seen; GxRectangle area; uint32_t pixels[EFB_WIDTH * EFB_HEIGHT]; } held[2];
 
-void gx_efb_changed(void) { changes++; }
+static int drawn;  // Anything since the last picture was shown.
+void gx_efb_changed(void) { changes++, drawn = 1; }
+void gx_efb_shown(void) { changes++, drawn = 0; }
 
 typedef struct { int depth, x, y; uint32_t value; } Access;
 
 static void peek_work(void *argument) {
   Access *access = argument;
   int kind = access->depth;
-  if (held[kind].seen != changes) {
-    GxRectangle whole = {0, 0, EFB_WIDTH, EFB_HEIGHT};
-    unsigned ticket = gx_backend->read_picture ? gx_backend->read_picture(kind, &whole) : 0;
+  GxRectangle *area = &held[kind].area;
+  int inside = held[kind].seen == changes && access->x >= area->x && access->y >= area->y && access->x < area->x + area->width
+               && access->y < area->y + area->height;
+  if (!inside) {
+    GxRectangle want = {0, 0, EFB_WIDTH, EFB_HEIGHT};
+    if (held[kind].seen != changes) {  // The first peek since a change: just its block.
+      want.x = access->x & ~(PEEK_BLOCK - 1), want.y = access->y & ~(PEEK_BLOCK - 1);
+      want.width = want.x + PEEK_BLOCK <= EFB_WIDTH ? PEEK_BLOCK : EFB_WIDTH - want.x;
+      want.height = want.y + PEEK_BLOCK <= EFB_HEIGHT ? PEEK_BLOCK : EFB_HEIGHT - want.y;
+    }
+    unsigned ticket = gx_backend->read_picture ? gx_backend->read_picture(kind, &want) : 0;
     int width = 0, height = 0;
     const uint8_t *read = ticket ? gx_backend->read_finish(ticket, &width, &height) : 0;
-    if (!read || width != EFB_WIDTH || height != EFB_HEIGHT) {
+    if (!read || width != want.width || height != want.height) {
       gap_hit("pixel.efb_peek_cpu_reads_color_depth", 0x100u | (unsigned)kind);
       access->value = 0;
       return;
     }
-    memcpy(held[kind].pixels, read, sizeof held[kind].pixels);
+    for (int row = 0; row < height; row++) {
+      memcpy(&held[kind].pixels[(want.y + row) * EFB_WIDTH + want.x], read + (size_t)row * (size_t)width * 4, (size_t)width * 4);
+    }
     held[kind].seen = changes;
+    *area = want;
+    if (!drawn && gx_backend->expect_read) gx_backend->expect_read(kind, &want);
   }
   uint32_t stored = held[kind].pixels[access->y * EFB_WIDTH + access->x], format = gx.bp[BP_PIXEL_FORMAT];
   if (kind) {

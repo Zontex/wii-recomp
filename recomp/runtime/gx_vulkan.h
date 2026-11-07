@@ -48,7 +48,7 @@ typedef struct {
   VkDescriptorSet constant_set;
   VkDescriptorPool texture_pools[MAX_TEXTURE_POOLS];
   int texture_pool_count, texture_sets_used;
-  Ring vertices, constants, staging;
+  Ring vertices, constants, staging, indices;  // Indices: strips joined into one draw (gx_vulkan.c).
   Retired *retired;
   int retired_count, retired_capacity;
 } Frame;
