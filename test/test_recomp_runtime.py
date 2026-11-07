@@ -149,7 +149,7 @@ class Runtime(unittest.TestCase):
         program = self.compile(sources)
         self.build_and_run(sources, "rel")
         for mode, message in (("changed", "isn't what was translated"), ("no-native-import", "has no native code"),
-                              ("rel-elsewhere", "where it was translated to call")):
+                              ("rel-elsewhere", "where it was translated to call"), ("other-module", "no native code at")):
             result = subprocess.run([str(program), mode], capture_output=True, text=True, timeout=20)
             self.assertEqual(result.returncode, 4, result.stdout + result.stderr)
             self.assertIn(message, result.stderr)

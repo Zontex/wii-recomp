@@ -22,7 +22,9 @@ static uint64_t code_check(const Module *module, uint32_t code) {
 }
 
 // The module's header, if `code` is where its code would be once linked: the linker
-// turns the section table into addresses, so its own entry points back at `code`.
+// turns the section table into addresses, so its own entry points back at `code`, and
+// the entry keeps the code's size. Modules of one kind share a layout, so the size tells
+// this module from another loaded beside it, such as a channel banner's own code.
 static int looks_linked(const Module *module, uint32_t code, uint32_t *header) {
   *header = code - module->code_at;
   if (!is_guest(*header) || !is_guest(code + module->code_bytes - 1)) return 0;
@@ -30,7 +32,7 @@ static int looks_linked(const Module *module, uint32_t code, uint32_t *header) {
   if (rd32(*header + module->count_field) != module->section_count) return 0;
   uint32_t table = rd32(*header + module->table_field);
   if (table != *header + module->table_offset) return 0;
-  return (rd32(table + module->code_section * 8) & ~1u) == code;
+  return (rd32(table + module->code_section * 8) & ~1u) == code && rd32(table + module->code_section * 8 + 4) == module->code_bytes;
 }
 
 static uint32_t branch_target(uint32_t at) {

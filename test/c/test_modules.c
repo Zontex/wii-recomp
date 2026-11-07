@@ -53,6 +53,7 @@ static void link(uint32_t target) {
   wr32(HEADER + 8, 2);
   wr32(HEADER + 0xc, HEADER + 0x58);
   wr32(HEADER + 0x58 + 8, CODE);
+  wr32(HEADER + 0x58 + 12, 16);  // The code's size, which the linker leaves as it was.
   for (int i = 0; i < 4; i++) wr32(CODE + i * 4, words[i]);
   wr32(CODE + 4, 0x48000001u | ((target - (CODE + 4)) & 0x3fffffcu));  // bl, as the linker patches it.
 }
@@ -63,6 +64,7 @@ static void link_rel(uint32_t target) {
   wr32(REL_HEADER + 0xc, 2);
   wr32(REL_HEADER + 0x10, REL_HEADER + 0x4c);
   wr32(REL_HEADER + 0x4c + 8, REL_CODE | 1);
+  wr32(REL_HEADER + 0x4c + 12, 16);
   for (int i = 0; i < 4; i++) wr32(REL_CODE + i * 4, words[i]);
   wr32(REL_CODE + 4, 0x48000001u | ((target - (REL_CODE + 4)) & 0x3fffffcu));
 }
@@ -88,6 +90,9 @@ int main(int count, char **arguments) {
   test_module.check = code_check(&test_module, CODE);
   if (!strcmp(arguments[1], "changed")) wr32(CODE + 8, 0x38600002);
   if (!strcmp(arguments[1], "no-native-import")) link(NOT_NATIVE);
+  // Another module of the same kind, laid out alike but with other code, such as a
+  // channel banner's: not this one, so its code is left to the interpreter.
+  if (!strcmp(arguments[1], "other-module")) { wr32(HEADER + 0x58 + 12, 0x38a0); wr32(CODE + 8, 0x38600002); }
   setenv("WII_RECOMP_NATIVE_ONLY", "1", 1);
   dispatch(CODE + 8);  // First reached through an export.
   CHECK_EQ(ran_module, 1);
