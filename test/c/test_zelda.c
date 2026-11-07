@@ -20,6 +20,11 @@ void dsp_push_mail(uint32_t mail, int interrupt, uint32_t cycles_later) {
   sent[sent_count % 64].interrupt = interrupt;
   sent_count++;
 }
+static int sent_later;  // How many of those the program sent after working a while.
+void dsp_push_mail_later(uint32_t mail, int interrupt, uint32_t cycles_later) {
+  if (cycles_later) sent_later++;
+  dsp_push_mail(mail, interrupt, 0);
+}
 void dsp_mail_interrupt(uint32_t cycles_later) { (void)cycles_later; interrupts++; }
 uint32_t dsp_program_crc(void) { return crc_now; }
 void dsp_expect_new_program(void) { expect_new++; }
@@ -179,8 +184,9 @@ static void test_render(void) {
   send(0x00008000u);  // ...unlocking voices 0-15, of which voice 0 plays.
   CHECK_EQ(sent_count, 3);
   SENT(0, DSP_MAIL_SYNC, 1);
-  SENT(1, 0xf355ff00u, 0);  // Frame 0 done.
+  SENT(1, 0xf355ff01u, 0);  // The first frame done, counted from 1 as the real program does.
   SENT(2, DSP_MAIL_FRAME_END, 1);
+  CHECK_EQ(sent_later, 1);  // After finishing the mix, not with the frame's acknowledgment.
 
   // A few by hand. k = 1: (4 * -8000) >> 3 = -4000; left 2 * (-4000 >> 2) = -2000;
   // right 2 * ((1 * -4000) >> 8) = 2 * -16 = -32. k = 4: (-8000 - 15600 - 29600) >> 3
@@ -221,6 +227,35 @@ static void test_render(void) {
   CHECK_EQ(sent_count, 5);
   SENT(3, DSP_MAIL_SYNC, 1);
   SENT(4, 0xf3558000u, 0);
+
+  // A game that's behind sends its next render, and the first frame's sync mails, before
+  // "continue". They're kept for that render rather than halting the program.
+  for (int round = 0; round < 2; round++) {  // The first render ends waiting for "continue".
+    sent_count = 0;
+    gaps = 0;
+    send(0x00000005u);
+    send(0x82012000u);
+    send(LEFT_OUT);
+    send(RIGHT_OUT);
+    send(0x11111111u);
+    send(0x22222222u);
+    send(0x00000000u);
+    send(0x00008000u);
+  }
+  CHECK_EQ(sent_count, 0);  // Still waiting for "continue".
+  CHECK_EQ(gaps, 0);         // Nothing unexpected, and the render hasn't run yet.
+  send(TASK_CONTINUE);
+  CHECK_EQ(sent_count, 3);
+  SENT(0, DSP_MAIL_SYNC, 1);
+  SENT(1, 0xf355ff01u, 0);
+  SENT(2, DSP_MAIL_FRAME_END, 1);
+  CHECK_EQ(gaps, 1);
+
+  // With nothing waiting, a sync mail still halts and is named.
+  send(TASK_CONTINUE);
+  sent_count = 0;
+  send(0x00000000u);
+  CHECK(!strcmp(last_gap, "audio.zelda_unexpected_mail") && last_gap_detail == 0x05);
 }
 
 // AFC with four-bit samples. Header 0x21: scale 1 << 2 = 4, coefficient pair 1, here

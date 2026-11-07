@@ -54,6 +54,8 @@ uint32_t dsp_control_write(uint32_t value);  // Returns the processor's bits as 
 // For programs.
 uint32_t dsp_program_crc(void);
 void dsp_push_mail(uint32_t mail, int interrupt, uint32_t cycles_later);
+// Sent once the program has worked that many CPU cycles, behind any mail already sent.
+void dsp_push_mail_later(uint32_t mail, int interrupt, uint32_t cycles_later);
 int dsp_mail_pending(void);
 void dsp_mail_interrupt(uint32_t cycles_later);  // CPU cycles from now.
 void dsp_set_program(uint32_t crc);              // Starts it afresh, as a reset does.

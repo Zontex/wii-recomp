@@ -21,6 +21,7 @@
 #define MAIL_FULL 0x80000000u
 #define QUEUE 64u                      // Mail the game hasn't read yet. Programs send a few at a time.
 #define TIMERS 16u                     // Interrupts waiting their moment.
+#define LATER 16u                      // Mail the program hasn't finished working out yet.
 #define TICKS_PER_SECOND 60750000ull
 #define CPU_CYCLES_PER_TICK 12u        // 729 MHz against the 60.75 MHz time base.
 #define UPDATE_TICKS (TICKS_PER_SECOND / 1000)  // Programs are looked at every millisecond, as in Dolphin.
@@ -41,6 +42,8 @@ static uint32_t to_dsp;  // The game's mailbox, as it writes it.
 static uint32_t control = DSP_CONTROL_HALT | DSP_CONTROL_INIT;
 static uint64_t init_code_clear_at;
 static uint64_t timers[TIMERS];
+static struct { uint64_t due; uint32_t mail; int interrupt; } later[LATER];
+static uint32_t later_first, later_count;
 static uint64_t next_update;
 
 typedef struct { const DspProgram *program; uint32_t crc; } Slot;
@@ -102,6 +105,30 @@ void dsp_push_mail(uint32_t mail, int interrupt, uint32_t cycles_later) {
   queue[at].interrupt = 0;
 }
 
+// The C versions answer at once, where the program takes time: a mail that a game
+// should see only after that time waits here, in order, and is sent when it falls due.
+void dsp_push_mail_later(uint32_t mail, int interrupt, uint32_t cycles_later) {
+  if (later_count == LATER) {
+    gap_hit("limit.dsp_mail_queue", mail);
+    return;
+  }
+  uint64_t due = time_base() + (cycles_later + CPU_CYCLES_PER_TICK - 1) / CPU_CYCLES_PER_TICK;
+  if (later_count) {  // Never ahead of mail sent before it.
+    uint64_t last = later[(later_first + later_count - 1) % LATER].due;
+    if (due < last) due = last;
+  }
+  uint32_t at = (later_first + later_count++) % LATER;
+  later[at].due = due, later[at].mail = mail, later[at].interrupt = interrupt;
+}
+
+static void send_mail_due(uint64_t now) {
+  while (later_count && now >= later[later_first].due) {
+    dsp_push_mail(later[later_first].mail, later[later_first].interrupt, 0);
+    later_first = (later_first + 1) % LATER;
+    later_count--;
+  }
+}
+
 int dsp_mail_pending(void) { return queue_count != 0; }
 
 static uint32_t read_high(void) {
@@ -129,6 +156,7 @@ static int hand_over(uint32_t crc, uint32_t address, uint32_t length, uint32_t d
 
 void dsp_set_program(uint32_t crc) {
   queue_count = 0;
+  later_count = 0;
   current.crc = crc;
   current.program = program_for(crc);
   if (current.program) current.program->start();
@@ -137,6 +165,7 @@ void dsp_set_program(uint32_t crc) {
 // Swapping keeps the program it leaves, once, so the game can come back to it (DSPHLE.cpp).
 static void swap_program(uint32_t crc) {
   queue_count = 0;
+  later_count = 0;
   if (parked.program && parked.crc == crc) {
     current = parked;
     parked.program = 0;
@@ -299,6 +328,7 @@ static int hand_over(uint32_t crc, uint32_t address, uint32_t length, uint32_t d
   fprintf(stderr, "audio: no C version of program %08x, so the interpreter runs it\n", crc);
   gap_note(row, crc);
   queue_count = 0;
+  later_count = 0;
   current.crc = crc;
   current.program = 0;
   dsp_lle.control_reg = (uint16_t)control;
@@ -432,6 +462,7 @@ int dsp_write(uint32_t address, uint32_t value, int bytes) {
 
 void dsp_update(uint64_t now) {
   dsp_record_update(now);
+  send_mail_due(now);
   for (uint32_t i = 0; i < TIMERS; i++) {
     if (timers[i] && now >= timers[i]) {
       timers[i] = 0;
@@ -449,7 +480,7 @@ void dsp_update(uint64_t now) {
 
 uint64_t dsp_next_due(void) {
   if (interpreting && !dsp_lle_halted()) return time_base() + UPDATE_TICKS;  // It runs while the game sleeps.
-  uint64_t due = 0;
+  uint64_t due = later_count ? later[later_first].due : 0;
   for (uint32_t i = 0; i < TIMERS; i++) {
     if (timers[i] && (!due || timers[i] < due)) due = timers[i];
   }
