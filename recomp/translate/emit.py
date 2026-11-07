@@ -1062,6 +1062,7 @@ def main():
     out.mkdir(parents=True, exist_ok=True)
     functions, _ = find_functions(program)
     entries = load_entries()
+    board = {entry["reason"] for entry in entries if entry.get("group") == "board"}
     if "--virtual-bluetooth" in sys.argv:
         # What's dropped below needn't be found at all: a program may have no KPAD, as some
         # channels haven't, and nothing of it would be replaced anyway.
@@ -1071,7 +1072,8 @@ def main():
         # The program's own controller code runs, including an older KPADRead left as a stub,
         # and so does its board code, which the simulated board answers. WPADRead reads the
         # remote too, so standing in for it with the board's sensors blanks the remote.
-        board = {entry["reason"] for entry in entries if entry.get("group") == "board"}
+        # The board's entries are told apart by their reasons, noted before they were made
+        # optional above.
         replaced = {address: entry for address, entry in replaced.items()
                     if entry[1] not in DIRECT_INPUT and "Bluetooth" not in entry[0] and not entry[0].startswith("KPADRead")
                     and entry[0] not in board}
