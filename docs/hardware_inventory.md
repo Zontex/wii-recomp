@@ -822,7 +822,7 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | `ctl.l2cap_connect_configure` | L2CAP connect, configure | done | `runtime/bluetooth_channels.c:42-80` |  |
 | `ctl.l2cap_disconnect` | L2CAP disconnect | done | `runtime/bluetooth_channels.c:102` | Answered and the channel closed. Reports stop when the interrupt channel closes. |
 | `ctl.sdp_queries` | SDP queries | on demand | `runtime/bluetooth_channels.c:84` | SDK games don't query a paired remote, so a discovery channel is refused and reported. |
-| `ctl.paired_remote_record_in_sysconf` | Paired remote record in SYSCONF | done | `runtime/bluetooth.c:237` |  |
+| `ctl.paired_remote_record_in_sysconf` | Paired remote record in SYSCONF | done | `runtime/bluetooth.c:548`, `system_files.c` | The console's remotes are listed as the game opens the settings. A console with no settings file is given a new Wii's, as Dolphin's SysConf.cpp makes, so a game never writes its own with nobody paired and hangs up on every remote. |
 
 ### Wii Remote reports
 
