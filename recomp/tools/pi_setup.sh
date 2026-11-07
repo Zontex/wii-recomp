@@ -4,7 +4,7 @@
 # will own the console (not root; it asks for sudo), on Raspberry Pi OS:
 #
 #   recomp/tools/pi_setup.sh [--nand DIR] [--console DIR] [--channels] [--shop]
-#                            [--keep-desktop] [--resolution 1920x1080@60] [--yes] [--dry-run]
+#                            [--keep-desktop | --developer] [--resolution 1920x1080@60] [--yes] [--dry-run]
 #   recomp/tools/pi_setup.sh --only STEP[,STEP...]   just those steps, by the names below
 #   recomp/tools/pi_setup.sh --undo                  boot to the desktop again
 #
@@ -16,6 +16,9 @@
 #   desktop   removes the desktop and its programs: the web browser, the office suite,
 #             the login screen, printing and the like. It lists what goes and asks first
 #             (--yes doesn't ask). --keep-desktop skips it. --undo can't bring it back.
+#             --developer removes it but keeps labwc and grim, which test runs use to
+#             drive the console on a screen of their own, with no TV, over ssh. The TV
+#             still shows only the console; put it in standby before timing a test run.
 #   sdl3      SDL3 for controllers (sdl3_setup.sh)
 #   remotes   real Wii Remotes, the Balance Board and Switch controllers (remotes_setup.sh)
 #   console   the console folder (default ~/wii-console), with its own copy of the storage
@@ -41,7 +44,7 @@ ROOT=$(cd "$(dirname "$0")/../.." && pwd)
 NAND=$ROOT/wii/nand
 CONSOLE=$HOME/wii-console
 RESOLUTION=1920x1080@60
-CHANNELS=0 SHOP=0 DESKTOP=1 YES=0 DRY=0 UNDO=0 ONLY=
+CHANNELS=0 SHOP=0 DESKTOP=1 DEVELOPER=0 YES=0 DRY=0 UNDO=0 ONLY=
 LIB=/usr/local/lib/wii-recomp
 ETC=/etc/wii-recomp
 UNITS=/etc/systemd/system
@@ -72,6 +75,7 @@ while [ $# -gt 0 ]; do
     --channels) CHANNELS=1 ;;
     --shop) SHOP=1 ;;
     --keep-desktop) DESKTOP=0 ;;
+    --developer) DEVELOPER=1 ;;
     --yes) YES=1 ;;
     --dry-run) DRY=1 ;;
     --only) ONLY=",$2,"; shift ;;
@@ -133,16 +137,17 @@ step_packages() {
 
 step_desktop() {
   say "The desktop and the programs the console doesn't need"
-  local remove=() pattern name
+  local remove=() pattern name keep=$KEEP
+  [ "$DEVELOPER" = 0 ] || { keep="$keep labwc grim"; note "keeping labwc and grim for test runs (--developer)"; }
   for pattern in $DESKTOP_PACKAGES; do
     while read -r name; do
-      [ -n "$name" ] && installed "$name" && remove+=("$name")
+      [ -n "$name" ] && installed "$name" && ! [[ " $keep " == *" $name "* ]] && remove+=("$name")
     done < <(dpkg-query -W -f='${Package}\n' "$pattern" 2>/dev/null || true)
   done
   if [ ${#remove[@]} = 0 ]; then note "nothing left to remove"; return; fi
   note "removing: ${remove[*]}"
   # shellcheck disable=SC2086
-  local kept=$(for name in $KEEP; do installed "$name" && echo "$name"; done)
+  local kept=$(for name in $keep; do installed "$name" && echo "$name"; done)
   if [ "$DRY" = 1 ]; then
     note "apt would remove, with what only they needed:"
     apt-get -s purge "${remove[@]}" 2>/dev/null | grep '^Purg' | awk '{print $2}' | tr '\n' ' ' | fold -s -w 100 | sed 's/^/     /'
@@ -155,8 +160,15 @@ step_desktop() {
   fi
   # shellcheck disable=SC2086
   [ -z "$kept" ] || sudo apt-mark manual $kept > /dev/null
+  # labwc's settings, which test runs copy, belong to the desktop's package: kept for --developer.
+  local settings=
+  if [ "$DEVELOPER" = 1 ] && [ -d /etc/xdg/labwc ]; then settings=$(mktemp -d); cp -a /etc/xdg/labwc "$settings/"; fi
   sudo apt-get purge -y "${remove[@]}"
   sudo apt-get autoremove --purge -y
+  if [ -n "$settings" ]; then
+    [ -d /etc/xdg/labwc ] || sudo cp -a "$settings/labwc" /etc/xdg/labwc
+    rm -rf "$settings"
+  fi
   sudo apt-get clean
 }
 
