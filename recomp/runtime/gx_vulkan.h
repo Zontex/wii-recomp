@@ -67,6 +67,7 @@ typedef struct {
   int depth_filters_linear, dual_source;
   int bounding_box;  // Shaders can write to a buffer, which the bounding box needs.
   float max_anisotropy;  // 0 when the device can't filter along a slope.
+  int counting;  // WII_RECOMP_GPU_COUNTERS: the card counts its own work. See gx_vulkan.c.
 
   VkSwapchainKHR swapchain;
   VkExtent2D swap_extent;
