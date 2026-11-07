@@ -25,6 +25,7 @@
 #include "loader.h"
 #include "profile.h"
 #include "title.h"
+#include "net.h"
 
 Cpu cpu;
 
@@ -110,7 +111,7 @@ static void use_folders_beside(const char *program) {
   const char *names[][2] = {{"WII_RECOMP_SAVES", "saves"}, {"WII_RECOMP_SHADER_CACHE", "shader-cache"},
                             {"WII_RECOMP_TITLE_DATA", "title-data"}, {"WII_RECOMP_CACHE", "native-cache"},
                             {"WII_RECOMP_GAPS", "gaps.txt"}, {"WII_RECOMP_REMOTE_SLOTS", "remotes.txt"},
-                            {"WII_RECOMP_CONTROLLERS", "controllers.ini"}};
+                            {"WII_RECOMP_CONTROLLERS", "controllers.ini"}, {"WII_RECOMP_CERTIFICATES", "certificates"}};
   for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
     snprintf(path, sizeof path, "%s/%s", folder, names[i][1]);
     setenv(names[i][0], path, 0);
@@ -160,6 +161,7 @@ int main(int count, char **arguments) {
     return 1;
   }
   console_remember(arguments);
+  net_remember_program(arguments[0]);
   if (!strcmp(arguments[1], "--console")) {
     console_start(arguments[0], arguments[2], console_start_argument(count - 3, arguments + 3), &boot);
     count = 1;  // The console's storage is its own, never a separate folder.

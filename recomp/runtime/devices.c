@@ -6,6 +6,7 @@
 #include "cpu.h"
 #include "title.h"
 #include "ios.h"
+#include "net.h"
 
 typedef int (*IosHandler)(uint32_t command, uint32_t request);
 
@@ -44,8 +45,8 @@ static const IosDevice devices[] = {
   {"/dev/net/kd/time", 0, net_kd_time},
   {"/dev/net/ncd/manage", 0, net_ncd_manage},
   {"/dev/net/wd/command", 0, unmodelled},
-  {"/dev/net/ip/top", 0, unmodelled},
-  {"/dev/net/ssl", 0, unmodelled},
+  {"/dev/net/ip/top", 0, net_ip_request},
+  {"/dev/net/ssl", 0, net_ssl_request},
   {"/dev/sdio/", 1, sdio_request},
   {"/dev/aes", 0, aes_request},
   {"/dev/sha", 0, sha_request},

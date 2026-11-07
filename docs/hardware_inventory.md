@@ -27,9 +27,9 @@ Statuses:
 | 4. Vertex and texture | 50 | 10 | 0 | 3 | 1 | 2 | 66 |
 | 5. Hardware blocks | 36 | 7 | 3 | 0 | 5 | 14 | 65 |
 | 6. Audio microcodes | 21 | 2 | 12 | 0 | 5 | 1 | 41 |
-| 7. IOS | 36 | 13 | 3 | 0 | 10 | 6 | 68 |
+| 7. IOS | 36 | 15 | 3 | 0 | 8 | 6 | 68 |
 | 8. Controllers | 50 | 8 | 3 | 0 | 6 | 2 | 69 |
-| **All** | **382** | **102** | **31** | **4** | **44** | **52** | **615** |
+| **All** | **382** | **104** | **31** | **4** | **42** | **52** | **615** |
 
 ## Biggest gaps
 
@@ -781,10 +781,10 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | `ios.dev_usb_kbd` | `/dev/usb/kbd` | done | `runtime/usb.c:145` | Event requests wait for a keyboard that never comes; writes answer 0, as Dolphin does. |
 | `ios.dev_usb_wfssrv_dev_wfsi` | `/dev/usb/wfssrv`, `/dev/wfsi` | not needed |  | Wii U mode. |
 | `ios.dev_net_kd_request_dev_net_kd_time` | `/dev/net/kd/request`, `/dev/net/kd/time` | partial | `runtime/net.c:30-58`, `:127`, `runtime/wc24.c:112` | Scheduler, user ID, UTC and the real-time clock. |
-| `ios.dev_net_ncd_manage` | `/dev/net/ncd/manage` | done | `runtime/net.c:87-124` | Not connected, the MAC address, and settings load and save. |
+| `ios.dev_net_ncd_manage` | `/dev/net/ncd/manage` | done | `runtime/net.c` | A wired link (none with `WII_RECOMP_SHOP_SERVER=off`), the MAC address, and settings load and save. |
 | `ios.dev_net_wd_command` | `/dev/net/wd/command` | on demand | `runtime/devices.c:40-45` | Answered with an error, so the game sees no network. |
-| `ios.dev_net_ip_top` | `/dev/net/ip/top` | on demand | `runtime/devices.c:40-45` | Answered with an error, so the game sees no network. |
-| `ios.dev_net_ssl` | `/dev/net/ssl` | on demand | `runtime/devices.c:40-45` | Answered with an error, so the game sees no network. |
+| `ios.dev_net_ip_top` | `/dev/net/ip/top` | partial | `runtime/net_ip.c`, `runtime/net_routes.c` | Sockets, polling, socket options, name lookups (its own and through a built-in DNS server) and address text. Only the names the console answers itself reach anything: its local server for the connection test, the agreement and the Wii Shop Channel (`tools/shop/server.py`). Everything else finds no host. |
+| `ios.dev_net_ssl` | `/dev/net/ssl` | partial | `runtime/net_ssl.c` | Every secure connection goes to the console's own server, so the bytes pass as they are, with no TLS, and certificates are accepted. Opera, in the Shop, speaks TLS itself; `runtime/opera_trust.c` adds the console's own authority to its trusted list. |
 | `ios.dev_wl0` | `/dev/wl0` | on demand | `runtime/devices.c:40-45` | Answered with an error, so the game sees no network. |
 | `ios.dev_dolphin` | `/dev/dolphin` | not needed |  | Dolphin's own. |
 | `ios.mios_gamecube_mode` | MIOS (GameCube mode) | not needed |  |  |

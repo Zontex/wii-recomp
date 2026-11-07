@@ -5,6 +5,9 @@
 #include "title.h"
 #include "drive.h"
 #include <stddef.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/stat.h>
 #include <string.h>
 int console_running(void) { return 0; }
 void console_restart(uint64_t start) { exit(99); }
@@ -18,6 +21,13 @@ void hw_write(uint32_t a, uint32_t v, int n) {}
 uint64_t time_base(void) { return 0; }
 void stage_add(int stage, uint64_t ticks) {}
 int ios_trace_all(void) { return 0; }
+// The console's own authority, as an entry of Opera's trusted list.
+uint8_t *net_opera_entry(long *bytes) {
+  *bytes = 6;
+  uint8_t *entry = malloc(6);
+  memcpy(entry, "ENTRY!", 6);
+  return entry;
+}
 
 enum { REQUEST = 0x80001000u, VECTORS = 0x80002000u, BUFFERS = 0x80010000u, BUFFER_STEP = 0x4000 };
 enum { ES_EINVAL = -1017 };
@@ -40,6 +50,7 @@ static void put_title(int i, uint64_t title) { wr32(buffer(i), (uint32_t)(title 
 int main(int count, char **arguments) {
   title = &test_title;
   memory_start();
+  setenv("WII_RECOMP_SAVES", arguments[2], 1);
   files_start(arguments[1]);
   drive_insert(arguments[3]);
 
@@ -100,6 +111,31 @@ int main(int count, char **arguments) {
   wr32(buffer(0), (uint32_t)handle);
   CHECK_EQ(ioctlv(0x0a, 1, 1, (uint32_t[]){4, 16}), 5);
   CHECK(!memcmp(host(buffer(1)), "share", 5));
+
+  // An archive with Opera's trusted list comes with the console's own authority added to
+  // the list, at the archive's end; the stored content is unchanged.
+  char from[1024], to[1024];
+  snprintf(from, sizeof from, "%s/opera.arc", arguments[2]);
+  const char *folders[] = {"/title", "/00000001", "/00000002", "/content"};  // The save folder's layer.
+  snprintf(to, sizeof to, "%s", arguments[2]);
+  for (int i = 0; i < 4; i++) {
+    strcat(to, folders[i]);
+    mkdir(to, 0700);
+  }
+  strcat(to, "/0000001f.app");
+  CHECK_EQ(rename(from, to), 0);
+  wr32(buffer(0), 0);
+  handle = ioctlv(0x09, 1, 0, (uint32_t[]){4});
+  CHECK(handle >= 0);
+  wr32(buffer(0), (uint32_t)handle);
+  int read = ioctlv(0x0a, 1, 1, (uint32_t[]){4, 0x200});
+  const uint8_t *archive = host(buffer(1));
+  CHECK_EQ(read, 0xc0 + 23 + 6);
+  CHECK(!memcmp(archive + 0xc0, "0000HEADER00NINTENDO-CAENTRY!", 29));
+  CHECK_EQ(rd32(buffer(1) + 0x20 + 2 * 12 + 4), 0xc0);  // The list's node points at it,
+  CHECK_EQ(rd32(buffer(1) + 0x20 + 2 * 12 + 8), 29);    // with its new length,
+  CHECK(!memcmp(archive + 0xa0, "other file", 10));      // and the other file stays.
+  CHECK_EQ(ioctlv(0x0b, 1, 0, (uint32_t[]){4}), 0);
 
   CHECK_EQ(es_request(IOS_IOCTL, REQUEST), IOS_UNHANDLED);
   CHECK_EQ(ioctlv(0x7f, 0, 0, 0), IOS_UNHANDLED);

@@ -164,6 +164,7 @@ class Runtime(unittest.TestCase):
         storage, saves, disc = self.folder / "storage", self.folder / "saves", self.folder / "disc"
         make_storage(storage)
         saves.mkdir()
+        (saves / "opera.arc").write_bytes(opera_archive())  # test_es.c puts it in place of a content.
         (disc / "sys").mkdir(parents=True)
         (disc / "files").mkdir()
         (disc / "sys/boot.bin").write_bytes(b"SAAA01".ljust(0x440, b"\0"))  # A disc is in.
@@ -172,7 +173,7 @@ class Runtime(unittest.TestCase):
         disc_ticket = bytearray(ticket(0x0001000053414141))
         struct.pack_into(">I", disc_ticket, 0x1d0, 0x99887766)
         (disc / "ticket.bin").write_bytes(disc_ticket)
-        sources = ["test_es.c", "es.c", "es_titles.c", "es_content.c", "titles.c", "files.c", "drive.c", "memory_watch.c", "title.c"]
+        sources = ["test_es.c", "es.c", "es_titles.c", "es_content.c", "opera_trust.c", "titles.c", "files.c", "drive.c", "memory_watch.c", "title.c"]
         self.build_and_run([HERE / "c" / sources[0]] + [RUNTIME / name for name in sources[1:]], storage, saves, disc / "sys")
 
 
@@ -191,6 +192,20 @@ def ticket(title):
     data = bytearray(0x2a4)
     struct.pack_into(">QIQ", data, 0x1d0, 0x1122334455667788, 0, title)
     return bytes(data)
+
+
+def opera_archive():
+    """A U8 archive as a channel carries Opera in: opera/opcacrt6.dat, its list of trusted
+    authorities (a 12-byte header, then entries), beside another file."""
+    names = b"\0opera\0opcacrt6.dat\0readme\0"
+    nodes_at, count = 0x20, 4
+    data_at = (nodes_at + count * 12 + len(names) + 0x1f) & ~0x1f
+    trusted, readme = b"0000HEADER00NINTENDO-CA", b"other file"
+    nodes = struct.pack(">IIIIIIIIIIII", 1 << 24 | 0, 0, count, 1 << 24 | 1, 0, 3,
+                        7, data_at, len(trusted), 20, data_at + 0x20, len(readme))
+    header = struct.pack(">IIII", 0x55aa382d, nodes_at, count * 12 + len(names), data_at).ljust(nodes_at, b"\0")
+    body = (header + nodes + names).ljust(data_at, b"\0") + trusted.ljust(0x20, b"\0") + readme
+    return body
 
 
 def make_storage(root):

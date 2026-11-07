@@ -16,6 +16,7 @@
 #include "dsp.h"
 #include "hardware.h"
 #include "vi.h"
+#include "net.h"
 
 #define CHECK_EVERY 2000
 #define INTERRUPTS_ENABLED 0x8000u
@@ -105,6 +106,7 @@ void poll_interrupts(void) {
   if (!started) started = now;
   debug_poll((now - started) / TIME_BASE_HZ);
   vi_update(now);  // Display interrupts and retraces, as the beam passes them.
+  net_update(now);
   if (title->virtual_bluetooth) bluetooth_update(now);
   ipc_update();
   graphics_update();
@@ -141,7 +143,7 @@ void idle_wait(void) {
   wait = sooner(wait, now, graphics_next_due());
   wait = sooner(wait, now, audio_next_due());
   wait = sooner(wait, now, dsp_next_due());
-  if (graphics_busy()) wait = sooner(wait, now, now + BUSY_SLEEP_TICKS);  // A signal may come at any time.
+  if (graphics_busy() || net_waiting()) wait = sooner(wait, now, now + BUSY_SLEEP_TICKS);  // A signal may come at any time.
   // An interrupt is taken ahead of the timer, and most sleeps end by raising one, so
   // sleeping past a timer that's due could put it off for good.
   int timer_due = decrementer_armed && decrementer_deadline <= now;
