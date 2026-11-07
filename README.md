@@ -161,6 +161,16 @@ python3 recomp/tools/add_game.py 00010002-48414341 --nand wii/nand --console con
 
 A channel the console has no native code for is refused, and the menu says it can't start it. Channels that need the internet, such as the Forecast and News Channels, show their own message that they can't connect.
 
+**The console's own online services.** Nintendo's Wii services have closed, so the console answers a few of them itself, from a small server on this computer (`recomp/tools/shop/server.py`, started by the console when needed). Nothing else is reached. It runs the connection test, shows a Wii Network Services Agreement of our own, which Wii Settings can accept as on a Wii, and serves a look-only Wii Shop Channel: browse every Virtual Console, WiiWare and Wii Channels title, with its details and price, but nothing can be bought or downloaded. The Shop's pages are ours; their pictures, style sheet and catalogue are Nintendo's, so they're gathered into the git-ignored `wii/shop/` once:
+
+```
+git clone --depth 1 --filter=blob:none --sparse https://github.com/WiiMart/WiiMart.git wii/shop/sources/WiiMart
+git -C wii/shop/sources/WiiMart sparse-checkout set www/oss/oss/common
+python3 recomp/tools/shop/assets.py wii/shop/sources/WiiMart
+```
+
+The Shop's browser trusts only the certificate authorities it carries, so each console makes its own (`certificates/` in the console folder) and the console adds it to the browser's list as the channel reads it; the stored channel is never changed. `WII_RECOMP_SHOP_SERVER=off` takes the console offline.
+
 **The console's buttons and drive.** Closing the window presses the power button: the menu or game turns the console off its own way, saving what it needs to. Through the control pipe (`WII_RECOMP_CONTROL`), `power` and `reset` press the buttons, `eject` empties the drive, and `insert <name>` puts in a disc image from the console's `shelf/`. `--title <high>-<low>` starts an installed title directly, as `--boot-disc` starts the disc.
 
 The window takes the shape of the console's TV setting, 4:3 or 16:9, and the console runs at the rate the menu or game sets: a European menu runs at 50 Hz unless EURGB60 is chosen in Wii Settings.
@@ -177,7 +187,6 @@ The console recognises the game's audio program by a checksum of its code and ru
 ### What doesn't work yet
 
 - **A plain ISO in the drive.** Each game goes through `add_game.py` first.
-- **The Wii Shop Channel** stops as it starts. The other channels in a Wii's storage run.
 - **A framebuffer a program draws into itself**, rather than with the graphics chip, isn't shown yet; the console reports it.
 - **The simulated board in a game's own setup.** With the game's own Wii Remote code, as `add_game.py` builds it, Wii Fit Plus's first-time setup gets to the Balance Board and then drops the simulated board, asking for its power button again. A build without `--virtual-bluetooth` gets through.
 - **Real Wii Remotes and the Balance Board** are built but haven't been tried with real hardware. Until then the keyboard and mouse drive a simulated remote and board. See [Real Wii Remotes](recomp/README.md#real-wii-remotes-and-the-balance-board).

@@ -45,3 +45,7 @@ Nintendo's discs, system software and saves are not part of this project and sta
 
 [WSC-Patcher](https://github.com/OpenShopChannel/WSC-Patcher), Copyright © 2022 The Open Shop Channel developers, MIT licence. No code is taken; its notes on where the Wii Shop Channel's browser keeps its trusted authorities (`opera/opcacrt6.dat` in the channel's main archive) and the layout of an entry in that list are what `recomp/tools/shop/certificates.py` and `recomp/runtime/opera_trust.c` follow.
 
+
+## The Wii Shop Channel's pages
+
+The objects the Wii Shop Channel gives its pages (`wiiShop`, `wiiSound`) are used as the Open Shop Channel documents them ([docs.oscwii.org/wii-shop-channel](https://docs.oscwii.org/wii-shop-channel)). The page names and where things sit on each page follow the Shop's own pages, as kept by the [WiiMart](https://github.com/WiiMart/WiiMart) project, which has no licence: nothing of its code is in this repository. `recomp/tools/shop/assets.py` reads Nintendo's pictures, style sheets and catalogue from a local copy of it into the git-ignored `wii/shop/`, leaving out its download links.

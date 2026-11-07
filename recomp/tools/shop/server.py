@@ -24,10 +24,17 @@ import re
 import socket
 import ssl
 import sys
-import warnings
 import threading
 import time
+import warnings
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import parse_qs, urlsplit
+
+import pages
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../.."))
+ASSETS = os.path.join(ROOT, "wii", "shop")  # assets.py fills it; never committed.
+TYPES = {".gif": "image/gif", ".png": "image/png", ".jpg": "image/jpeg", ".css": "text/css", ".js": "text/javascript"}
 
 
 # Shown where the Wii Network Services Agreement was. Plain HTML, as the agreement
@@ -103,6 +110,40 @@ class Handler(BaseHTTPRequestHandler):
             page = agreement_index(int(index.group(1))) if index else AGREEMENT
             self.reply(200, page.encode("utf-8"), headers=[("Last-Modified", AGREEMENT_DATE)])
             return
+        if host == "oss-auth.shop.wii.com":
+            self.shop()
+            return
+        self.reply(404, b"")
+
+    def shop(self):
+        """The Wii Shop Channel's pages (pages.py) and the pictures they show."""
+        url = urlsplit(self.path)
+        path, query = url.path, {key: values[-1] for key, values in parse_qs(url.query).items()}
+        if path == "/":
+            self.send_response(302)
+            self.send_header("Location", "/oss/serv/W_01.jsp")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        if path.startswith("/oss/serv/"):
+            page = self.server.page(path[len("/oss/serv/"):], query)
+            if page is not None:
+                self.reply(200, page.encode("utf-8"), headers=[("Cache-Control", "no-cache")])
+                return
+        for prefix, folder in (("/oss/oss/common/", "oss/common"), ("/oss/thumbnails/", "thumbnails")):
+            if path.startswith(prefix):
+                name = os.path.normpath(path[len(prefix):])
+                if name.startswith("..") or os.path.isabs(name):
+                    break
+                full = os.path.join(self.server.assets, folder, name)
+                if not os.path.isfile(full) and folder == "thumbnails":
+                    full = os.path.join(self.server.assets, "oss/common/images/spacer.gif")
+                if os.path.isfile(full):
+                    with open(full, "rb") as source:
+                        data = source.read()
+                    self.reply(200, data, content_type=TYPES.get(os.path.splitext(full)[1].lower(), "application/octet-stream"),
+                               headers=[("Cache-Control", "max-age=86400")])
+                    return
         self.reply(404, b"")
 
     do_GET = do_POST = do_HEAD = handle_any
@@ -111,6 +152,29 @@ class Handler(BaseHTTPRequestHandler):
 class Server(ThreadingHTTPServer):
     daemon_threads = True
     secure = None  # An ssl.SSLContext, with --certificates.
+    assets = ASSETS
+    catalogue = None
+
+    def page(self, name, query):
+        """A Shop page by its name, or None."""
+        if self.catalogue is None:
+            self.catalogue = pages.Catalogue(os.path.join(self.assets, "catalogue.json"))
+        catalogue, kind = self.catalogue, query.get("kind")
+        number = int(query["p"]) if query.get("p", "").isdigit() else 1
+        makers = {
+            "W_01.jsp": lambda: pages.welcome(catalogue),
+            "W_03.jsp": lambda: pages.main_menu(catalogue),
+            "W_04.jsp": lambda: pages.other(query.get("what")),
+            "B_01.jsp": lambda: pages.kind_menu(catalogue, kind if kind in pages.KINDS else "vc"),
+            "B_02.jsp": lambda: pages.systems(catalogue),
+            "B_03.jsp": lambda: pages.genres(catalogue, kind if kind in pages.KINDS else "vc"),
+            "B_04.jsp": lambda: pages.title_list(catalogue, kind, query.get("system"), query.get("genre"),
+                                                 query.get("order", "popular"), number),
+            "B_05.jsp": lambda: pages.details(catalogue, query.get("titleId")),
+            "B_06.jsp": lambda: pages.refused(catalogue, query.get("titleId"), bool(query.get("gift"))),
+        }
+        maker = makers.get(name)
+        return maker() if maker else None
 
     def finish_request(self, request, client_address):
         if self.secure:
@@ -146,8 +210,10 @@ def main():
     parser.add_argument("--port", type=int, default=8360)
     parser.add_argument("--with-console", action="store_true", help="exit when the console that started it does")
     parser.add_argument("--certificates", help="the console's certificates (certificates.py), for secure pages")
+    parser.add_argument("--assets", default=ASSETS, help="the Shop's pictures and catalogue (assets.py)")
     options = parser.parse_args()
     server = Server(("127.0.0.1", options.port), Handler)
+    server.assets = options.assets
     if options.certificates:
         server.secure = secure_context(options.certificates)
     log(f"listening on 127.0.0.1:{options.port}{', secure pages too' if server.secure else ''}")
