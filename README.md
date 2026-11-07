@@ -171,6 +171,21 @@ The Shop's browser trusts only the certificate authorities it carries, so each c
 
 The window takes the shape of the console's TV setting, 4:3 or 16:9, and the console runs at the rate the menu or game sets: a European menu runs at 50 Hz unless EURGB60 is chosen in Wii Settings.
 
+### 5. A Raspberry Pi that is a Wii
+
+One script turns a Raspberry Pi 5 into a console: plugged in, it starts straight into the Wii Menu on the TV, with no desktop, login or boot messages. Put your Wii's storage in `wii/nand` first (step 2), then, on the Pi:
+
+```sh
+recomp/tools/pi_setup.sh --dry-run   # what it would install, remove and change
+recomp/tools/pi_setup.sh             # then restart the Pi
+```
+
+It installs the tools, removes the desktop and the programs a console has no use for (the browser, the office suite, printing; it lists them and asks first, and `--keep-desktop` keeps them; `--developer` removes them but keeps labwc and grim, so test runs can still drive the console on a screen of their own over ssh), sets up real remotes and builds the Wii Menu in a console folder, `~/wii-console`. `--channels` builds every channel in your storage too, and `--shop` gathers the Shop's pictures. It then installs two services: the console, shown full screen by [cage](https://github.com/cage-kiosk/cage), and a standby that works the way a Wii's power light does.
+
+Turning the Wii off, from the menu or a game, doesn't shut the Pi down. It goes into standby: no picture, the processor at its slowest speed, and Bluetooth still listening. The Pi's power button turns the console on again, and so does the power button of a Wii Remote paired with it (`sudo recomp/tools/remotes_setup.sh pair`), because a paired remote calls the console it knows. While the console is on, the Pi's button is the Wii's: the menu or game turns off its own way, saving what it needs to. Holding the Pi's button for three seconds shuts the Pi down, and pressing it again starts it, straight into the Wii Menu.
+
+ssh keeps working: `echo power > /run/wii-recomp/control` presses the power button from there (`standby` and `on` turn the console off and on, as before timing a test run), the console's log is in `~/wii-console/logs/`, and games go in with `add_game.py --console ~/wii-console`. `/etc/wii-recomp/session.env` takes the console's settings, such as `WII_RECOMP_SCALE`, and `--resolution` sets the TV's picture, 1920x1080 at 60 Hz unless told otherwise. `recomp/tools/pi_setup.sh --undo` boots to the desktop again, if it's still installed.
+
 ### Sound
 
 The console recognises the game's audio program by a checksum of its code and runs a C version of it: AX, which most games use, or the one several of Nintendo's own studios used. Any other program runs on an interpreter of the audio processor, more slowly, on Dolphin's free boot ROM. Either way the program writes its sound to the game's memory and the audio DMA plays it, as on a Wii. A few settings help when checking it:

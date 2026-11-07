@@ -169,6 +169,7 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - [ ] The Shop's account pages (Wii Points, Account Activity, Titles You've Downloaded) beyond a short note, and the welcome page's background picture, which the archive lacks
 - [x] The real clock: the computer's time, whatever the menu's date setting stored
 - [x] Power, reset and standby, from the control pipe or by closing the window, and discs changed as the console runs
+- [ ] A Raspberry Pi 5 that is the console (`recomp/tools/pi_setup.sh`): it starts into the Wii Menu at power on, with no desktop, and turning the Wii off puts it in standby, from which the Pi's power button or a paired Wii Remote turns it on again. Built, with standby and turning on again tested on a Pi without a TV; the boot itself, the Pi's button and a remote waking it are still to try on real hardware
 - [ ] Menu, disc channel, a game and back, 20 times in a row with real controllers. With the scripted remote, see `recomp/tools/autoplay/games/00000001-00000002/roundtrip.py`
 
 ### 10. Disc image in, game out (in progress)
