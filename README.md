@@ -94,14 +94,14 @@ One command turns a disc image into a game the console plays:
 
 ```sh
 python3 recomp/tools/add_game.py "path/to/game.rvz"
-recomp/build/wii-recomp games/RFPE01.wrd
+recomp/build/wii-recomp games/<game ID>.wrd
 ```
 
-`add_game.py` extracts the disc, translates all of its code, builds the console if it isn't built yet, compiles the game and packs it as `games/<game ID>.wrd`. It also takes an extracted disc folder. The game's own Wii Remote code runs, against a simulated remote with a Nunchuk plugged in, which every game that uses the pointer accepts. F2 swaps it for a Classic Controller, or nothing, while playing, and `controllers.ini` beside the console sets each player's controls. On a Raspberry Pi 5, Wii Fit Plus goes from an extracted disc to a playable image in under a minute and a half, where compiling it all for speed takes over seven minutes.
+`add_game.py` extracts the disc, translates all of its code, builds the console if it isn't built yet, compiles the game and packs it as `games/<game ID>.wrd`. It also takes an extracted disc folder. The game's own Wii Remote code runs, against a simulated remote with a Nunchuk plugged in, which every game that uses the pointer accepts. F2 swaps it for a Classic Controller, or nothing, while playing, and `controllers.ini` beside the console sets each player's controls. On a Raspberry Pi 5, a game can go from an extracted disc to a playable image in under a minute and a half, where compiling it all for speed takes several times as long.
 
-The first build compiles everything quickly, and the game counts how often each part of it runs while you play. Run the same command again, or `add_game.py RFPE01` with the game's ID, and the parts that did the work are compiled for speed. Only those files are compiled again, and the image's native code is swapped without copying the disc. Counts from every run add up, so the build keeps up with what you play. Each game builds in `recomp/build-<game ID>/`, and any code that had to run on the interpreter is translated by the next build.
+The first build compiles everything quickly, and the game counts how often each part of it runs while you play. Run the same command again, or `add_game.py <game ID>`, and the parts that did the work are compiled for speed. Only those files are compiled again, and the image's native code is swapped without copying the disc. Counts from every run add up, so the build keeps up with what you play. Each game builds in `recomp/build-<game ID>/`, and any code that had to run on the interpreter is translated by the next build.
 
-The console draws every picture at twice the Wii's size. A game too heavy for a small graphics chip at that size can be built with its own, such as `add_game.py SB4E01 --scale 3/2`, which is remembered for later builds; `--scale default` goes back to the console's. `WII_RECOMP_SCALE` still overrides it for a run.
+The console draws every picture at twice the Wii's size. A game too heavy for a small graphics chip at that size can be built with its own, such as `add_game.py <game ID> --scale 3/2`, which is remembered for later builds; `--scale default` goes back to the console's. `WII_RECOMP_SCALE` still overrides it for a run.
 
 #### Step by step
 
@@ -122,7 +122,7 @@ recomp/build/wii-recomp extracted/sys
 
 The build makes `wii-recomp`, the console, which is the same program for every game, and `title.dylib` (`title.so` on Linux), the game's translated code. Saves go to `recomp/build/saves`; your Wii's storage is only read. The keyboard and mouse stand in for the Wii Remote: Enter is A, the arrows are the D-pad, the mouse points, and Space steps on the Balance Board. [`recomp/README.md`](recomp/README.md) lists every key and setting.
 
-`extract_disc.py` uses [nodtool](https://github.com/encounter/nod), and downloads a pinned, checksummed copy if it isn't installed. For games that build their C++ method tables at run time, such as The Last Story, add `--all-code` to `emit.py`; `add_game.py` always does. `--profile` builds in the two tiers described above.
+`extract_disc.py` uses [nodtool](https://github.com/encounter/nod), and downloads a pinned, checksummed copy if it isn't installed. For games that build their C++ method tables at run time, add `--all-code` to `emit.py`; `add_game.py` always does. `--profile` builds in the two tiers described above.
 
 ### 4. Play from the Wii Menu
 
@@ -173,7 +173,7 @@ The window takes the shape of the console's TV setting, 4:3 or 16:9, and the con
 
 ### Sound
 
-The console recognises the game's audio program by a checksum of its code and runs a C version of it: AX, which most games use, or the Zelda family's, which Nintendo's own studios used, as in Super Mario Galaxy 2. Any other program runs on an interpreter of the audio processor, more slowly, on Dolphin's free boot ROM. Either way the program writes its sound to the game's memory and the audio DMA plays it, as on a Wii. A few settings help when checking it:
+The console recognises the game's audio program by a checksum of its code and runs a C version of it: AX, which most games use, or the one several of Nintendo's own studios used. Any other program runs on an interpreter of the audio processor, more slowly, on Dolphin's free boot ROM. Either way the program writes its sound to the game's memory and the audio DMA plays it, as on a Wii. A few settings help when checking it:
 
 - `WII_RECOMP_DSP=lle` runs every audio program on the interpreter, from the boot ROM, even one with a C version. This is the real program, and what the C versions are checked against.
 - `WII_RECOMP_AUDIO_WAV=<file>` keeps everything the speakers get as a WAV file, silence included, like Dolphin's `dspdump.wav`.
@@ -184,7 +184,7 @@ The console recognises the game's audio program by a checksum of its code and ru
 
 - **A plain ISO in the drive.** Each game goes through `add_game.py` first.
 - **A framebuffer a program draws into itself**, rather than with the graphics chip, isn't shown yet; the console reports it.
-- **The simulated board in a game's own setup.** With the game's own Wii Remote code, as `add_game.py` builds it, Wii Fit Plus's first-time setup gets to the Balance Board and then drops the simulated board, asking for its power button again. A build without `--virtual-bluetooth` gets through.
+- **The simulated board in a game's own setup.** With the game's own Wii Remote code, as `add_game.py` builds it, a game's first-time setup can get to the Balance Board and then drops the simulated board, asking for its power button again. A build without `--virtual-bluetooth` gets through.
 - **Real Wii Remotes and the Balance Board** are built but haven't been tried with real hardware. Until then the keyboard and mouse drive a simulated remote and board. See [Real Wii Remotes](recomp/README.md#real-wii-remotes-and-the-balance-board).
 - **Playing from the Wii Menu** has been tested on an Intel Mac only. On a Raspberry Pi 5, games have been played directly.
 
@@ -228,4 +228,4 @@ Wii Recomp is licensed under the GNU General Public License, version 3 or later.
 
 The repository holds no Nintendo code, data or assets: no disc images, system software, keys, saves, or code translated from a game. Everything a game needs comes from a disc you own and a NAND backup and keys from your own Wii, and it's translated and compiled on your own machine. `.gitignore` keeps `wii/`, disc images and extracted files out of the repository. The translated output stays there. Don't share it, and don't ask for games here.
 
-Wii Recomp isn't affiliated with or endorsed by Nintendo. Wii, Wii Remote, Balance Board and Wii Fit are trademarks of Nintendo. Other names belong to their owners.
+Wii Recomp isn't affiliated with or endorsed by Nintendo. Wii, Wii Remote and Balance Board are trademarks of Nintendo. Other names belong to their owners.

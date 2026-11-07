@@ -205,18 +205,18 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 
 ## Milestones so far
 
-- Wii Fit Plus's own code booted to its first picture in a native window on an Intel Mac, then through setup and the Body Test, driven by script.
+- A game's own code booted to its first picture in a native window on an Intel Mac, then played through its setup, driven by script.
 - Graphics moved from fixed functions to shaders generated per setup, then to a Vulkan renderer.
-- The game's idle loop sleeps instead of spinning, and the 60 Hz signal stopped drifting, taking Wii Fit Plus from 56.7 to a steady 60 fps on the Mac.
+- The game's idle loop sleeps instead of spinning, and the 60 Hz signal stopped drifting, taking the first game from 56.7 to a steady 60 fps on the Mac.
 - On a Raspberry Pi 5, rendering at 5/2 of the Wii's resolution fills 1080p. Passes are kept few and small for its tile-based chip, and empty translucent layers are skipped whole.
 - System functions are found by the hashes of their instructions, so a new game needs no address list.
-- The Last Story reached gameplay through a virtual Bluetooth chip, using the game's own Wii Remote code.
+- A game reached gameplay through a virtual Bluetooth chip, using its own Wii Remote code.
 - An interpreter now catches any code the translator missed, and a differential test checks both against each other for every instruction family.
-- The recompiled Wii Menu runs at 60 fps through its screens, and starts Wii Fit Plus natively from a recompiled disc image in its drive.
+- The recompiled Wii Menu runs at 60 fps through its screens, and starts a game natively from a recompiled disc image in its drive.
 - On the Mac, the game no longer freezes for a second when macOS holds on to the window's pictures.
 - Real Wii Remotes and the Balance Board can drive a game's own Bluetooth code, and the Wii's memory became one window at a fixed address, making each load or store a few instructions.
-- One command turns a disc into a playable image. Code that has barely run compiles quickly and counts its runs, and the next build compiles what did the work for speed: Wii Fit Plus builds in under a minute and a half on a Raspberry Pi 5.
-- Mario Kart Wii, from the user's own disc, reaches its menus on a console that has never run the Wii Menu, once the files a new Wii makes on first start are there.
+- One command turns a disc into a playable image. Code that has barely run compiles quickly and counts its runs, and the next build compiles what did the work for speed: a game builds in under a minute and a half on a Raspberry Pi 5.
+- A game reaches its menus on a console that has never run the Wii Menu, once the files a new Wii makes on first start are there.
 - The recompiled Wii Menu goes to a game and back, starts its channels, accepts the network agreement, and opens a look-only Wii Shop Channel served by the console itself, all driven by script.
 
 ## Out of scope
