@@ -159,7 +159,7 @@ void vk_create_device(void) {
     {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = vk.queue_family, .queueCount = same_family ? 2 : 1, .pQueuePriorities = priorities},
     {.sType = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO, .queueFamilyIndex = show_family, .queueCount = 1, .pQueuePriorities = priorities},
   };
-  const char *extensions[3];
+  const char *extensions[4];
   uint32_t extension_count = 0;
   if (vk.surface) extensions[extension_count++] = VK_KHR_SWAPCHAIN_EXTENSION_NAME;
   int pushes_textures = device_has_extension(vk.physical, VK_KHR_PUSH_DESCRIPTOR_EXTENSION_NAME);
@@ -180,8 +180,20 @@ void vk_create_device(void) {
   if (!vk.max_anisotropy) fprintf(stderr, "vulkan: no anisotropic filtering, so textures seen at a slope will blur more\n");
   VkDeviceCreateInfo info = {.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO, .queueCreateInfoCount = own_show_queue && !same_family ? 2 : 1, .pQueueCreateInfos = queues,
                              .enabledExtensionCount = extension_count, .ppEnabledExtensionNames = extensions, .pEnabledFeatures = &wanted};
+  // Only for measuring: the card counts its own work, which needs a lock no other program holds.
+  VkPhysicalDevicePerformanceQueryFeaturesKHR counting = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PERFORMANCE_QUERY_FEATURES_KHR,
+                                                          .performanceCounterQueryPools = VK_TRUE};
+  if (getenv("WII_RECOMP_GPU_COUNTERS")) {
+    if (device_has_extension(vk.physical, VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME)) {
+      extensions[info.enabledExtensionCount++] = VK_KHR_PERFORMANCE_QUERY_EXTENSION_NAME;
+      info.pNext = &counting;
+      vk.counting = 1;
+    } else {
+      fprintf(stderr, "vulkan: this device can't count its own work, so WII_RECOMP_GPU_COUNTERS does nothing\n");
+    }
+  }
   // Vulkan on Metal leaves some things out, and using what's left must be declared.
-  VkPhysicalDevicePortabilitySubsetFeaturesKHR portability = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR};
+  VkPhysicalDevicePortabilitySubsetFeaturesKHR portability = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PORTABILITY_SUBSET_FEATURES_KHR, .pNext = (void *)info.pNext};
   if (device_has_extension(vk.physical, PORTABILITY_SUBSET)) {
     VkPhysicalDeviceFeatures2 features = {.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2, .pNext = &portability};
     vkGetPhysicalDeviceFeatures2(vk.physical, &features);
@@ -190,6 +202,14 @@ void vk_create_device(void) {
     info.pNext = &portability;
   }
   vk_check(vkCreateDevice(vk.physical, &info, 0, &vk.device), "creating the device");
+  if (vk.counting) {
+    PFN_vkAcquireProfilingLockKHR lock = (PFN_vkAcquireProfilingLockKHR)vkGetDeviceProcAddr(vk.device, "vkAcquireProfilingLockKHR");
+    VkAcquireProfilingLockInfoKHR wait = {.sType = VK_STRUCTURE_TYPE_ACQUIRE_PROFILING_LOCK_INFO_KHR, .timeout = UINT64_MAX};
+    if (!lock || lock(vk.device, &wait) != VK_SUCCESS) {
+      fprintf(stderr, "vulkan: the card's counters are in use elsewhere, so WII_RECOMP_GPU_COUNTERS does nothing\n");
+      vk.counting = 0;
+    }
+  }
   vkGetDeviceQueue(vk.device, vk.queue_family, 0, &vk.queue);
   if (own_show_queue) vkGetDeviceQueue(vk.device, show_family, same_family ? 1 : 0, &vk.show_queue);
   vk.show_family = show_family;

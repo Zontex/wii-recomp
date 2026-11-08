@@ -67,6 +67,7 @@ typedef struct {
   int depth_filters_linear, dual_source;
   int bounding_box;  // Shaders can write to a buffer, which the bounding box needs.
   float max_anisotropy;  // 0 when the device can't filter along a slope.
+  int counting;  // WII_RECOMP_GPU_COUNTERS: the card counts its own work. See gx_vulkan.c.
 
   VkSwapchainKHR swapchain;
   VkExtent2D swap_extent;
@@ -132,6 +133,12 @@ int vk_window_show(int slot, const VkOffset3D from[2], const VkOffset3D to[2]);
 void vk_pipelines_start(const GxAttribute *attributes, int attribute_count, size_t vertex_bytes);
 GxStage vk_stage_compile(int kind, const char *text);
 GxShader vk_shader_link(GxStage vertex, GxStage fragment);
+// A program's vertices hold only what its vertex shader reads of a Vertex, packed in the
+// order of their locations: each run copies `words` words from word `from` of a Vertex.
+enum { MOST_VERTEX_RUNS = 16 };
+typedef struct { uint8_t from, words; } VkVertexRun;
+typedef struct { uint32_t stride, run_count; VkVertexRun runs[MOST_VERTEX_RUNS]; } VkVertexPacking;
+const VkVertexPacking *vk_shader_packing(GxShader shader);
 VkPipeline vk_pipeline_find(GxShader shader, const GxRenderState *state);
 void vk_stages_prepare(int count, const int *kinds, const char *const *texts);  // On every core.
 void vk_pipeline_prepare(GxShader shader, const GxRenderState *state);

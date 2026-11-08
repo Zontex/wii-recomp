@@ -103,7 +103,7 @@ static GxTexture *blank_texture;
 static Binding bindings[MAX_TEXTURE_MAPS];
 static VkDescriptorImageInfo maps_set[MAX_TEXTURE_MAPS];
 static Ring shape_indices;  // Strips, fans and quads as triangles: Metal has no fans, and one kind of pipeline serves all.
-static VkDeviceSize vertex_bytes, reserved_at;
+static VkDeviceSize reserved_at, reserved_stride;
 static int pass_open;
 static VkBuffer index_buffer_bound, vertex_buffer_bound;
 // Galaxy 2 draws its models as hundreds of short strips a frame, one after another with
@@ -347,16 +347,111 @@ static void mark(const char *name, int w, int h) {
   mark_draws = recorded_draws;
   marks++;
 }
+static void counters_start(void);
+static VkQueryPool count_pool;
+static int count_next, count_open;
 static void mark_frame_start(void) {
   if (mark_on < 0) { mark_on = getenv("WII_RECOMP_GPU_TIMES") != 0;
     if (mark_on && atoi(getenv("WII_RECOMP_GPU_TIMES")) >= 2) mark_period = atoi(getenv("WII_RECOMP_GPU_TIMES"));
     if (mark_on) { VkQueryPoolCreateInfo q = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .queryType = VK_QUERY_TYPE_TIMESTAMP, .queryCount = MARKS};
-      vk_check(vkCreateQueryPool(vk.device, &q, 0, &mark_pool), "query pool"); } }
+      vk_check(vkCreateQueryPool(vk.device, &q, 0, &mark_pool), "query pool");
+      if (vk.counting) counters_start(); } }
   capturing = 0;
   if (!mark_on || ++mark_frame % mark_period) return;
   vkCmdResetQueryPool(vk.frame->draw, mark_pool, 0, MARKS);
+  // Counting can't be reset in the commands that count, but the upload commands run first.
+  if (count_pool) vkCmdResetQueryPool(vk_upload_commands(), count_pool, 0, MARKS);
+  count_next = 0; count_open = -1;
   marks = 0; capturing = 1; mark("start", 0, 0);
 }
+// With WII_RECOMP_GPU_COUNTERS as well, the card counts its own work in each pass of
+// those frames: a list of the driver's counter names, 1 for a set that shows where the
+// pixel work goes, or list to print the names the card has. Only for measuring; a pass sent in parts is counted by part.
+enum { COUNTERS = 16 };
+static const char *const default_counters =
+  "FEP-valid-quads,TLB-quads-not-passing-z-and-stencil-test,TLB-quads-passing-z-and-stencil-test,TLB-quads-written-to-color-buffer,"
+  "FEP-valid-primitives-no-rendered-pixels,FEP-valid-primitives-rendered-pixels,PTB-primitives-discarded-outside-viewport,"
+  "PTB-primitives-discarded-reversed,QPU-total-active-clk-cycles-vertex-coord-shading,QPU-total-active-clk-cycles-fragment-shading,"
+  "QPU-total-clk-cycles-waiting-TMU,QPU-total-clk-cycles-waiting-varyings,QPU-total-idle-clk-cycles,TMU-total-text-quads-access,"
+  "TMU-total-text-cache-miss,cycle-count";
+static VkQueryPool count_pool;
+static int counter_count, count_next, count_open = -1;
+static VkCommandBuffer count_commands;
+static char counter_names[COUNTERS][64], count_names[MARKS][48];
+
+static void counters_start(void) {
+  const char *wanted = getenv("WII_RECOMP_GPU_COUNTERS");
+  if (!wanted || !strcmp(wanted, "1")) wanted = default_counters;
+  PFN_vkEnumeratePhysicalDeviceQueueFamilyPerformanceQueryCountersKHR list = (PFN_vkEnumeratePhysicalDeviceQueueFamilyPerformanceQueryCountersKHR)
+    vkGetInstanceProcAddr(vk.instance, "vkEnumeratePhysicalDeviceQueueFamilyPerformanceQueryCountersKHR");
+  uint32_t total = 0;
+  if (list) list(vk.physical, vk.queue_family, &total, 0, 0);
+  VkPerformanceCounterKHR *counters = calloc(total ? total : 1, sizeof *counters);
+  VkPerformanceCounterDescriptionKHR *about = calloc(total ? total : 1, sizeof *about);
+  for (uint32_t i = 0; i < total; i++) {
+    counters[i].sType = VK_STRUCTURE_TYPE_PERFORMANCE_COUNTER_KHR;
+    about[i].sType = VK_STRUCTURE_TYPE_PERFORMANCE_COUNTER_DESCRIPTION_KHR;
+  }
+  if (list) list(vk.physical, vk.queue_family, &total, counters, about);
+  if (!strcmp(wanted, "list")) {
+    for (uint32_t i = 0; i < total; i++) fprintf(stderr, "gpu counter %s: %s\n", about[i].name, about[i].description);
+  }
+  uint32_t chosen[COUNTERS];
+  for (const char *name = wanted; *name && counter_count < COUNTERS;) {
+    size_t length = strcspn(name, ",");
+    int found = 0;
+    for (uint32_t i = 0; i < total && !found; i++) {
+      if (strlen(about[i].name) != length || strncmp(about[i].name, name, length)) continue;
+      chosen[counter_count] = i;
+      snprintf(counter_names[counter_count++], 64, "%s", about[i].name);
+      found = 1;
+    }
+    if (!found) fprintf(stderr, "gpu counters: the card has no counter named %.*s\n", (int)length, name);
+    name += length + (name[length] == ',');
+  }
+  free(counters);
+  free(about);
+  VkQueryPoolPerformanceCreateInfoKHR which = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_PERFORMANCE_CREATE_INFO_KHR, .queueFamilyIndex = vk.queue_family,
+                                               .counterIndexCount = (uint32_t)counter_count, .pCounterIndices = chosen};
+  PFN_vkGetPhysicalDeviceQueueFamilyPerformanceQueryPassesKHR passes_for = (PFN_vkGetPhysicalDeviceQueueFamilyPerformanceQueryPassesKHR)
+    vkGetInstanceProcAddr(vk.instance, "vkGetPhysicalDeviceQueueFamilyPerformanceQueryPassesKHR");
+  uint32_t passes = 0;
+  if (counter_count && passes_for) passes_for(vk.physical, &which, &passes);
+  // Counting more than the card can at once would need each frame sent several times.
+  if (!counter_count || passes != 1) {
+    fprintf(stderr, "gpu counters: %d counters need %u runs of each frame; ask for fewer\n", counter_count, passes);
+    return;
+  }
+  VkQueryPoolCreateInfo q = {.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO, .pNext = &which, .queryType = VK_QUERY_TYPE_PERFORMANCE_QUERY_KHR, .queryCount = MARKS};
+  vk_check(vkCreateQueryPool(vk.device, &q, 0, &count_pool), "counter pool");
+}
+
+// Before a pass begins, and after it ends: counting can't start or stop inside one.
+static void count_begin(void) {
+  if (!capturing || !count_pool || in_strip || count_open >= 0 || count_next >= MARKS) return;
+  count_commands = vk.frame->draw;
+  vkCmdBeginQuery(count_commands, count_pool, (uint32_t)count_next, 0);
+  count_open = count_next++;
+}
+static void count_end(const char *name, int w, int h) {
+  if (count_open < 0 || vk.frame->draw != count_commands) return;
+  vkCmdEndQuery(count_commands, count_pool, (uint32_t)count_open);
+  snprintf(count_names[count_open], 48, "%s %dx%d", name, w, h);
+  count_open = -1;
+}
+static void count_report(void) {
+  if (!count_next) return;
+  static VkPerformanceCounterResultKHR results[MARKS][COUNTERS];
+  size_t stride = sizeof results[0][0] * (size_t)counter_count;
+  vkGetQueryPoolResults(vk.device, count_pool, 0, (uint32_t)count_next, stride * (size_t)count_next, results, stride, VK_QUERY_RESULT_WAIT_BIT);
+  for (int i = 0; i < count_next; i++) {
+    fprintf(stderr, "  counts %s:", count_names[i]);
+    const VkPerformanceCounterResultKHR *r = (const VkPerformanceCounterResultKHR *)((const char *)results + stride * (size_t)i);
+    for (int c = 0; c < counter_count; c++) fprintf(stderr, " %s=%llu", counter_names[c], (unsigned long long)r[c].uint64);
+    fprintf(stderr, "\n");
+  }
+}
+
 static void mark_report(void) {
   if (!capturing) return;
   vkQueueWaitIdle(vk.queue);
@@ -365,6 +460,7 @@ static void mark_report(void) {
   double period = vk.limits.timestampPeriod;
   fprintf(stderr, "gpu frame %.2f ms\n", (t[marks - 1] - t[0]) * period / 1e6);
   for (int i = 1; i < marks; i++) fprintf(stderr, "  %6.2f ms %s\n", (t[i] - t[i - 1]) * period / 1e6, mark_names[i]);
+  count_report();
   capturing = 0;
 }
 // The game draws small pictures into a strip below the visible one and copies them out,
@@ -476,6 +572,7 @@ static void start_pass_with_clear(void) {
   VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = render_passes[waiting_clear.kind],
                                 .framebuffer = framebuffer_for(visible, depthless), .renderArea = area,
                                 .clearValueCount = 2, .pClearValues = waiting_clear.values};
+  count_begin();
   vkCmdBeginRenderPass(vk.frame->draw, &info, VK_SUBPASS_CONTENTS_INLINE);
   pass_began_as = 16 | waiting_clear.kind | (depthless ? 64 : 0);
   pass_depthless = depthless;
@@ -490,6 +587,7 @@ static void end_pass(void) {
   if (!pass_open && waiting_clear.kind) start_pass_with_clear();
   if (!pass_open) return;
   vkCmdEndRenderPass(vk.frame->draw);
+  count_end("pass", (int)pass_area.extent.width, (int)pass_area.extent.height);
   pass_open = 0;
   if (!in_strip) {
     depth_use.last_in_frame = depth_use.number;
@@ -543,6 +641,7 @@ static void begin_pass(const VkRect2D *area) {
   VkClearValue values[2] = {{.color = {{0, 0, 0, 0}}}, {.depthStencil = {depthless ? 1.0f : depth_use.clear_depth, 0}}};
   VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = render_passes[learned], .framebuffer = framebuffer_for(0, depthless),
                                 .renderArea = wanted, .clearValueCount = 2, .pClearValues = values};
+  count_begin();
   vkCmdBeginRenderPass(vk.frame->draw, &info, VK_SUBPASS_CONTENTS_INLINE);
   pass_began_as = learned | (depthless ? 64 : 0);
   pass_depthless = depthless;
@@ -574,7 +673,7 @@ static void send_during_draw(int count) {
   vk_frame_submit(frame, VK_NULL_HANDLE, VK_NULL_HANDLE);
   begin_batch(&vk.frames[(frame - vk.frames + 1) % FRAMES_IN_FLIGHT]);
   // The draw's vertices went to the last set's memory, which it doesn't share.
-  VkDeviceSize bytes = (VkDeviceSize)count * vertex_bytes, at = vk_ring_take(&vk.frame->vertices, bytes, vertex_bytes);
+  VkDeviceSize bytes = (VkDeviceSize)count * reserved_stride, at = vk_ring_take(&vk.frame->vertices, bytes, reserved_stride);
   memcpy(vk.frame->vertices.mapped + at, frame->vertices.mapped + reserved_at, bytes);
   reserved_at = at;
   reserved_restarts = restarts;
@@ -583,10 +682,12 @@ static void send_during_draw(int count) {
 static void kick(int count) {
   flush_run();
   vkCmdEndRenderPass(vk.frame->draw);
+  count_end("part of a pass", (int)pass_area.extent.width, (int)pass_area.extent.height);
   send_during_draw(count);
   VkClearValue values[2] = {{.color = {{0, 0, 0, 0}}}, {.depthStencil = {1.0f, 0}}};
   VkRenderPassBeginInfo info = {.sType = VK_STRUCTURE_TYPE_RENDER_PASS_BEGIN_INFO, .renderPass = render_passes[0], .framebuffer = framebuffer_for(0, pass_depthless),
                                 .renderArea = pass_area, .clearValueCount = 2, .pClearValues = values};
+  count_begin();
   vkCmdBeginRenderPass(vk.frame->draw, &info, VK_SUBPASS_CONTENTS_INLINE);
   pass_open = 1;
 }
@@ -622,7 +723,7 @@ static void write_shape_indices(void) {
 }
 
 static void start(const GxAttribute *attributes, int attribute_count, size_t bytes) {
-  vertex_bytes = bytes;
+  (void)bytes;  // Each program packs its own (vk_shader_packing).
   viewport_wanted = (VkViewport){0, EFB_PIXEL_HEIGHT, EFB_PIXEL_WIDTH, -(float)EFB_PIXEL_HEIGHT, 0, 1};
   vk_create_device();
   create_render_pass();
@@ -832,15 +933,42 @@ static void set_viewport_and_scissor(VkCommandBuffer commands, const VkViewport 
   }
 }
 
+// Copies of a known size become a few wide loads and stores, where a call per run cost more.
+static inline void copy_words(uint32_t *to, const uint32_t *from, unsigned words) {
+  switch (words) {
+#define WORDS(n) case n: memcpy(to, from, n * 4); break;
+    WORDS(1) WORDS(2) WORDS(3) WORDS(4) WORDS(5) WORDS(6) WORDS(7) WORDS(8) WORDS(9) WORDS(10) WORDS(11) WORDS(12)
+    WORDS(13) WORDS(14) WORDS(15) WORDS(16) WORDS(17) WORDS(18) WORDS(19) WORDS(20)
+#undef WORDS
+    default: memcpy(to, from, words * 4);
+  }
+}
+
+// Only what the shader reads goes to the card, packed (vk_shader_packing): about a third of
+// a whole Vertex, in memory the processor writes to without caching.
 static void vertices_send(const void *vertices, int count) {
-  VkDeviceSize bytes = (VkDeviceSize)count * vertex_bytes;
-  reserved_at = vk_ring_take(&vk.frame->vertices, bytes, vertex_bytes);
+  static GxShader packed_for;
+  static const VkVertexPacking *packing;
+  if (packed_for != shader_in_use || !packing) packing = vk_shader_packing(shader_in_use), packed_for = shader_in_use;
+  uint32_t stride = packing->stride ? packing->stride : 4;
+  VkDeviceSize bytes = (VkDeviceSize)count * stride;
+  reserved_at = vk_ring_take(&vk.frame->vertices, bytes, stride);
   if (reserved_at == (VkDeviceSize)-1) {
     finish_commands();
-    reserved_at = vk_ring_take(&vk.frame->vertices, bytes, vertex_bytes);
+    reserved_at = vk_ring_take(&vk.frame->vertices, bytes, stride);
   }
   reserved_restarts = restarts;
-  memcpy(vk.frame->vertices.mapped + reserved_at, vertices, (size_t)bytes);
+  reserved_stride = stride;
+  uint32_t *to = (uint32_t *)(vk.frame->vertices.mapped + reserved_at);
+  const uint32_t *from = vertices;
+  _Static_assert(sizeof(Vertex) % 4 == 0, "a Vertex is whole words");
+  for (int n = 0; n < count; n++, from += sizeof(Vertex) / 4) {
+    for (uint32_t r = 0; r < packing->run_count; r++) {
+      const VkVertexRun *run = &packing->runs[r];
+      copy_words(to, from + run->from, run->words);
+      to += run->words;
+    }
+  }
 }
 
 static void early_depth_changed(void);
@@ -1092,7 +1220,7 @@ static void draw(int primitive, int count) {
   // The vertices are still there, but must be claimed again before anything lands on them.
   Frame *frame = vk.frame;
   if (restarts != reserved_restarts) {
-    VkDeviceSize bytes = (VkDeviceSize)count * vertex_bytes, at = vk_ring_take(&frame->vertices, bytes, vertex_bytes);
+    VkDeviceSize bytes = (VkDeviceSize)count * reserved_stride, at = vk_ring_take(&frame->vertices, bytes, reserved_stride);
     memmove(frame->vertices.mapped + at, frame->vertices.mapped + reserved_at, bytes);
     reserved_at = at;
   }
@@ -1130,7 +1258,7 @@ static void draw(int primitive, int count) {
     vkCmdBindVertexBuffers(commands, 0, 1, &frame->vertices.buffer, &start_of_buffer);
     vertex_buffer_bound = frame->vertices.buffer;
   }
-  int32_t first = (int32_t)(reserved_at / vertex_bytes);
+  int32_t first = (int32_t)(reserved_at / reserved_stride);
   recorded_draws++;
   draws_since_submit++;
   if (primitive == PRIM_STRIP && join_strip(first, count)) return;
