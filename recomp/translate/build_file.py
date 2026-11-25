@@ -36,6 +36,8 @@ RUNTIME_OPTIMIZATION = "-O3"
 import platform as _platform
 if WINDOWS or (sys.platform == "linux" and _platform.machine() == "x86_64"):
     FLAGS += " -march=x86-64-v3"  # AVX2 and FMA-capable processors: Haswell and Zen onwards.
+if WINDOWS:
+    FLAGS += " -D_FILE_OFFSET_BITS=64"  # mingw-w64 keeps off_t and struct stat at 32 bits otherwise: a .wrd over 2 GB fails stat, and fseeko past 2 GB fails.
 if sys.platform == "linux" and os.uname().machine == "aarch64":
     FLAGS += " -mcpu=cortex-a76"  # The Raspberry Pi 5.
 COMMON_LINK_FLAGS = "-L/usr/local/lib -lglfw -lm -lpthread"
