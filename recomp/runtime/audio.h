@@ -19,3 +19,10 @@ void audio_dma_reset(void);
 // thread asks for samples through audio_pull, which never waits.
 int audio_output_open(void);
 void audio_pull(int16_t *output, uint32_t samples);
+
+// What happened to the ring since the last call, for the once-a-second report (debug.c):
+// how often it ran dry, the samples of silence played for that, the samples dropped as
+// it was full, how often the DMA's clock let time go, and the least and most it held
+// when asked for sound (fill_low stays UINT32_MAX if it wasn't asked).
+typedef struct { uint32_t ran_dry, silence, dropped, let_go, fill_low, fill_high; } AudioCounts;
+void audio_take_counts(AudioCounts *counts);

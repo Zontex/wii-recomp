@@ -10,6 +10,7 @@
 uint32_t hw_read(uint32_t a, int n) { return 0; }
 void hw_write(uint32_t a, uint32_t v, int n) {}
 int interrupt_budget;
+int title_counts_work;  // Off: these titles' checks count themselves.
 void poll_interrupts(void) {}
 void interrupts_turned_on(void) {}
 void system_call(uint32_t address) {}

@@ -11,6 +11,12 @@ enum {
 // their registers, and its clocks are a GameCube's. Set from the disc it boots (loader.c).
 extern int gamecube_mode;
 void guest_memory_open_virtual(void);  // GameCube mode: 0x7e000000's 32 MB, as plain memory (guest_memory.c).
+// Whether the running title's code counts the processor cycles it runs, as the translator
+// builds a GameCube title to (emit.py's charges): what its checks count down is then
+// cycles, not checks. Set as the title loads (title.c).
+extern int title_counts_work;
+// The cycles the title's code has run since this was last asked: any thread (interrupts.c).
+uint64_t work_cycles_taken(void);
 
 void hardware_start(void);
 void raise_irq(int bit);

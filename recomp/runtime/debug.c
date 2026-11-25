@@ -19,10 +19,12 @@
 #include <unistd.h>
 #endif
 
+#include "audio.h"
 #include "cpu.h"
 #include "debug.h"
 #include "gaps.h"
 #include "gx.h"
+#include "hardware.h"
 
 // The game's OS keeps its live threads in a list from ACTIVE_THREADS, and the one running in
 // CURRENT_THREAD. A thread is its saved context, then the OS's own fields.
@@ -80,6 +82,24 @@ static void report_activity(uint64_t second) {
           gx_stats.new_shaders, (double)gx_stats.slowest_shader_ms, (double)gx_stats.worst_frame_ms, gx_stats.passes,
           gx_stats.new_pipelines, gx_stats.drains, gx_stats.waited_reads);
   gx_stats = (GxStats){0};
+}
+
+// Once a second, what the sound ring went through (audio.h): always in a second where
+// sound was lost, and every second with WII_RECOMP_ACTIVITY set. A game's sound that
+// stutters with nothing printed here stuttered before it reached the ring.
+static void report_sound(uint64_t second) {
+  static uint64_t last;
+  static int every = -1;
+  if (every < 0) every = getenv("WII_RECOMP_ACTIVITY") != 0;
+  if (second == last) return;
+  last = second;
+  AudioCounts counts;
+  audio_take_counts(&counts);
+  int lost = counts.ran_dry || counts.dropped || counts.let_go;
+  if (!lost && (!every || counts.fill_low == UINT32_MAX)) return;
+  fprintf(stderr, "sound: second %llu, the ring held %u to %u samples, ran dry %u times (%u samples of silence), %u samples dropped as it was full, "
+          "the clock let time go %u times\n", (unsigned long long)second, counts.fill_low == UINT32_MAX ? 0 : counts.fill_low, counts.fill_high,
+          counts.ran_dry, counts.silence, counts.dropped, counts.let_go);
 }
 
 static uint64_t stage_ticks[STAGE_COUNT];
@@ -288,10 +308,15 @@ void stage_frame(float gap_ms) {
   static int frame_log = -1, slow_samples = -1;
   // WII_RECOMP_FRAME_LOG=2 adds how long the game's thread waited with nothing to do in
   // that frame: what's left of a capped frame, so machines can be compared under the cap.
+  // And the longest single wait among them, which shows a sleep that ran over.
   if (frame_log < 0) frame_log = getenv("WII_RECOMP_FRAME_LOG") ? atoi(getenv("WII_RECOMP_FRAME_LOG")) : 0;
   if (frame_log == 2) {
-    fprintf(stderr, "frame %.2f idle %.2f present %.2f\n", (double)gap_ms, stage_ticks[STAGE_IDLE] / 60750.0,
-            stage_ticks[STAGE_PRESENT] / 60750.0);
+    fprintf(stderr, "frame %.2f idle %.2f present %.2f longest %.2f", (double)gap_ms, stage_ticks[STAGE_IDLE] / 60750.0,
+            stage_ticks[STAGE_PRESENT] / 60750.0, longest_idle / 60750.0);
+    // For a title that counts its work: what the frame's code would take on the console,
+    // in milliseconds of a GameCube's 486 MHz. Over a field's 16.7, the console needs two.
+    if (title_counts_work) fprintf(stderr, " work %.2f", (double)work_cycles_taken() / 486000.0);
+    fprintf(stderr, " token reads %u\n", notes[NOTE_TOKEN_READ]);
   }
   // 3 adds the game's thread about then (its system's "current thread"), for a game
   // whose pictures come from more than one.
@@ -339,6 +364,7 @@ void debug_poll(uint64_t seconds_running) {
   guest_memory_report();
   gap_flush();
   report_activity(seconds_running);
+  report_sound(seconds_running);
   static const char *after;
   static int looked;
   if (!looked) { looked = 1; after = getenv("WII_RECOMP_DUMP_AFTER"); }

@@ -2,7 +2,7 @@
 """Plays a game by script and checks it got where it should: automatic testing for any title.
 
     python3 recomp/tools/autoplay/autoplay.py <session> [--disc extracted/sys] [--keep FOLDER]
-        [--build recomp/build] [--saves FOLDER] [--storage FOLDER] [--env KEY=VALUE]...
+        [--build recomp/build] [--saves FOLDER] [--storage FOLDER] [--env KEY=VALUE]... [--timed]
     python3 recomp/tools/autoplay/autoplay.py <session> --console FOLDER [--saves FOLDER] ...
 
 It starts the game, presses buttons, moves the pointer and stands on the Balance Board
@@ -31,6 +31,13 @@ overrides both. Pictures and saves are the game's, so they go to --keep or a tem
 folder, never into the repository. Exit status is 0 when every step passed. With
 AUTOPLAY_LEAVE_RUNNING=1, a game still running when the session ends is left running,
 to look into one that's stuck.
+
+Every run notes the machine's state as the game starts and as the session ends (screen
+locked, display asleep, processor held back, compilers running, the game's window in
+front), prints it, and keeps it as conditions.json beside the log: a Mac slows a game it
+can't show, so frame times from such a run are the Mac's, not the game's. With --timed
+the game is asked to bring its window to the front, and a run whose state wasn't fit for
+timing ends as VOID with exit status 3, whatever the session did.
 """
 import argparse
 import importlib.util
@@ -45,6 +52,8 @@ import time
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
+sys.path.insert(0, os.path.dirname(HERE))
+import machine_state  # noqa: E402
 MOLTENVK = "/usr/local/etc/vulkan/icd.d/MoltenVK_icd.json"
 MENU_TITLE = "00000001-00000002"  # The Wii Menu's title ID names its sessions' folder.
 
@@ -269,7 +278,10 @@ def main():
                         help="a Wii storage folder; wii/nand/ when not given (see wii/README.md)")
     parser.add_argument("--env", action="append", default=[])
     parser.add_argument("--console", help="start this console folder from its Wii Menu")
+    parser.add_argument("--timed", action="store_true", help="the run is for timing: void unless the machine was fit for it throughout")
     options = parser.parse_args()
+    if options.timed:
+        options.env = ["WII_RECOMP_FRONT=1"] + options.env
     if options.console:
         game_id = options.game or MENU_TITLE
     else:
@@ -289,6 +301,25 @@ def main():
         shutil.rmtree(folder, ignore_errors=True)
         os.makedirs(folder)
     game = None
+    states = {}
+
+    def note_state(when):
+        states[when] = machine_state.conditions(game.process.pid)
+        print(f"machine as the {when}: {machine_state.describe(states[when])}", flush=True)
+
+    def played():
+        note_state("game started")
+        session.run(game)
+        note_state("session ended")
+        with open(os.path.join(folder, "conditions.json"), "w") as kept:
+            json.dump(states, kept, indent=1)
+        unfit = sorted({problem for state in states.values() for problem in machine_state.problems(state)})
+        if options.timed and unfit:
+            print(f"VOID in {game.seconds():.0f} s: " + "; ".join(unfit))
+            return 3
+        print(f"PASSED in {game.seconds():.0f} s")
+        return 0
+
     try:
         named = getattr(session, "SAVES", None)
         if options.console:
@@ -296,9 +327,7 @@ def main():
             if starting and not os.path.isdir(starting):
                 raise StepFailed(f"no starting storage at {starting}: run the session that makes it first")
             game = Game(options.build, folder, starting, None, game_id, env=options.env, console=options.console)
-            session.run(game)
-            print(f"PASSED in {game.seconds():.0f} s")
-            return 0
+            return played()
         starting = options.saves or (os.path.join(options.build, "session-saves", game_id or "unknown", named) if named
                                      else os.path.join(options.build, "saves"))
         if named and not options.saves and not os.path.isdir(starting):
@@ -307,9 +336,7 @@ def main():
             os.makedirs(os.path.join(folder, "empty-saves"))
             starting = os.path.join(folder, "empty-saves")  # A first run starts with no saves at all.
         game = Game(options.build, folder, starting, options.disc, game_id, options.storage, options.env)
-        session.run(game)
-        print(f"PASSED in {game.seconds():.0f} s")
-        return 0
+        return played()
     except StepFailed as failure:
         print(f"FAILED: {failure}")
         if game:

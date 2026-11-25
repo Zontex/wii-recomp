@@ -6,6 +6,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "recomp/translate"))
 
 from decode import Program, name_of
+import emit as emit_module
 from emit import REPLACED, check_replaced, emit, emit_function, function_name, picture_scale
 from functions import find_functions
 
@@ -112,6 +113,64 @@ class PictureScale(unittest.TestCase):
         for wrong in ("1/2", "5", "0/1", "9/2"):
             with self.assertRaises(SystemExit):
                 self.scale("--scale", wrong)
+
+
+class Charges(unittest.TestCase):
+    """A GameCube title's code counts the cycles it runs; a Wii title's is as it was."""
+
+    START = 0x80100000
+    # addi r3,r3,1; mullw r4,r3,r3; cmpwi r3,10; blt start; divw r5,r4,r3; blr
+    WORDS = dict(zip(range(START, START + 24, 4), (0x38630001, 0x7c8319d6, 0x2c03000a, 0x4180fff4, 0x7ca41bd6, 0x4e800020)))
+
+    def text(self, charged):
+        class Words:
+            word = staticmethod(self.WORDS.__getitem__)
+
+        saved = emit_module.CHARGED
+        emit_module.CHARGED = charged
+        try:
+            return emit_function(Words, self.START, set(self.WORDS), {self.START})[0]
+        finally:
+            emit_module.CHARGED = saved
+
+    def test_each_run_of_instructions_is_charged_before_control_leaves_it(self):
+        lines = self.text(True).split("\n")
+        # The loop's four instructions, a multiply costing 5: charged before the branch back,
+        # whose check then only looks at the count.
+        back = next(i for i, line in enumerate(lines) if "POLL(); goto" in line)
+        self.assertEqual(lines[back - 1], "interrupt_budget -= 8;")
+        # The divide costs 40, and the return 1.
+        self.assertEqual(lines[-3], "interrupt_budget -= 41;")
+        self.assertIn("return;", lines[-2])
+        self.assertEqual(sum("interrupt_budget" in line for line in lines), 2)
+
+    def test_a_title_that_isnt_charged_is_written_as_before(self):
+        plain = self.text(False)
+        self.assertNotIn("interrupt_budget", plain)
+        charged = "\n".join(line for line in self.text(True).split("\n") if not line.startswith("interrupt_budget -= "))
+        self.assertEqual(plain, charged)
+
+    def test_a_replaced_function_is_charged_one_pass_over_the_programs_own(self):
+        start = self.START
+        REPLACED[start] = ("made up", "stand_in();")
+        saved = emit_module.CHARGED
+        try:
+            class Words:
+                word = staticmethod(self.WORDS.__getitem__)
+
+            emit_module.CHARGED = True
+            text, _, _ = emit_function(Words, start, set(self.WORDS), {start})
+            self.assertIn("interrupt_budget -= 49; stand_in();", text)
+            emit_module.CHARGED = False
+            text, _, _ = emit_function(Words, start, set(self.WORDS), {start})
+            self.assertNotIn("interrupt_budget", text)
+        finally:
+            emit_module.CHARGED = saved
+            del REPLACED[start]
+
+    def test_costs_are_dolphins(self):
+        self.assertEqual([emit_module.cycles(name) for name in ("addi", "mulli", "mullw", "lmw", "fdivs", "fdiv", "divwu", None)],
+                         [1, 3, 5, 11, 17, 31, 40, 1])
 
 
 if __name__ == "__main__":

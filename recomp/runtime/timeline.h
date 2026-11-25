@@ -8,6 +8,10 @@
 
 extern int timeline_on;
 void timeline_mark(const char *what, char phase);  // 'B' begins a span, 'E' ends it, 'i' is a moment.
+// The same, with the game's callers at that moment (zero ends the list early), written
+// with the mark as "calls": which of the game's waits a span of its thread belongs to.
+enum { TIMELINE_CALLS = 4 };
+void timeline_mark_calls(const char *what, char phase, const uint32_t *calls);
 void timeline_request(unsigned frames, const char *file);  // Any thread: from the next frame shown.
 void timeline_frame_shown(void);                    // Counts frames, to know when to start and stop.
 

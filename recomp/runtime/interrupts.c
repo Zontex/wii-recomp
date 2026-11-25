@@ -1,5 +1,6 @@
 // Runs the game's timer and hardware interrupts. Translated code checks in here
 // regularly, and the game's own handlers do the rest.
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -20,6 +21,9 @@
 #include "net.h"
 
 #define CHECK_EVERY 2000
+// A title that counts its work (hardware.h) counts down cycles: this many between checks,
+// the most Dolphin runs before looking for something due (CoreTiming.cpp, MAX_SLICE_LENGTH).
+#define CHECK_EVERY_CYCLES 20000
 #define INTERRUPTS_ENABLED 0x8000u
 #define EXCEPTION_TABLE 0x80003000u
 #define EXCEPTION_EXTERNAL 4
@@ -37,6 +41,9 @@ __attribute__((constructor(102))) static void budget_start(void) { interrupt_bud
 int interrupt_budget = CHECK_EVERY;
 #endif
 
+// What the count was last set to, so a check knows how much of it the code ran through.
+static int slice_length = CHECK_EVERY;
+static _Atomic uint64_t work_cycles;  // Run by a title that counts its work, since last asked.
 static uint64_t decrementer_deadline;
 static int decrementer_armed;
 static uint64_t time_base_offset;
@@ -124,8 +131,12 @@ void interrupts_turned_on(void) {
 // The same for a context loaded with interrupts on (threads.c), which is still on the old
 // thread's host stack: taken at the next check, which is on the new one.
 void interrupts_turned_on_soon(void) {
-  if (something_due()) interrupt_budget = 0;
+  if (!something_due() || interrupt_budget <= 0) return;
+  slice_length -= interrupt_budget;  // The rest of the count wasn't run, and mustn't read as work.
+  interrupt_budget = 0;
 }
+
+uint64_t work_cycles_taken(void) { return atomic_exchange_explicit(&work_cycles, 0, memory_order_relaxed); }
 
 static unsigned long long interrupts_taken, interrupt_polls, interrupt_polls_masked;
 
@@ -135,7 +146,9 @@ void interrupts_describe(void) {
 
 void poll_interrupts(void) {
   interrupt_polls++;
-  interrupt_budget = CHECK_EVERY;
+  if (title_counts_work) atomic_fetch_add_explicit(&work_cycles, (uint64_t)(slice_length - interrupt_budget), memory_order_relaxed);
+  slice_length = title_counts_work ? CHECK_EVERY_CYCLES : CHECK_EVERY;
+  interrupt_budget = slice_length;
   uint64_t now = time_base();
   static uint64_t started;
   if (!started) started = now;
@@ -165,6 +178,20 @@ static uint64_t sooner(uint64_t wait, uint64_t now, uint64_t due) {
   return due > now && due - now < wait ? due - now : wait;
 }
 
+// The game's callers as its thread goes idle, for the timeline: up its stack from the
+// scheduler, whose own frame hasn't kept its return yet. So a span of idle time says
+// which wait it was, such as the one for the next retrace at a frame's end.
+static void idle_callers(uint32_t *calls) {
+  uint32_t stack = cpu.r[1];
+  int found = 0;
+  for (int depth = 0; depth < 2 * TIMELINE_CALLS && found < TIMELINE_CALLS; depth++) {
+    if (stack < 0x80000000u || stack >= 0x94000000u || !host(stack) || !host(stack + 7)) break;
+    uint32_t caller = rd32(stack + 4);
+    if (caller) calls[found++] = caller;
+    stack = rd32(stack);
+  }
+}
+
 // The game has nothing to run. Sleeps until the next thing that could give it work,
 // then checks for interrupts. Waking only then lets the processor rest properly.
 // Set WII_RECOMP_IDLE_SPIN=1 to spin as the Wii does.
@@ -183,7 +210,11 @@ void idle_wait(void) {
   // sleeping past a timer that's due could put it off for good.
   int timer_due = decrementer_armed && decrementer_deadline <= now;
   if (!irq_pending() && !timer_due) {
-    TIMELINE_BEGIN("game idle");
+    if (timeline_on) {
+      uint32_t calls[TIMELINE_CALLS] = {0};
+      idle_callers(calls);
+      timeline_mark_calls("game idle", 'B', calls);
+    }
     host_sleep(wait * NANOSECONDS / TIME_BASE_HZ);  // Not a plain nanosleep, which a Mac can stretch (host_sleep.h).
     TIMELINE_END("game idle");
     stage_add(STAGE_IDLE, time_base() - now);

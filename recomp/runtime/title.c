@@ -19,9 +19,12 @@ static const char *dlerror(void) {
 #include <dlfcn.h>
 #endif
 
+#include "hardware.h"
 #include "title.h"
 
 const Title *title;
+int title_counts_work;
+#define CHARGES_SYMBOL "wii_recomp_title_charges"  // In a library whose code counts its cycles (emit.py).
 
 uint64_t title_check(const uint8_t *data, unsigned long length) {
   uint64_t value = 0xcbf29ce484222325ull;
@@ -29,7 +32,7 @@ uint64_t title_check(const uint8_t *data, unsigned long length) {
   return value;
 }
 
-const Title *title_open(const char *path) {
+static const Title *open_library(const char *path, void **opened) {
   void *library = dlopen(path, RTLD_NOW | RTLD_LOCAL);
   if (!library) {
     fprintf(stderr, "stop: can't load the title's native code: %s\n", dlerror());
@@ -45,12 +48,18 @@ const Title *title_open(const char *path) {
             (unsigned long long)found->interface, (unsigned long long)TITLE_INTERFACE);
     exit(10);
   }
+  if (opened) *opened = library;
   return found;
 }
 
+const Title *title_open(const char *path) { return open_library(path, 0); }
+
 void title_load(const char *path) {
-  title = title_open(path);
-  fprintf(stderr, "title %08x-%08x: %d native functions\n", title->title_high, title->title_low, title->function_count);
+  void *library;
+  title = open_library(path, &library);
+  title_counts_work = dlsym(library, CHARGES_SYMBOL) != 0;
+  fprintf(stderr, "title %08x-%08x: %d native functions%s\n", title->title_high, title->title_low, title->function_count,
+          title_counts_work ? ", which count their work" : "");
 }
 
 void title_verify_program(const uint8_t *data, unsigned long length) {

@@ -11,6 +11,7 @@ Cpu cpu;
 // Outside memory, guest_memory.c opens a zero page, and would name it in gaps.txt.
 void gap_hit(const char *id, uint32_t detail) { (void)id; (void)detail; }
 int interrupt_budget;
+int title_counts_work;  // Off: these titles' checks count themselves.
 
 // Everything guest code can do apart from registers and memory.
 typedef struct {

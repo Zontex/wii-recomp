@@ -5,6 +5,7 @@
 #include "../harness.h"
 void debug_poll(uint64_t s) {}
 int gamecube_mode;
+int title_counts_work;
 const Title *title = &(Title){0};
 void bluetooth_update(uint64_t now) {}
 void stage_add(int s, uint64_t t) {}
@@ -66,6 +67,33 @@ int main(void) {
   CHECK(left <= 40500000 && left > 40500000 / 2);
   CHECK(decrementer_deadline - time_base() > TIME_BASE_HZ / 2);  // A second of the console's own clock.
   gamecube_mode = 0;
+  // A title that counts its work takes cycles off the count, and each check adds up what
+  // it ran through: here 700 of a full count, then the count's overrun as well.
+  title_counts_work = 1;
+  poll_interrupts();
+  work_cycles_taken();
+  CHECK_EQ(interrupt_budget, CHECK_EVERY_CYCLES);
+  interrupt_budget -= 700;
+  poll_interrupts();
+  CHECK_EQ(work_cycles_taken(), 700);
+  interrupt_budget -= CHECK_EVERY_CYCLES + 9;
+  poll_interrupts();
+  CHECK_EQ(work_cycles_taken(), CHECK_EVERY_CYCLES + 9);
+  CHECK_EQ(work_cycles_taken(), 0);
+  // A check asked for early ends the count where it stands: the cycles not run aren't work.
+  interrupt_budget -= 300;
+  decrementer_set(0);
+  interrupts_turned_on_soon();
+  CHECK_EQ(interrupt_budget, 0);
+  poll_interrupts();
+  CHECK_EQ(work_cycles_taken(), 300);
+  // A title that doesn't count keeps its checks as they were, and reports no work.
+  title_counts_work = 0;
+  poll_interrupts();
+  CHECK_EQ(interrupt_budget, CHECK_EVERY);
+  interrupt_budget -= 50;
+  poll_interrupts();
+  CHECK_EQ(work_cycles_taken(), 0);
   (void)before;
   return finish();
 }

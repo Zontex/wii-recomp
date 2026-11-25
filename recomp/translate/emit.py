@@ -40,6 +40,33 @@ GROUP_FILE = re.compile(r"(part|cold)\d{4}\.c")
 # keeps a core busy for no work, so they sleep instead.
 REPLACED = {}
 IDLE_LOOPS = {}
+
+# A GameCube title's clock is the work its code has done, as in Dolphin, not the host's
+# clock (interrupts.c). So its code counts the processor cycles it runs: each straight
+# run of instructions takes its cost off interrupt_budget before control leaves it, and
+# the checks only look at the count. An instruction costs one cycle but for these, the
+# numbers Dolphin's table gives (PPCTables.cpp). A Wii title is written exactly as before.
+CHARGED = False
+CYCLES = {
+    "sc": 2, "ps_rsqrte": 2, "rfi": 2, "dcbtst": 2, "dcbt": 2, "mtspr": 2, "tw": 2,
+    "mulli": 3, "mfsr": 3, "mfsrin": 3, "sync": 3, "mtfsb0": 3, "mtfsb1": 3, "mtfsfi": 3, "mtfsf": 3,
+    "icbi": 4,
+    "mulhw": 5, "mulhwu": 5, "mullw": 5, "dcbst": 5, "dcbf": 5, "dcbi": 5, "dcba": 5, "dcbz": 5,
+    "lmw": 11, "stmw": 11,
+    "ps_div": 17, "fdivs": 17, "fdiv": 31,
+    "divw": 40, "divwu": 40,
+}
+# In a charged title a check doesn't count itself: the code around it already has.
+CHARGED_POLL = ("#undef POLL\n"
+                "#define POLL() do { if (interrupt_budget < 0) poll_interrupts(); } while (0)\n")
+# The library says so with a symbol of its own, so the console can tell a title built
+# before its work was counted (title.c).
+CHARGED_MARK = ("#ifdef _WIN32\n__declspec(dllexport)\n#endif\n"
+                "__attribute__((visibility(\"default\"))) const int wii_recomp_title_charges = 1;\n")
+
+
+def cycles(name):
+    return CYCLES.get(name, 1)
 # Replacements that skip the game's Wii Remote code, for games not on virtual Bluetooth.
 DIRECT_INPUT = {"input_read();", "input_probe();"}
 DECREMENTER = 22
@@ -574,8 +601,18 @@ def write_if_changed(path, text):
 def emit_function(program, start, body, starts):
     if start in REPLACED:
         reason, body_text = REPLACED[start]
-        return f"void {function_name(start)}(void) {{ /* {reason} */ {body_text} }}", set(), Counter()
+        # The console's own version stands in, and is charged what one pass over the
+        # program's would cost, near enough.
+        charge = f"interrupt_budget -= {sum(cycles(name_of(program.word(a))) for a in body)}; " if CHARGED else ""
+        return f"void {function_name(start)}(void) {{ /* {reason} */ {charge}{body_text} }}", set(), Counter()
     lines, labels = [f"void {function_name(start)}(void) {{ POLL();"], set()
+    pending = 0  # Cycles run since the last charge, in a charged title.
+
+    def charge():
+        nonlocal pending
+        if CHARGED and pending:
+            lines.append(f"interrupt_budget -= {pending};")
+        pending = 0
     if start in TRACED:  # WII_RECOMP_EMIT_TRACE: each call of these is logged as the game runs (debug.c).
         lines.append(f"{{ extern void debug_trace_call(unsigned); debug_trace_call(0x{start:x}u); }}")
     ordered = sorted(body)
@@ -602,7 +639,11 @@ def emit_function(program, start, body, starts):
         word = program.word(address)
         name = name_of(word)
         if address in labels:
+            charge()  # What ran before falls into the label, or jumped away.
             lines.append(f"L_{address:x}:;")
+        pending += cycles(name)
+        if name in ("b", "bc", "bclr", "bcctr", "sc", "rfi"):
+            charge()  # Control may leave here, and the instruction runs either way.
         following = address + 4
         # Control leaves this line unless the next address in the listing follows on.
         next_listed = ordered[position + 1] if position + 1 < len(ordered) else None
@@ -653,8 +694,10 @@ def emit_function(program, start, body, starts):
 
         ended = word in (0x4e800020, 0x4e800420, 0x4c000064) or (name == "b" and not word & 1)
         if not ended and next_listed != following and following not in body:
+            charge()
             lines.append(tail_text(following, starts))
         elif not ended and next_listed != following:
+            charge()
             lines.append(f"goto L_{following:x};")
     lines.append("}")
     return "\n".join(lines), labels, unknown
@@ -745,7 +788,8 @@ def emit_apploader(system, out, program):
     try:
         addresses = sorted(functions)
         starts = set(addresses)
-        parts = ['#include "../../runtime/title.h"'] + [f"void {function_name(a)}(void);" for a in addresses]
+        parts = (['#include "../../runtime/title.h"'] + ([CHARGED_POLL.rstrip()] if CHARGED else [])
+                 + [f"void {function_name(a)}(void);" for a in addresses])
         for start in addresses:
             text, _, _ = emit_function(apploader, start, functions[start], starts)
             parts.append(text)
@@ -779,6 +823,7 @@ def title_description(program_bytes, title, values, function_count, module_count
             "extern uint32_t title_counts[];\n"
             "extern const Module *const title_modules[];\n"
             "extern const TitleFunction title_apploader[];\n"
+            + (CHARGED_MARK if CHARGED else "") +
             "__attribute__((visibility(\"default\"))) const Title wii_recomp_title = {\n"
             f"  TITLE_INTERFACE, 0x{fnv1a64(program_bytes[:program_length(program_bytes)]):016x}ull, 0x{high:08x}u, 0x{low:08x}u, {ios},\n"
             f"  0x{values.get('calibration_flag', 0):x}u,\n"
@@ -928,7 +973,8 @@ def emit_module(module, number, base, imports, out, exports, program_starts, cou
         called = sorted({address for address in fixed.values() if address in program_starts})
         declarations = "\n".join(f"void {function_name(a)}(void);" for a in addresses + called)
         counter = (f"extern uint32_t {prefix}_counts[];\n"
-                   f"#define POLL_COUNTED(i) do {{ {prefix}_counts[i]++; POLL(); }} while (0)\n")
+                   f"#define POLL_COUNTED(i) do {{ {prefix}_counts[i]++; POLL(); }} while (0)\n"
+                   + (CHARGED_POLL if CHARGED else ""))
         write_if_changed(out / f"{prefix}_functions.h",
                          f'#include "../../runtime/modules.h"\nextern uint32_t {prefix}_code, {prefix}_section[], {prefix}_import[];\n'
                          f"{counter}{declarations}\n")
@@ -1131,8 +1177,11 @@ def main():
         # What's dropped below needn't be found at all: a program may have no KPAD, as some
         # channels haven't, and nothing of it would be replaced anyway.
         entries = [dict(entry, group="optional") if virtual_bluetooth_keeps(entry) else entry for entry in entries]
-    # A GameCube program has no Wii Remote library to stand in for.
-    replaced, idle_loops, values = resolve(program, functions, entries, gamecube=discs.is_gamecube_folder(dol.parent.parent))
+    # A GameCube program has no Wii Remote library to stand in for, and its code counts its work.
+    global CHARGED
+    gamecube = discs.is_gamecube_folder(dol.parent.parent)
+    CHARGED = gamecube
+    replaced, idle_loops, values = resolve(program, functions, entries, gamecube=gamecube)
     if "--virtual-bluetooth" in sys.argv:
         # The program's own controller code runs, including an older KPADRead left as a stub,
         # and so does its board code, which the simulated board answers. WPADRead reads the
@@ -1165,7 +1214,8 @@ def main():
     check_replaced(starts)
     addresses = sorted(starts)
     declarations = "\n".join(f"void {function_name(a)}(void);" for a in addresses)
-    write_if_changed(out / "functions.h", f'#include "../../runtime/cpu.h"\n{COUNTING}{declarations}\n')
+    write_if_changed(out / "functions.h",
+                     f'#include "../../runtime/cpu.h"\n{COUNTING}{CHARGED_POLL if CHARGED else ""}{declarations}\n')
 
     profile = option_values("--profile")
     counting = bool(profile)

@@ -1,5 +1,6 @@
 // What the graphics files expect of the rest of the runtime. With no game running there
 // are no hardware registers, interrupts or clocks to answer them.
+#include "audio.h"
 #include "cpu.h"
 #include "title.h"
 #include "gx.h"
@@ -17,6 +18,11 @@ void hw_poke(uint32_t address, uint32_t value, int bytes) { (void)address; (void
 void raise_irq(int bit) { (void)bit; }
 void clear_irq(int bit) { (void)bit; }
 void poll_interrupts(void) {}
+// What debug.c reports once a second and with each frame: a recording has no sound ring
+// to count, and no title whose code counts its work.
+void audio_take_counts(AudioCounts *counts) { *counts = (AudioCounts){.fill_low = UINT32_MAX}; }
+int title_counts_work;
+uint64_t work_cycles_taken(void) { return 0; }
 void window_refresh_size(void) {}
 void window_size(int *width, int *height) { *width = *height = 0; }
 

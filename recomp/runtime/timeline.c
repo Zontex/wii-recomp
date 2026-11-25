@@ -11,7 +11,7 @@
 #include "timeline.h"
 
 enum { MOST_MARKS = 1 << 20 };
-typedef struct { uint64_t nanoseconds; const char *what; int thread; char phase; } Mark;
+typedef struct { uint64_t nanoseconds; const char *what; int thread; char phase; uint32_t calls[TIMELINE_CALLS]; } Mark;
 
 int timeline_on;
 static Mark *marks;
@@ -31,11 +31,15 @@ __attribute__((constructor)) static void timeline_start(void) {
   marks = calloc(MOST_MARKS, sizeof *marks);
 }
 
-void timeline_mark(const char *what, char phase) {
+void timeline_mark_calls(const char *what, char phase, const uint32_t *calls) {
   if (!thread_number) thread_number = atomic_fetch_add(&threads, 1) + 1;
   unsigned at = atomic_fetch_add_explicit(&used, 1, memory_order_relaxed);
-  if (at < MOST_MARKS) marks[at] = (Mark){host_nanoseconds(), what, thread_number, phase};
+  if (at >= MOST_MARKS) return;
+  marks[at] = (Mark){host_nanoseconds(), what, thread_number, phase, {0}};
+  for (int i = 0; calls && i < TIMELINE_CALLS; i++) marks[at].calls[i] = calls[i];
 }
+
+void timeline_mark(const char *what, char phase) { timeline_mark_calls(what, phase, 0); }
 
 static void write_out(void) {
   timeline_on = 0;
@@ -47,8 +51,14 @@ static void write_out(void) {
   fprintf(to, "{\"traceEvents\":[\n");
   for (unsigned i = 0; i < count; i++) {
     const Mark *m = &marks[i];
-    fprintf(to, "%s{\"name\":\"%s\",\"ph\":\"%c\",\"ts\":%.3f,\"pid\":1,\"tid\":%d%s}\n", i ? "," : "", m->what, m->phase,
+    fprintf(to, "%s{\"name\":\"%s\",\"ph\":\"%c\",\"ts\":%.3f,\"pid\":1,\"tid\":%d%s", i ? "," : "", m->what, m->phase,
             (double)(m->nanoseconds - start) / 1000.0, m->thread, m->phase == 'i' ? ",\"s\":\"t\"" : "");
+    if (m->calls[0]) {
+      fprintf(to, ",\"args\":{\"calls\":\"");
+      for (int call = 0; call < TIMELINE_CALLS && m->calls[call]; call++) fprintf(to, "%s%08x", call ? " " : "", m->calls[call]);
+      fprintf(to, "\"}");
+    }
+    fprintf(to, "}\n");
   }
   fprintf(to, "]}\n");
   fclose(to);

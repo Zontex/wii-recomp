@@ -53,6 +53,10 @@ static uint32_t target = START_TARGET_SAMPLES;  // These two are the output side
 static int refilling = 1;
 static FILE *wave;
 static uint32_t wave_bytes;
+// What the ring went through, counted by whichever side sees it and read once a second
+// (audio_take_counts). Nothing here steers the sound.
+static _Atomic uint32_t ran_dry, silence_played, samples_dropped, times_let_go, fill_low = UINT32_MAX, fill_high;
+static int sound_began;  // The output side's: silence before the game's first sound isn't a gap.
 
 static void put_le(uint8_t *to, uint32_t value, int bytes) {
   for (int i = 0; i < bytes; i++) to[i] = (uint8_t)(value >> (i * 8));
@@ -94,7 +98,10 @@ void audio_start(void) {
 
 static void push_samples(const int16_t *samples, uint32_t count) {
   uint32_t position = atomic_load_explicit(&written, memory_order_relaxed);
-  if (position - atomic_load_explicit(&played, memory_order_acquire) + count > RING_SAMPLES) return;
+  if (position - atomic_load_explicit(&played, memory_order_acquire) + count > RING_SAMPLES) {
+    atomic_fetch_add_explicit(&samples_dropped, count, memory_order_relaxed);
+    return;
+  }
   for (uint32_t i = 0; i < count; i++) {
     uint32_t at = (position + i) % RING_SAMPLES * AUDIO_CHANNELS;
     ring[at] = samples[i * AUDIO_CHANNELS];
@@ -111,6 +118,9 @@ void audio_pull(int16_t *output, uint32_t samples) {
   uint32_t done = 0;
   if (refilling && waiting >= target) refilling = 0;
   if (!refilling) {
+    sound_began = 1;
+    if (waiting < atomic_load_explicit(&fill_low, memory_order_relaxed)) atomic_store_explicit(&fill_low, waiting, memory_order_relaxed);
+    if (waiting > atomic_load_explicit(&fill_high, memory_order_relaxed)) atomic_store_explicit(&fill_high, waiting, memory_order_relaxed);
     if (waiting > target + DRIFT_MARGIN) { position++; waiting--; }
     else if (waiting < target - DRIFT_MARGIN && waiting > 0) { position--; waiting++; }
     for (; done < samples && waiting; done++, waiting--, position++) {
@@ -121,10 +131,21 @@ void audio_pull(int16_t *output, uint32_t samples) {
     atomic_store_explicit(&played, position, memory_order_release);
   }
   if (done < samples) {
+    if (!refilling) atomic_fetch_add_explicit(&ran_dry, 1, memory_order_relaxed);
+    if (sound_began) atomic_fetch_add_explicit(&silence_played, samples - done, memory_order_relaxed);
     if (!refilling && target < MAX_TARGET_SAMPLES) target += TARGET_STEP_SAMPLES;
     refilling = 1;
     memset(output + done * AUDIO_CHANNELS, 0, (samples - done) * AUDIO_CHANNELS * sizeof(int16_t));
   }
+}
+
+void audio_take_counts(AudioCounts *counts) {
+  counts->ran_dry = atomic_exchange_explicit(&ran_dry, 0, memory_order_relaxed);
+  counts->silence = atomic_exchange_explicit(&silence_played, 0, memory_order_relaxed);
+  counts->dropped = atomic_exchange_explicit(&samples_dropped, 0, memory_order_relaxed);
+  counts->let_go = atomic_exchange_explicit(&times_let_go, 0, memory_order_relaxed);
+  counts->fill_low = atomic_exchange_explicit(&fill_low, UINT32_MAX, memory_order_relaxed);
+  counts->fill_high = atomic_exchange_explicit(&fill_high, 0, memory_order_relaxed);
 }
 
 static uint32_t blocks_per_second(void) {
@@ -180,6 +201,7 @@ void audio_update(uint64_t now) {
   }
   if ((dma_control & DMA_ENABLE) && !(hw_peek(AI_CONTROL, 4) & AI_DMA_32KHZ)) gap_hit("hw.control", 48000);  // Played as 32 kHz.
   if (block_time(dma_blocks_done + MAX_BLOCKS_BEHIND) < now) {
+    if (dma_blocks_done) atomic_fetch_add_explicit(&times_let_go, 1, memory_order_relaxed);
     dma_clock_start = now;
     dma_blocks_done = 0;
   }
@@ -192,6 +214,7 @@ void audio_update(uint64_t now) {
       // sound, heard as a fifth of a second of silence every two seconds. Only past that
       // does the clock go on without it.
       if (block_time(dma_blocks_done + 1 + ANSWER_BLOCKS) > now) break;
+      atomic_fetch_add_explicit(&times_let_go, 1, memory_order_relaxed);
       dma_clock_start = now;
       dma_blocks_done = 0;
       break;

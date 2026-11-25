@@ -973,6 +973,7 @@ int graphics_read(uint32_t address, uint32_t *value) {
   else if (gx_bounding_box_read(address, value)) {}
   else if (address == PE_TOKEN_VALUE) {
     *value = pe_token;
+    stage_note(NOTE_TOKEN_READ);
     // The SDK's interrupt handler also reads it, which doesn't count. That read comes
     // with the token's signal still up, and can be late enough to land on a newer token.
     int signal_up = atomic_load(&token_due) || ((pe_status & PE_TOKEN_DONE) && (pe_enabled & 1));
