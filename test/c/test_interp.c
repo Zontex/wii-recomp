@@ -5,6 +5,7 @@
 #include "interp.h"
 
 int interrupt_budget;
+int title_counts_work;  // Off: these titles' checks count themselves.
 static int polls, system_calls;
 static uint32_t system_call_at, last_decrementer;
 uint32_t hw_read(uint32_t a, int n) { return 0; }

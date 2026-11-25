@@ -23,7 +23,7 @@ The same system runs on macOS, which is where most of it is developed, with othe
 
 ## What runs today
 
-Games translated with `add_game.py` play directly or from the recompiled Wii Menu, which starts them from its Disc Channel and takes them back with Home. The menu's own channels start from its grid, and the Wii Shop Channel opens a look-only copy of the Shop from the console's own server: nothing can be bought or downloaded, on purpose. Which games have been tried, and how they run, will be listed in a file of their own.
+Games translated with `add_game.py` play directly or from the recompiled Wii Menu, which starts them from its Disc Channel and takes them back with Home. GameCube discs go the same way, as an experiment: the Disc Channel starts one in the console's GameCube mode (see [GameCube discs](#gamecube-discs-an-experiment)). The menu's own channels start from its grid, and the Wii Shop Channel opens a look-only copy of the Shop from the console's own server: nothing can be bought or downloaded, on purpose. Which games have been tried, and how they run, will be listed in a file of their own.
 
 Real Wii Remotes and the Balance Board connect over Bluetooth on Linux and the Mac, and their reports go straight to the game's own code. That path is tested with stand-ins and hasn't met real hardware yet; see [Real Wii Remotes](recomp/README.md#real-wii-remotes-and-the-balance-board). When a game uses a hardware feature the runtime doesn't have, the runtime logs the feature by name. Each one is fixed once, for every game.
 
@@ -173,6 +173,24 @@ The Shop's browser trusts only the certificate authorities it carries, so each c
 
 The window takes the shape of the console's TV setting, 4:3 or 16:9, and the console runs at the rate the menu or game sets: a European menu runs at 50 Hz unless EURGB60 is chosen in Wii Settings.
 
+### GameCube discs (an experiment)
+
+A Wii plays GameCube discs by switching into a GameCube mode: the same processor and graphics chip, with the Wii's own system software set aside, and the game reaching the disc drive, the controller ports and the memory card slots itself. The console has that mode now, for a first game.
+
+```sh
+python3 recomp/tools/add_game.py "path/to/gamecube game.rvz" --console console
+recomp/build/wii-recomp --console console
+```
+
+`add_game.py` tells a GameCube disc from a Wii one by the disc itself, and builds it without the Wii Remote code. The Disc Channel shows it with the GameCube banner, and Start restarts the console into the game in GameCube mode. The image also plays directly (`recomp/build/wii-recomp games/<game ID>.wrd`). Going back to the Wii Menu takes turning the console off and on, as on a Wii.
+
+- **Controller.** Player 1 is a GameCube controller in port 1, from the keyboard or a pad laid out as a Classic Controller is (see [the runtime's README](recomp/README.md)): A and B as they are, `1` and `2` as X and Y, plus as Start, the right shoulder as Z, and the triggers as L and R. The other ports are empty.
+- **Memory card.** Slot A holds a 16 Mbit card, a file named `memory-card-a.raw` beside the console's other state (`WII_RECOMP_MEMORY_CARD_A` names another). A new one is blank and the game formats it. Saving a game and loading it after a restart hasn't been checked yet.
+- **Time.** The game's clock is still the computer's, as for Wii games, so a game runs as fast as the computer allows. Its code already counts the processor cycles it runs, at the costs Dolphin gives each instruction, and `WII_RECOMP_FRAME_LOG=2` prints what each frame would take on the console. Running the game on that count, as Dolphin does, is the next step ([roadmap](ROADMAP.md)).
+- **Not there:** music streamed straight from the disc, slot B, wheels and other controllers, and progressive scan. The console reports each when a game asks for it.
+
+One game has been played this way so far, on an Intel Mac, from the Disc Channel and directly.
+
 ### 5. A Raspberry Pi that is a Wii
 
 One script turns a Raspberry Pi 5 into a console: plugged in, it starts straight into the Wii Menu on the TV, with no desktop, login or boot messages. Put your Wii's storage in `wii/nand` first (step 2), then, on the Pi:
@@ -200,6 +218,7 @@ The console recognises the game's audio program by a checksum of its code and ru
 ### What doesn't work yet
 
 - **A plain ISO in the drive.** Each game goes through `add_game.py` first.
+- **GameCube discs** are an experiment with one game tried: see [GameCube discs](#gamecube-discs-an-experiment) for what is there and what isn't.
 - **A framebuffer a program draws into itself**, rather than with the graphics chip, isn't shown yet; the console reports it.
 - **The simulated board in a game's own setup.** With the game's own Wii Remote code, as `add_game.py` builds it, a game's first-time setup can get to the Balance Board and then drops the simulated board, asking for its power button again. A build without `--virtual-bluetooth` gets through.
 - **Real Wii Remotes and the Balance Board** are built but haven't been tried with real hardware. Until then the keyboard and mouse drive a simulated remote and board. See [Real Wii Remotes](recomp/README.md#real-wii-remotes-and-the-balance-board).

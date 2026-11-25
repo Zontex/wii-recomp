@@ -23,13 +23,13 @@ Statuses:
 |---|---|---|---|---|---|---|---|
 | 1. CPU | 73 | 21 | 5 | 1 | 4 | 16 | 120 |
 | 2. Graphics commands and registers | 65 | 22 | 4 | 0 | 9 | 10 | 110 |
-| 3. TEV and pixel features | 51 | 19 | 1 | 0 | 4 | 1 | 76 |
+| 3. TEV and pixel features | 51 | 20 | 1 | 0 | 3 | 1 | 76 |
 | 4. Vertex and texture | 50 | 10 | 0 | 3 | 1 | 2 | 66 |
-| 5. Hardware blocks | 36 | 7 | 3 | 0 | 5 | 14 | 65 |
+| 5. Hardware blocks | 39 | 9 | 4 | 0 | 5 | 11 | 68 |
 | 6. Audio microcodes | 21 | 2 | 12 | 0 | 5 | 1 | 41 |
-| 7. IOS | 36 | 15 | 3 | 0 | 8 | 6 | 68 |
+| 7. IOS | 36 | 18 | 2 | 0 | 8 | 5 | 69 |
 | 8. Controllers | 50 | 8 | 3 | 0 | 6 | 2 | 69 |
-| **All** | **382** | **104** | **31** | **4** | **42** | **52** | **615** |
+| **All** | **385** | **110** | **31** | **4** | **41** | **48** | **619** |
 
 ## Biggest gaps
 
@@ -42,7 +42,7 @@ Ordered by how likely a real game is to hit them.
 5. **`setjmp`, C++ exceptions and fibers are at risk** (`cpu.bclr`). `blr` is a host `return`, so code that switches stacks leaves the host stack out of step.
 6. **Self-modifying code** (`cpu.self_modifying_code_icbi`). `icbi` is a no-op, so translated code is never replaced.
 7. **Video interface registers are only stored** (`hw.*` in VI). No beam position, interlace, PAL or 480p modes.
-8. **No GameCube controllers** (`hw.gc_controller_wheel_keyboard_dance_mat`). Every port answers that nothing is plugged in.
+8. **No GameCube controllers for Wii games** (`hw.gc_controller_wheel_keyboard_dance_mat`). Every port answers that nothing is plugged in. A GameCube game, in GameCube mode, has one in port 1.
 9. **No remote speaker** (`ctl.speaker`, `audio.axwii_wii_remote_speaker_output`). Covered by the controllers stage of `ROADMAP.md`.
 10. **Floating-point status flags aren't worked out from arithmetic** (`cpu.status_flags_fprf_fr_fi_fx_and_others`). Only the game's own writes change them.
 11. **No guest exceptions or memory mapping** (`cpu.program_trap_illegal`, `cpu.dsi_isi`, `cpu.game_defined_bat_maps`, `cpu.page_tables_segment_registers`).
@@ -583,7 +583,7 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 | `hw.control` | Control | partial | `runtime/audio.c` (`blocks_per_second`) | The audio DMA's rate bit sets how fast blocks are read, starting at 32 kHz as Dolphin does. 48 kHz DMA is still played as 32 kHz, and reported. The disc streaming rate bit is stored. |
 | `hw.volume` | Volume | not needed |  | Only scales streamed disc audio, which Wii discs don't use (`hw.disc_audio_streaming`). |
 | `hw.interrupt_timing` | Interrupt timing | done | `runtime/hardware.c:259-280`, `runtime/interrupts.c:105` | The AI interrupt fires as the sample counter passes the timing register. The counter can be reset and written. |
-| `hw.disc_audio_streaming` | Disc audio streaming | not needed |  | GameCube discs only. |
+| `hw.disc_audio_streaming` | Disc audio streaming | missing | `runtime/di.c` | GameCube discs only. In GameCube mode the commands are answered as if no stream were playing, and starting one is reported. |
 
 ### DSP
 
@@ -598,18 +598,18 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 | `hw.dsp_boot` | DSP boot | done | `runtime/dsp.c` | The OS's wake-up runs as the game's own code against the control bits and the start-up program. The boot ROM takes the game's program and hands over to it, as Dolphin's ROM.cpp. |
 | `hw.dsp_accelerator_interrupt` | DSP accelerator interrupt | done | `runtime/hardware.c:228`, `:345` | Accelerator DMA copies between main memory and MEM2 at once, as Dolphin's Wii mode does, then raises its interrupt. |
 | `hw.instruction_ram_rom_real_dsp_code` | Instruction RAM, ROM, real DSP code | done | `runtime/dsp.c` (`hash_in_memory`, `hand_over`), `runtime/dsp_lle.c` | The game's program is recognised by a checksum of its code, as Dolphin does. A C version runs in its place where there is one; otherwise the interpreter runs the code itself on Dolphin's free boot ROM. `WII_RECOMP_DSP=lle` runs every program that way. |
-| `hw.aram` | ARAM | not needed |  | Wii has none. A GameCube-style game would need it. |
+| `hw.aram` | ARAM | done | `runtime/hardware.c` (`accelerator_dma`), `runtime/dsp_accelerator.c`, `runtime/zelda.c` | A Wii has none. In GameCube mode its 16 MB are the start of MEM2, where AR DMA and the audio programs' samples go; past it is the empty expansion port, where nothing moves, as with Dolphin's. The setup registers start as Dolphin's, ready. A transfer across its end is reported. |
 | `hw.ar_dma_registers` | AR DMA registers | done | `runtime/hardware.c:228` | See `hw.dsp_accelerator_interrupt`. A transfer outside memory is reported. |
 
 ### SI (serial interface)
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
-| `hw.channels_0_3_poll` | Channels 0-3, poll | partial | `runtime/si.c` | Every port answers "no response", as empty ports do. |
+| `hw.channels_0_3_poll` | Channels 0-3, poll | done | `runtime/si.c` | On the Wii side every port answers "no response", as empty ports do. In GameCube mode the ports are polled once a field (Dolphin follows the poll register's lines). |
 | `hw.communication_control_status` | Communication control, status | partial | `runtime/si.c:35-51` | Transfers finish at once. Error bits can be cleared. |
 | `hw.i_o_buffer` | I/O buffer | done | `runtime/hardware.c:312` | Plain memory the game fills and reads. With nothing plugged in, no transfer writes a reply. |
 | `hw.si_interrupt` | SI interrupt | done | `runtime/si.c:21-25` | Transfer done and read status. |
-| `hw.gc_controller_wheel_keyboard_dance_mat` | GC controller, wheel, keyboard, dance mat | missing |  |  |
+| `hw.gc_controller_wheel_keyboard_dance_mat` | GC controller, wheel, keyboard, dance mat | partial | `runtime/si.c` | In GameCube mode a standard controller is in port 1, fed from player 1's controls as a Classic Controller's, with rumble. No wheel, keyboard or dance mat, and nothing on the Wii side. |
 | `hw.gba_link` | GBA link | not needed |  | Almost no Wii use. |
 
 ### EXI (expansion interface)
@@ -622,7 +622,7 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 | `hw.ipl_rom_fonts` | Boot ROM fonts (channel 0) | done | `runtime/exi.c` | Dolphin's free western and Japanese fonts, at 0x1fcf00 and 0x1aff00, for OSInitFont. |
 | `hw.ipl_rom_code` | Boot ROM code (channel 0) | missing | `runtime/exi.c` | Reads below the fonts answer zeros and are reported. |
 | `hw.rtc_and_sram_channel_0` | RTC and SRAM (channel 0) | done | `runtime/exi.c` | The clock is local time since 2000, as the time base, less the settings' counter bias (`IPL.CB`), as in Dolphin: a Wii adds the bias, so the Wii Menu shows the computer's time whatever its date setting stored. The game can move it. SRAM holds a new Wii's settings with correct checksums. |
-| `hw.gc_memory_card` | GC memory card | on demand |  | GameCube titles only. |
+| `hw.gc_memory_card` | GC memory card | partial | `runtime/exi.c` | In GameCube mode a 16 Mbit card is in slot A, a raw image beside the console (`WII_RECOMP_MEMORY_CARD_A`), unlocked from the start as Dolphin's is. Slot B is empty, and the Wii side has no card. |
 | `hw.microphone` | Microphone | on demand |  | A handful of titles. |
 | `hw.ethernet_adapter` | Ethernet adapter | on demand |  | Online services the adapter reached are gone. |
 | `hw.usb_gecko_modem_ad16` | USB Gecko, modem, AD16 | not needed |  | Debug or rare. |
@@ -631,7 +631,8 @@ Registers with no entry below are kept in a plain array (`hardware.c:39`), so re
 
 | ID | Item | Status | Our code | Notes |
 |---|---|---|---|---|
-| `hw.registers_0xcd006000` | Registers 0xCD006000 | not needed |  | Wii games go through `/dev/di`. |
+| `hw.registers_0xcd006000` | Registers 0xCD006000 | partial | `runtime/di.c` | Wii games go through `/dev/di`. In GameCube mode the game drives the disc through them at 0xCC006000: reads, the disc ID, inquiry, request error, seek and stop motor, each finished at once. The motor isn't modelled. A Wii program touching them is reported. |
+| `hw.di_command` | Other disc commands, and DMA outside memory | on demand | `runtime/di.c` | In GameCube mode: a command the model doesn't know, a read into no memory, or a break is reported and answered with an error. |
 | `hw.reads_through_extracted_files` | Reads through extracted files | done | `runtime/dvd.c:110-136` | See area 7. |
 | `hw.disc_image_files_iso_wbfs_rvz` | Disc image files (ISO, WBFS, RVZ) | partial | `runtime/drive.c:1-40`, `tools/make_disc.py` | Only this project's own `.wrd` image or an extracted folder. |
 | `hw.second_disc_layer_disc_swap` | Second disc layer, disc swap | done | `runtime/console.c` (`console_update_drive`), `runtime/dvd.c`, `runtime/ios.c` | The second layer works, as offsets are 64-bit. The control pipe's `eject` and `insert <image>` change the disc as the game runs, between its reads; the cover reads open while the drive is empty. A program throwing the disc out (the eject pin, or stopping the motor with eject) empties the drive. In a console the image moves between `drive/` and `shelf/`, so a restart finds the same disc. |
@@ -790,7 +791,7 @@ The game's program is recognised by a checksum of its code, as Dolphin does, and
 | `ios.dev_net_ssl` | `/dev/net/ssl` | partial | `runtime/net_ssl.c` | Every secure connection goes to the console's own server, so the bytes pass as they are, with no TLS, and certificates are accepted. Opera, in the Shop, speaks TLS itself; `runtime/opera_trust.c` adds the console's own authority to its trusted list. |
 | `ios.dev_wl0` | `/dev/wl0` | on demand | `runtime/devices.c:40-45` | Answered with an error, so the game sees no network. |
 | `ios.dev_dolphin` | `/dev/dolphin` | not needed |  | Dolphin's own. |
-| `ios.mios_gamecube_mode` | MIOS (GameCube mode) | not needed |  |  |
+| `ios.mios_gamecube_mode` | MIOS (GameCube mode) | partial | `runtime/es.c`, `runtime/loader.c` | When the Wii Menu launches BC or MIOS with a GameCube disc in the drive, the console starts the disc in GameCube mode, set up as Dolphin's GameCube boot does, rather than running BC and MIOS. Without such a disc it's refused and reported. |
 | `ios.save_data_in_storage` | Save data in storage | done | `runtime/files.c` | In the save folder, over an optional Wii storage folder. |
 
 ## 8. Controllers

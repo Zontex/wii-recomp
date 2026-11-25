@@ -24,6 +24,7 @@ static void set(uint32_t address, uint32_t value, int bytes) {
 uint64_t time_base(void) { return now; }
 void graphics_retrace(double field_rate) { retraces++, retrace_rate = field_rate; }
 void vi_display_interrupt(int i) { fired[i]++; }
+void si_poll(void) {}
 int gx_screen_copy_went_to(uint32_t address) { return 1; }
 void gap_hit(const char *id, uint32_t detail) {}
 

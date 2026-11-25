@@ -15,6 +15,10 @@
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #endif
+#ifdef __APPLE__
+#include <mach/mach.h>
+#include <mach/semaphore.h>
+#endif
 #include <unistd.h>
 #elif defined(_WIN32)
 #include <windows.h>
@@ -482,6 +486,28 @@ static void wake_idle(void) {
   if (atomic_load_explicit(&idle_asleep, memory_order_seq_cst)) syscall(SYS_futex, &idle_word, FUTEX_WAKE_PRIVATE, 1, 0, 0, 0);
 }
 #define WAKES_FOR_COMMANDS 1
+#elif defined(__APPLE__)
+// On a Mac a short sleep can come due tens of milliseconds late, whenever the system
+// rounds timers together, as it does while the screen is locked or its user is away (see
+// host_sleep.h), and the game then waited that long for its frame's token. So the wait
+// ends at once when work is handed over or commands written, as on Linux, and when a
+// field begins, which a picture held for its moment on the screen waits for. A semaphore
+// the hander signals, only when the thread is asleep, stands in for Linux's futex.
+static semaphore_t idle_semaphore;
+static _Atomic int idle_word, idle_asleep, idle_ready;
+static void idle_wait(void) {
+  if (!atomic_load(&idle_ready)) { wait_briefly(); return; }
+  mach_timespec_t pause = {0, EMPTY_SLEEP_NANOSECONDS};
+  atomic_store_explicit(&idle_asleep, 1, memory_order_seq_cst);
+  if (!atomic_exchange_explicit(&idle_word, 0, memory_order_seq_cst)) semaphore_timedwait(idle_semaphore, pause);
+  atomic_store_explicit(&idle_asleep, 0, memory_order_seq_cst);
+  atomic_store_explicit(&idle_word, 0, memory_order_release);
+}
+static void wake_idle(void) {
+  atomic_store_explicit(&idle_word, 1, memory_order_seq_cst);
+  if (atomic_load(&idle_ready) && atomic_load_explicit(&idle_asleep, memory_order_seq_cst)) semaphore_signal(idle_semaphore);
+}
+#define WAKES_FOR_COMMANDS 1
 #else
 static void idle_wait(void) { wait_briefly(); }
 static void wake_idle(void) {}
@@ -576,6 +602,8 @@ static int start_commands_thread(void) {
   ring = both;
 #ifdef _WIN32
   idle_wake = CreateEventW(0, FALSE, FALSE, 0);
+#elif defined(__APPLE__)
+  atomic_store(&idle_ready, semaphore_create(mach_task_self(), &idle_semaphore, SYNC_POLICY_FIFO, 0) == KERN_SUCCESS);
 #endif
   pthread_attr_t attributes;
   pthread_attr_init(&attributes);
@@ -820,6 +848,9 @@ void graphics_retrace(double field_rate) {
   atomic_fetch_add(&fields_begun, 1);
   if (resume_state == WAITING_FOR_RETRACE) resume_state = RESUME_DUE;
   if (held_at_token && ++retraces_held >= HOLD_RETRACES_AT_MOST) token_seen = 1;
+#ifdef __APPLE__
+  wake_idle();  // A picture held for this field goes now, however late the Mac's timers run.
+#endif
 }
 
 void graphics_update(void) {
@@ -942,6 +973,7 @@ int graphics_read(uint32_t address, uint32_t *value) {
   else if (gx_bounding_box_read(address, value)) {}
   else if (address == PE_TOKEN_VALUE) {
     *value = pe_token;
+    stage_note(NOTE_TOKEN_READ);
     // The SDK's interrupt handler also reads it, which doesn't count. That read comes
     // with the token's signal still up, and can be late enough to land on a newer token.
     int signal_up = atomic_load(&token_due) || ((pe_status & PE_TOKEN_DONE) && (pe_enabled & 1));

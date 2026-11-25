@@ -16,6 +16,16 @@
 
 static uint32_t big32(const uint8_t *data) { return __builtin_bswap32(*(const uint32_t *)data); }
 
+int gamecube_mode;
+
+// A GameCube disc's ID says so at 0x1c. Its header and file table give offsets and sizes
+// in bytes, where a Wii disc's give 4-byte words.
+static int set_mode_from(const uint8_t *header) {
+  gamecube_mode = big32(header + 0x1c) == 0xc2339f3du;
+  if (gamecube_mode) fprintf(stderr, "console: a GameCube disc, so the console runs in GameCube mode\n");
+  return gamecube_mode ? 0 : 2;
+}
+
 // A program file's size, from its section table: the furthest any section reaches.
 static size_t program_bytes(const uint8_t *header) {
   size_t end = 0x100;
@@ -45,6 +55,7 @@ void boot_from_folder(const char *folder, Boot *boot) {
   uint8_t *header = read_whole(folder, "boot.bin", &length);
   memcpy(boot->header, header, length < sizeof boot->header ? length : sizeof boot->header);
   free(header);
+  set_mode_from(boot->header);
   boot->program = read_whole(folder, "main.dol", &boot->program_bytes);
   boot->table = read_whole(folder, "fst.bin", &boot->table_bytes);
 }
@@ -63,7 +74,8 @@ void boot_from_disc(Boot *boot) {
     fprintf(stderr, "stop: the disc's header can't be read\n");
     exit(1);
   }
-  uint64_t program_at = (uint64_t)big32(boot->header + 0x420) << 2, table_at = (uint64_t)big32(boot->header + 0x424) << 2;
+  int shift = set_mode_from(boot->header);
+  uint64_t program_at = (uint64_t)big32(boot->header + 0x420) << shift, table_at = (uint64_t)big32(boot->header + 0x424) << shift;
   uint8_t header[0x100];
   if (!drive_read(program_at, sizeof header, header)) {
     fprintf(stderr, "stop: the disc's program can't be read\n");
@@ -71,7 +83,7 @@ void boot_from_disc(Boot *boot) {
   }
   boot->program_bytes = program_bytes(header);
   boot->program = read_disc(program_at, boot->program_bytes, "program");
-  boot->table_bytes = (size_t)big32(boot->header + 0x428) << 2;
+  boot->table_bytes = (size_t)big32(boot->header + 0x428) << shift;
   boot->table = read_disc(table_at, boot->table_bytes, "file table");
 }
 
@@ -102,6 +114,13 @@ uint32_t load_program(const Boot *boot) {
 #define ARENA_HIGH_BEFORE_TABLE 0x817fec60u
 #define BUS_HZ 243000000u
 #define CPU_HZ 729000000u
+// In GameCube mode the Wii runs at a GameCube's speeds, and has its 16 MB of audio memory.
+#define GAMECUBE_BUS_HZ 162000000u
+#define GAMECUBE_CPU_HZ 486000000u
+#define GAMECUBE_ARAM_SIZE 0x01000000u
+// What a GameCube game is told it runs on: Dolphin's choice, a development kit, as some
+// games take other paths on a retail ID that Dolphin hasn't followed (its SetupGCMemory).
+#define GAMECUBE_CONSOLE_TYPE 0x10000006u
 
 // The IOS the title asks for, with the revision installed in storage, as 00 VV RR RR.
 static uint32_t ios_version(void) {
@@ -123,19 +142,7 @@ static uint32_t ios_mem2_end(uint32_t ios) {
   return 0x93600000u;
 }
 
-void set_up_low_memory(const Boot *boot) {
-  memcpy(host(0x80000000u), boot->header, 0x20);
-  uint32_t table_size = (uint32_t)boot->table_bytes;
-  uint32_t table_address = (ARENA_HIGH_BEFORE_TABLE - table_size) & ~31u;
-  uint32_t arena_high = table_address;
-  memcpy(host(table_address), boot->table, table_size);
-  wr32(0x80000018, 0x5d1c9ea3);   // Wii disc.
-  wr32(0x80000020, 0x0d15ea5e);   // Normal boot.
-  wr32(0x80000024, 1);
-  wr32(0x80000028, MEM1_SIZE);
-  wr32(0x8000002c, 0x23);         // Retail console.
-  uint8_t settings[0x100];
-  if (console_settings_raw(settings)) memcpy(host(0x80003800u), settings, sizeof settings);  // As the system menu leaves it.
+static void set_up_video(const Boot *boot) {
   // The TV standard, which the system menu leaves here from the console's settings and
   // the SDK's VIInit and VIConfigure hold a game to: 0 is NTSC, 1 PAL. A console's own
   // setting.txt says which (VIDEO); without one it follows the disc's region letter, as
@@ -163,6 +170,49 @@ void set_up_low_memory(const Boot *boot) {
     hw_write(0xcc002030u, (1u << 28) | (263u << 16) | 430u, 4);
     hw_write(0xcc002034u, (1u << 28) | (1u << 16) | 1u, 4);
   }
+}
+
+// What a GameCube's boot program and the disc's apploader leave, as Dolphin's GameCube
+// boot does (Boot_BS2Emu.cpp, SetupGCMemory and the apploader's run): the disc ID, the
+// file table at the top of main memory with the arena below it, the memory sizes and the
+// GameCube's clocks. Nothing of the Wii's: no IOS, no MEM2, no settings.
+static void set_up_gamecube_memory(const Boot *boot) {
+  memcpy(host(0x80000000u), boot->header, 0x20);
+  uint32_t table_size = (uint32_t)boot->table_bytes, table_address = (MEM1_END - table_size) & ~31u;
+  memcpy(host(table_address), boot->table, table_size);
+  wr32(0x80000020, 0x0d15ea5e);   // Normal boot.
+  wr32(0x80000024, 1);
+  wr32(0x80000028, MEM1_SIZE);
+  wr32(0x8000002c, GAMECUBE_CONSOLE_TYPE);
+  set_up_video(boot);
+  wr32(0x80000030, 0);
+  wr32(0x80000034, table_address);
+  wr32(0x80000038, table_address);
+  wr32(0x8000003c, table_size);
+  wr32(0x800000d0, GAMECUBE_ARAM_SIZE);
+  wr32(0x800000f0, MEM1_SIZE);
+  wr32(0x800000f8, GAMECUBE_BUS_HZ);
+  wr32(0x800000fc, GAMECUBE_CPU_HZ);
+}
+
+void set_up_low_memory(const Boot *boot) {
+  if (gamecube_mode) {
+    set_up_gamecube_memory(boot);
+    return;
+  }
+  memcpy(host(0x80000000u), boot->header, 0x20);
+  uint32_t table_size = (uint32_t)boot->table_bytes;
+  uint32_t table_address = (ARENA_HIGH_BEFORE_TABLE - table_size) & ~31u;
+  uint32_t arena_high = table_address;
+  memcpy(host(table_address), boot->table, table_size);
+  wr32(0x80000018, 0x5d1c9ea3);   // Wii disc.
+  wr32(0x80000020, 0x0d15ea5e);   // Normal boot.
+  wr32(0x80000024, 1);
+  wr32(0x80000028, MEM1_SIZE);
+  wr32(0x8000002c, 0x23);         // Retail console.
+  uint8_t settings[0x100];
+  if (console_settings_raw(settings)) memcpy(host(0x80003800u), settings, sizeof settings);  // As the system menu leaves it.
+  set_up_video(boot);
   wr32(0x80000030, 0);
   wr32(0x80000034, arena_high);
   wr32(0x80000038, table_address);

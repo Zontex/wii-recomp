@@ -19,8 +19,10 @@ void files_close(int id) {}
 const char *files_name(int id) { return "?"; }
 int files_request(int id, uint32_t command, uint32_t request) { return 0; }
 void ios_trace(const char *device, uint32_t command, uint32_t request, int result) {}
+int ios_trace_all(void) { return 0; }
 static int disc_in;
 int drive_has_disc(void) { return disc_in; }
+int drive_is_gamecube(void) { return 0; }
 int drive_read(uint64_t offset, uint32_t bytes, uint8_t *out) { return 0; }
 int drive_read_raw(uint64_t offset, uint32_t bytes, uint8_t *out) { return 0; }
 size_t drive_tmd(uint8_t *out, size_t limit) { return 0; }

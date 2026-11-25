@@ -148,7 +148,13 @@ void dsp_accelerator_set_yn2(DspAccelerator *a, int16_t yn2) {
 void dsp_accelerator_set_pred_scale(DspAccelerator *a, uint16_t pred_scale) { a->pred_scale = pred_scale & 0x7f; }
 void dsp_accelerator_set_input(DspAccelerator *a, uint16_t input) { a->input = input; }
 
+static int use_aram;
+
+void dsp_accelerator_use_aram(int on) { use_aram = on; }
+int dsp_accelerator_uses_aram(void) { return use_aram; }
+
 uint32_t dsp_accelerator_wii_physical(uint32_t address, int write) {
+  if (use_aram) return MEM2_START | (address & (ARAM_BYTES - 1));
   return write || (address & 0x10000000u) ? MEM2_START | (address & MEM2_MASK) : address & MEM1_MASK;
 }
 

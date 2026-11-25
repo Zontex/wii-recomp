@@ -12,13 +12,14 @@
 
 enum {
   INQUIRY = 0x12, READ_DISC_ID = 0x70, READ = 0x71, GET_COVER_REGISTER = 0x7a, CLEAR_COVER_INTERRUPT = 0x86, GET_COVER_STATUS = 0x88, RESET = 0x8a, OPEN_PARTITION = 0x8b, CLOSE_PARTITION = 0x8c, UNENCRYPTED_READ = 0x8d,
-  GET_STATUS_REGISTER = 0x95, READ_BCA = 0xda, BCA_BYTES = 0x40, BCA_MARK_AT = 0x33, SEEK = 0xab, REQUEST_ERROR = 0xe0, STOP_MOTOR = 0xe3, EJECT_AT = 7, EJECT = 1,
+  GET_STATUS_REGISTER = 0x95, READ_BCA = 0xda, AUDIO_STREAM = 0xe1, AUDIO_STATUS = 0xe2, AUDIO_BUFFER_CONFIG = 0xe4, BCA_BYTES = 0x40, BCA_MARK_AT = 0x33, SEEK = 0xab, REQUEST_ERROR = 0xe0, STOP_MOTOR = 0xe3, EJECT_AT = 7, EJECT = 1,
   COVER_OPEN = 1, NO_MEDIUM = 0x01023a00,  // The drive's error for "no disc".
   DRIVE_OK = 1, DRIVE_ERROR = 2, SECURITY_ERROR = 32,
   COVER_STATUS_EMPTY = 1, COVER_STATUS_DISC = 2,  // GetCoverStatus: no disc, or a disc in (Dolphin's DI.cpp).
   DISC_ID_BYTES = 0x20, TMD_LIMIT = 0x49e4, TMD_REGION_LETTER = 0x193, ALL_REGIONS = 'A',
   // The region area: the region, then an age from each of 16 rating boards, 0x80 if unrated.
   REGION_AT = 0x4e000, REGION_BYTES = 0x20, RATINGS_AT = 0x10, RATING_BOARDS = 16, UNRATED = 0x80,
+  GAMECUBE_REGION_AT = 0x458,  // A GameCube disc's region, in bi2: 0 Japan, 1 USA, 2 Europe, as the console's codes.
 };
 
 static int read_disc(uint64_t offset, uint32_t bytes, uint32_t target) {
@@ -79,6 +80,7 @@ static void make_region_free(uint8_t *area) {
 }
 
 static int read_unencrypted(uint64_t offset, uint32_t bytes, uint32_t target) {
+  if (ios_trace_all()) fprintf(stderr, "dvd: unencrypted read of %u bytes at %llx\n", bytes, (unsigned long long)offset);
   if (!bytes) return DRIVE_OK;
   uint8_t *out = host(target), *last = host(target + bytes - 1);
   if (!out || last != out + bytes - 1) return DRIVE_ERROR;
@@ -92,6 +94,11 @@ static int read_unencrypted(uint64_t offset, uint32_t bytes, uint32_t target) {
     make_region_free(area);
     uint64_t from = offset > REGION_AT ? offset : REGION_AT, to = offset + bytes < REGION_AT + REGION_BYTES ? offset + bytes : REGION_AT + REGION_BYTES;
     memcpy(out + (from - offset), area + (from - REGION_AT), (size_t)(to - from));
+  }
+  // A GameCube disc's region word is made this console's the same way.
+  uint32_t region;
+  if (drive_is_gamecube() && offset <= GAMECUBE_REGION_AT && offset + bytes >= GAMECUBE_REGION_AT + 4 && console_region(&region)) {
+    for (int i = 0; i < 4; i++) out[GAMECUBE_REGION_AT - offset + (uint64_t)i] = (uint8_t)(region >> (24 - 8 * i));
   }
   return DRIVE_OK;
 }
@@ -113,6 +120,15 @@ int dvd_request(uint32_t command, uint32_t request) {
     // An image reads as fast anywhere, so it only needs a disc in, as Dolphin's DVDLowSeek.
     case SEEK: return drive_has_disc() ? DRIVE_OK : DRIVE_ERROR;
     case GET_STATUS_REGISTER: if (word_out) wr32(word_out, 0); return DRIVE_OK;
+    // Audio streamed from a GameCube disc. The Wii Menu sets the drive's buffer up for a
+    // disc whose header asks for streaming before it starts one, and stops with an error
+    // if it can't. Streaming isn't played, so a start is reported. As Dolphin's DI.cpp,
+    // the status isn't copied out, and the setup copies a stale word, here 0.
+    case AUDIO_BUFFER_CONFIG: if (word_out) wr32(word_out, 0); return DRIVE_OK;
+    case AUDIO_STATUS: return DRIVE_OK;
+    case AUDIO_STREAM:
+      if (input != 0x80000000u && (rd32(input + 8) || rd32(input + 12))) gap_hit("hw.disc_audio_streaming", rd32(input + 12));
+      return DRIVE_OK;
     case REQUEST_ERROR: if (word_out) wr32(word_out, drive_has_disc() ? 0 : NO_MEDIUM); return DRIVE_OK;
     case GET_COVER_REGISTER: if (word_out) wr32(word_out, drive_has_disc() ? 0 : COVER_OPEN); return DRIVE_OK;
     // Too small a buffer for the answer is a security error, as IOS gives.

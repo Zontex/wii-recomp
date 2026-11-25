@@ -1,5 +1,6 @@
 // Runs the game's timer and hardware interrupts. Translated code checks in here
 // regularly, and the game's own handlers do the rest.
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <time.h>
@@ -9,6 +10,7 @@
 
 #include "timeline.h"
 #include "audio.h"
+#include "host_sleep.h"
 #include "bluetooth.h"
 #include "title.h"
 #include "cpu.h"
@@ -19,6 +21,9 @@
 #include "net.h"
 
 #define CHECK_EVERY 2000
+// A title that counts its work (hardware.h) counts down cycles: this many between checks,
+// the most Dolphin runs before looking for something due (CoreTiming.cpp, MAX_SLICE_LENGTH).
+#define CHECK_EVERY_CYCLES 20000
 #define INTERRUPTS_ENABLED 0x8000u
 #define EXCEPTION_TABLE 0x80003000u
 #define EXCEPTION_EXTERNAL 4
@@ -36,6 +41,9 @@ __attribute__((constructor(102))) static void budget_start(void) { interrupt_bud
 int interrupt_budget = CHECK_EVERY;
 #endif
 
+// What the count was last set to, so a check knows how much of it the code ran through.
+static int slice_length = CHECK_EVERY;
+static _Atomic uint64_t work_cycles;  // Run by a title that counts its work, since last asked.
 static uint64_t decrementer_deadline;
 static int decrementer_armed;
 static uint64_t time_base_offset;
@@ -83,7 +91,12 @@ void time_start(void) {
 
 uint64_t time_base(void) { return monotonic_ticks() + time_base_offset; }
 
-uint64_t guest_time_base(void) { return time_base() + guest_time_offset; }
+// In GameCube mode the game's clock runs at a GameCube's 40.5 MHz, two thirds of the
+// Wii's 60.75: its time base and decrementer, and nothing else. The console's own
+// deadlines stay on time_base.
+static uint64_t guest_ticks(uint64_t ticks) { return gamecube_mode ? ticks * 2 / 3 : ticks; }
+
+uint64_t guest_time_base(void) { return guest_ticks(time_base()) + guest_time_offset; }
 
 // A game setting the clock moves what it reads and nothing else. Every deadline here
 // runs on time_base, and the decrementer doesn't follow the time base on real hardware.
@@ -94,11 +107,15 @@ void guest_time_base_set(int high_half, uint32_t value) {
 }
 
 void decrementer_set(uint32_t value) {
-  decrementer_deadline = time_base() + (int32_t)value;
+  int64_t ticks = (int32_t)value;
+  decrementer_deadline = time_base() + (uint64_t)(gamecube_mode ? ticks * 3 / 2 : ticks);
   decrementer_armed = 1;
 }
 
-uint32_t decrementer_get(void) { return (uint32_t)(decrementer_deadline - time_base()); }
+uint32_t decrementer_get(void) {
+  int64_t left = (int64_t)(decrementer_deadline - time_base());
+  return (uint32_t)(gamecube_mode ? left * 2 / 3 : left);
+}
 
 // One waiting, or a timer that ran out while interrupts were off, is taken right here, as
 // the processor takes it the moment mtmsr turns them on. Mario & Sonic at the London 2012
@@ -114,8 +131,12 @@ void interrupts_turned_on(void) {
 // The same for a context loaded with interrupts on (threads.c), which is still on the old
 // thread's host stack: taken at the next check, which is on the new one.
 void interrupts_turned_on_soon(void) {
-  if (something_due()) interrupt_budget = 0;
+  if (!something_due() || interrupt_budget <= 0) return;
+  slice_length -= interrupt_budget;  // The rest of the count wasn't run, and mustn't read as work.
+  interrupt_budget = 0;
 }
+
+uint64_t work_cycles_taken(void) { return atomic_exchange_explicit(&work_cycles, 0, memory_order_relaxed); }
 
 static unsigned long long interrupts_taken, interrupt_polls, interrupt_polls_masked;
 
@@ -125,7 +146,9 @@ void interrupts_describe(void) {
 
 void poll_interrupts(void) {
   interrupt_polls++;
-  interrupt_budget = CHECK_EVERY;
+  if (title_counts_work) atomic_fetch_add_explicit(&work_cycles, (uint64_t)(slice_length - interrupt_budget), memory_order_relaxed);
+  slice_length = title_counts_work ? CHECK_EVERY_CYCLES : CHECK_EVERY;
+  interrupt_budget = slice_length;
   uint64_t now = time_base();
   static uint64_t started;
   if (!started) started = now;
@@ -155,6 +178,20 @@ static uint64_t sooner(uint64_t wait, uint64_t now, uint64_t due) {
   return due > now && due - now < wait ? due - now : wait;
 }
 
+// The game's callers as its thread goes idle, for the timeline: up its stack from the
+// scheduler, whose own frame hasn't kept its return yet. So a span of idle time says
+// which wait it was, such as the one for the next retrace at a frame's end.
+static void idle_callers(uint32_t *calls) {
+  uint32_t stack = cpu.r[1];
+  int found = 0;
+  for (int depth = 0; depth < 2 * TIMELINE_CALLS && found < TIMELINE_CALLS; depth++) {
+    if (stack < 0x80000000u || stack >= 0x94000000u || !host(stack) || !host(stack + 7)) break;
+    uint32_t caller = rd32(stack + 4);
+    if (caller) calls[found++] = caller;
+    stack = rd32(stack);
+  }
+}
+
 // The game has nothing to run. Sleeps until the next thing that could give it work,
 // then checks for interrupts. Waking only then lets the processor rest properly.
 // Set WII_RECOMP_IDLE_SPIN=1 to spin as the Wii does.
@@ -173,9 +210,12 @@ void idle_wait(void) {
   // sleeping past a timer that's due could put it off for good.
   int timer_due = decrementer_armed && decrementer_deadline <= now;
   if (!irq_pending() && !timer_due) {
-    struct timespec pause = {0, (long)(wait * NANOSECONDS / TIME_BASE_HZ)};
-    TIMELINE_BEGIN("game idle");
-    nanosleep(&pause, 0);
+    if (timeline_on) {
+      uint32_t calls[TIMELINE_CALLS] = {0};
+      idle_callers(calls);
+      timeline_mark_calls("game idle", 'B', calls);
+    }
+    host_sleep(wait * NANOSECONDS / TIME_BASE_HZ);  // Not a plain nanosleep, which a Mac can stretch (host_sleep.h).
     TIMELINE_END("game idle");
     stage_add(STAGE_IDLE, time_base() - now);
   }

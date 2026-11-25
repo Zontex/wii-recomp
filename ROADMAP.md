@@ -59,6 +59,8 @@ Each stage is **done**, **in progress** or **planned**, and each item is ticked 
 - [x] **CPU test harness** (`test/test_recomp_differential.py`): runs every instruction family through both the translator and the interpreter and compares the registers
 - [x] **Menu benchmark** (`recomp/tools/menu_bench.py`): tours 16 Wii Menu screens and reports frame rate and the worst frame for each
 - [x] **Gap counter** (`runtime/gaps.c`, `recomp/tools/gap_report.py`): names every request the runtime can't do by its inventory row, and ranks them across runs and titles
+- [x] **Frame log** (`WII_RECOMP_FRAME_LOG=2`): for each frame, its time, how long the game's thread waited, its longest single wait, and how often the game read the draw-sync token; a `sound:` line for any second the sound ring ran dry or dropped samples; `WII_RECOMP_SLEEP_LOG` for sleeps that ran over; and the game's callers on each idle span of a timeline
+- [x] **A machine fit for timing** (`recomp/tools/machine_state.py`, `autoplay.py --timed`): a run is void with the screen locked, the display asleep, the processor held back, a build running, the game's window not in front, or the game at a low priority, as when a background service started it. A Mac runs such a game a few times slower, which had passed for the game's own speed
 
 ### 3. CPU complete (in progress)
 
@@ -204,6 +206,22 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - [ ] An automatic script for each: boots, reaches gameplay, sound, picture comparison and frame rate
 - [ ] Run on every change to shared code
 
+### 13. GameCube discs (an experiment)
+
+A Wii's GameCube mode, built for one game first and kept general: the hardware is modelled at its registers, as Dolphin does, with no game's code patched.
+
+- [x] `add_game.py` builds a GameCube disc, told from a Wii disc by the disc itself, into the same recompiled image
+- [x] The Wii Menu shows it in the Disc Channel, and Start restarts the console into it in GameCube mode, with memory, clocks and the game's first values as Dolphin's GameCube start leaves them
+- [x] The disc drive at its registers, audio memory, a standard controller in port 1, and a memory card in slot A kept as a file
+- [x] A GameCube title's code counts the processor cycles it runs, at Dolphin's cost for each instruction, and the frame log says what each frame would take on the console
+- [ ] Saving and loading across a restart, checked
+- [ ] The game's clock from that count, as Dolphin's is: checks when the next device is due, idle time skipped, and real time caught up with at each field. Today the clock is the computer's, so a game's frame rate depends on the computer and on whatever holds its thread up
+- [ ] Waiting for the graphics chip costs the game no time, and pictures reach the window at the field from a thread of their own. Today the draw-sync token a game waits on can sit behind a slow present
+- [ ] Sound paced by the game's clock, matched to the computer's by resampling
+- [ ] Disc, audio memory and controller timings as Dolphin has them
+- [ ] Translated code and vertex reading fast enough to leave room on console time: on an Intel Mac the first game's code runs at about one to one and a half times a GameCube's speed
+- [ ] Music streamed from the disc, slot B, other controllers, progressive scan
+
 ## Milestones so far
 
 - A game's own code booted to its first picture in a native window on an Intel Mac, then played through its setup, driven by script.
@@ -219,7 +237,8 @@ From [`docs/native_ios.md`](docs/native_ios.md) Stages 3 to 7.
 - One command turns a disc into a playable image. Code that has barely run compiles quickly and counts its runs, and the next build compiles what did the work for speed: a game builds in under a minute and a half on a Raspberry Pi 5.
 - A game reaches its menus on a console that has never run the Wii Menu, once the files a new Wii makes on first start are there.
 - The recompiled Wii Menu goes to a game and back, starts its channels, accepts the network agreement, and opens a look-only Wii Shop Channel served by the console itself, all driven by script.
+- A GameCube disc starts from the Wii Menu's Disc Channel in a GameCube mode of the console's own, and its first game holds 60 fps through its opening and first rooms on an Intel Mac. The stutter it first showed was the Mac running it at a low priority, found by measuring each frame against the console's own time.
 
 ## Out of scope
 
-Nintendo's online services beyond the few the console answers itself from its own server (the connection test, the agreement and a look-only Shop), downloading or buying anything, GameCube discs, Windows, and anything that needs a console's private keys.
+Nintendo's online services beyond the few the console answers itself from its own server (the connection test, the agreement and a look-only Shop), downloading or buying anything, and anything that needs a console's private keys.

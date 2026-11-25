@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Turn a Wii disc into a game the console plays, in one command.
+"""Turn a Wii or GameCube disc into a game the console plays, in one command.
 
 Usage: recomp/tools/add_game.py <disc image | extracted disc folder | game ID> [--console FOLDER]
                                 [--fifo-breakpoints] [--scale N[/D] | default] [--no-pack] [--jobs N]
@@ -9,7 +9,8 @@ It extracts the disc (an .iso, .rvz or .wbfs), translates its program with every
 code it can find and the game's own Wii Remote code, builds the console if needed and the
 title's native code, and packs both into games/<game ID>.wrd. Play it with
 `recomp/build/wii-recomp games/<game ID>.wrd`, or give --console to put it in that
-console's drive for the Wii Menu (recomp/tools/prepare_console.py makes one).
+console's drive for the Wii Menu (recomp/tools/prepare_console.py makes one). A GameCube
+disc starts from the Wii Menu's disc channel too, in the console's GameCube mode.
 
 The first build compiles everything for speed, and the code counts how often it runs.
 Run add_game.py again after playing (with the game ID, the disc or the folder) and every
@@ -45,7 +46,6 @@ ROOT = Path(__file__).resolve().parents[2]
 RECOMP = ROOT / "recomp"
 CONSOLE_BUILD = RECOMP / "build"
 GAMES = ROOT / "games"
-TITLE_ID_OFFSET = 0x18c  # In the disc's tmd.bin.
 LIBRARY = {"darwin": "title.dylib", "win32": "title.dll"}.get(sys.platform, "title.so")
 PROGRAM = "wii-recomp.exe" if sys.platform == "win32" else "wii-recomp"
 if sys.platform == "win32":
@@ -58,6 +58,7 @@ DISC_IMAGES = {".iso", ".rvz", ".wbfs", ".ciso", ".gcz", ".wia"}
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import make_disc  # noqa: E402
+import discs  # noqa: E402  (recomp/translate, which make_disc puts on the path)
 
 
 def fail(message):
@@ -77,9 +78,11 @@ def native_platform():
 
 
 def check_disc(folder):
-    missing = [name for name in ("sys/main.dol", "sys/boot.bin", "sys/fst.bin", "tmd.bin") if not (folder / name).is_file()]
+    """Stops unless the folder is an extracted Wii disc, or a GameCube one, which has no TMD."""
+    wanted = ["sys/main.dol", "sys/boot.bin", "sys/fst.bin"] + ([] if discs.is_gamecube_folder(folder) else ["tmd.bin"])
+    missing = [name for name in wanted if not (folder / name).is_file()]
     if missing:
-        fail(f"{folder} isn't an extracted Wii disc: it has no {', '.join(missing)}")
+        fail(f"{folder} isn't an extracted Wii or GameCube disc: it has no {', '.join(missing)}")
 
 
 def game_id(disc):
@@ -92,8 +95,7 @@ def game_id(disc):
 
 def title_key(disc):
     """The title ID as the console names the title's data folder, such as 00010004-52465045."""
-    tmd = (disc / "tmd.bin").read_bytes()
-    high, low = int.from_bytes(tmd[TITLE_ID_OFFSET:TITLE_ID_OFFSET + 4], "big"), int.from_bytes(tmd[TITLE_ID_OFFSET + 4:TITLE_ID_OFFSET + 8], "big")
+    high, low, _ = discs.title(disc)
     return f"{high:08x}-{low:08x}"
 
 
@@ -303,8 +305,10 @@ def main():
     (CONSOLE_BUILD / "obj").mkdir(parents=True, exist_ok=True)
     run("build the console", [sys.executable, str(RECOMP / "translate/build_file.py"), str(CONSOLE_BUILD)])
     run("compile the console", ["ninja", "-j", str(options.jobs), PROGRAM], cwd=CONSOLE_BUILD)
+    # A GameCube game reads its controllers through the serial interface, not Bluetooth.
+    bluetooth = [] if discs.is_gamecube_folder(disc) else ["--virtual-bluetooth"]
     emit = [sys.executable, str(RECOMP / "translate/emit.py"), str(disc / "sys/main.dol"), str(build / "generated"),
-            "--all-code", "--virtual-bluetooth", "--profile", str(profile)]
+            "--all-code", *bluetooth, "--profile", str(profile)]
     emit += ["--fifo-breakpoints"] if settings["fifo_breakpoints"] else []
     emit += ["--scale", settings["scale"]] if settings.get("scale") else []
     for path in discovered:

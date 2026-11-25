@@ -22,6 +22,7 @@
 #include <stdlib.h>
 
 #include "cpu.h"
+#include "hardware.h"
 #include "interp.h"
 
 #define OE_BIT 0x400u
@@ -586,6 +587,7 @@ void interpret(uint32_t address) {
   uint32_t pc = address, entry_link = cpu.lr, entry_stack = cpu.r[1];
   for (;;) {
     if (!can_hold_code(pc) || pc & 3) bad_address(pc);
+    if (title_counts_work) interrupt_budget--;  // A cycle each, where translated code is charged Dolphin's costs.
     uint32_t word = rd32(pc), next = pc + 4, target;
     switch (word >> 26) {
       case 17:  // sc

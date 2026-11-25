@@ -6,6 +6,7 @@
 int gx_efb_pokes_waiting;
 void gx_efb_send_pokes(void) {}
 void stage_add(int s, uint64_t t) {}
+void stage_note(int kind) {}
 const Title *title = &(Title){0};
 void poll_interrupts(void) {}
 void interrupts_turned_on(void) {}

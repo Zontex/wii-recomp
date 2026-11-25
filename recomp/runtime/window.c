@@ -177,6 +177,10 @@ void window_create(void) {
   glfwSetCursorPosCallback(window, on_mouse_move);
   glfwSetMouseButtonCallback(window, on_mouse_button);
   gx_backend->window_ready(window);
+  // WII_RECOMP_FRONT=1 brings the window to the front as it opens, for a game started by
+  // a tool rather than by hand: a Mac slows a program whose window isn't the one in use.
+  const char *front = getenv("WII_RECOMP_FRONT");
+  if (front && front[0] && front[0] != '0') glfwFocusWindow(window);
   const char *wanted = getenv("WII_RECOMP_FULLSCREEN");
   if (wanted && wanted[0] && wanted[0] != '0') set_fullscreen(1);
 }

@@ -85,6 +85,7 @@ void console_start(const char *program, const char *folder, uint64_t start, Boot
   set_default("WII_RECOMP_REMOTE_SLOTS", "remotes.txt");
   set_default("WII_RECOMP_CONTROLLERS", "controllers.ini");
   set_default("WII_RECOMP_CERTIFICATES", "certificates");
+  set_default("WII_RECOMP_MEMORY_CARD_A", "memory-card-a.raw");  // GameCube saves, in slot A.
   char path[PATH_MAX * 2];
   snprintf(path, sizeof path, "%s/cache", console_folder);
   mkdir(path, 0755);
@@ -121,11 +122,12 @@ int console_has_title(uint64_t title) {
   return console_running() && !stat(path, &info);
 }
 
-// Where the disc's program starts, from its header, or 0.
+// Where the disc's program starts, from its header, or 0. The header gives its offset in
+// words on a Wii disc, in bytes on a GameCube disc.
 static uint32_t disc_entry(void) {
   uint8_t header[4], program[4];
   if (!drive_read(0x420, 4, header)) return 0;
-  uint64_t at = (uint64_t)((uint32_t)header[0] << 24 | header[1] << 16 | header[2] << 8 | header[3]) << 2;
+  uint64_t at = (uint64_t)((uint32_t)header[0] << 24 | header[1] << 16 | header[2] << 8 | header[3]) << (drive_is_gamecube() ? 0 : 2);
   if (!drive_read(at + 0xe0, 4, program)) return 0;
   return (uint32_t)program[0] << 24 | program[1] << 16 | program[2] << 8 | program[3];
 }

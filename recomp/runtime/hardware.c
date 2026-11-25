@@ -10,6 +10,7 @@
 #include "console.h"
 #include "cpu.h"
 #include "dsp.h"
+#include "dsp_accelerator.h"
 #include "gaps.h"
 #include "gx.h"
 #include "hardware.h"
@@ -47,6 +48,16 @@
 #define AR_DMA_COUNT_LOW 0xcc00502au
 #define AR_DMA_TO_MAIN 0x80000000u
 #define AR_DMA_ADDRESS_BITS 0x03ffffe0u  // 32-byte aligned, mirrored every 64 MB.
+// The audio memory's setup registers, which only a GameCube game uses: its size and
+// layout (the low four bits pick it), a ready flag the SDK's ARInit waits on, and the
+// refresh rate. Dolphin starts them at 0, ready and 156 (DSP.cpp).
+#define AR_INFO 0xcc005012u
+#define AR_MODE 0xcc005016u
+#define AR_REFRESH 0xcc00501au
+#define AR_READY 1u
+#define AR_REFRESH_DEFAULT 156u
+#define AR_INFO_MIRRORED 4u  // Writes to the first 4 MB also land 4 MB on (Dolphin's DSP.cpp).
+#define AR_MIRROR_BYTES 0x400000u
 #define MEM2_START 0x90000000u
 #define TIME_BASE_TICKS_PER_SECOND 60750000ull
 #define PI_HARDWARE_REVISION 0xcc00302cu
@@ -112,10 +123,11 @@ static int first_touch(const char *kind, uint32_t address, uint32_t value) {
 enum { READS = 1, WRITES = 2 };
 static const struct { uint32_t start, end; int on; const char *id; } unmodelled[] = {
   {0xcc001018u, 0xcc001030u, READS, "gx.pe_performance_counters"},
+  {0xcc006000u, 0xcc006028u, READS | WRITES, "hw.registers_0xcd006000"},  // The disc drive, outside GameCube mode.
 };
 
 static void note_unmodelled(uint32_t address, int on, int first) {
-  if (!first) return;
+  if (!first || (gamecube_mode && (address & 0xffffff) - 0x6000u < 0x28u)) return;
   for (size_t i = 0; i < sizeof unmodelled / sizeof *unmodelled; i++) {
     if (address >= unmodelled[i].start && address < unmodelled[i].end && (unmodelled[i].on & on)) gap_hit(unmodelled[i].id, address);
   }
@@ -128,10 +140,17 @@ void hardware_start(void) {
   registers = calloc(REGISTER_SPACE, 1);
   seen = calloc(REGISTER_SPACE, 1);
   put(AI_CONTROL, AI_DMA_32KHZ, 4);  // Audio DMA at 32 kHz, as Dolphin starts it.
+  if (gamecube_mode) {
+    di_start();
+    exi_start();
+    dsp_accelerator_use_aram(1);
+    put(AR_MODE, AR_READY, 2);
+    put(AR_REFRESH, AR_REFRESH_DEFAULT, 2);
+  }
 }
 
 void raise_irq(int bit) {
-  static const char *const names[32] = {[IRQ_SI] = "irq serial", [IRQ_EXI] = "irq exi", [IRQ_AI] = "irq audio", [IRQ_DSP] = "irq dsp", [IRQ_VI] = "irq retrace",
+  static const char *const names[32] = {[IRQ_DI] = "irq disc", [IRQ_SI] = "irq serial", [IRQ_EXI] = "irq exi", [IRQ_AI] = "irq audio", [IRQ_DSP] = "irq dsp", [IRQ_VI] = "irq retrace",
                                         [IRQ_PE_TOKEN] = "irq token", [IRQ_PE_FINISH] = "irq draw done", [IRQ_CP] = "irq fifo", [IRQ_IPC] = "irq ipc"};
   if (timeline_on && !(cause & (1u << bit))) timeline_mark(names[bit & 31] ? names[bit & 31] : "irq other", 'i');
   cause |= 1u << bit;
@@ -216,12 +235,18 @@ void locked_cache_transfer(void) {
   cpu.spr[SPR_CACHE_DMA_LOW] = low & ~(uint32_t)CACHE_DMA_TRIGGER;
 }
 
-// Copies between main memory and MEM2 at once, then flags the accelerator interrupt.
+// Copies between main memory and MEM2 at once, then flags the accelerator interrupt. In
+// GameCube mode the far side is the 16 MB of audio memory, kept at the start of MEM2.
+// Past it is the expansion port, where nothing is plugged in: as with Dolphin's empty
+// port, nothing moves either way, which is how the SDK finds there's no more memory.
 static void accelerator_dma(void) {
   uint32_t count = get(AR_DMA_COUNT, 4), bytes = count & AR_DMA_ADDRESS_BITS;
   uint32_t main_address = get(AR_DMA_MAIN_ADDRESS, 4) & AR_DMA_ADDRESS_BITS;
   uint32_t far_address = get(AR_DMA_FAR_ADDRESS, 4) & AR_DMA_ADDRESS_BITS;
-  if (bytes) {
+  if (bytes && gamecube_mode && far_address >= ARAM_BYTES) {
+  } else if (bytes && gamecube_mode && far_address + bytes > ARAM_BYTES) {
+    gap_hit("hw.aram", far_address);  // Across the audio memory's end.
+  } else if (bytes) {
     uint8_t *main_memory = host(0x80000000u | main_address), *main_last = host(0x80000000u | (main_address + bytes - 1));
     uint8_t *far = host(MEM2_START | far_address), *far_last = host(MEM2_START | (far_address + bytes - 1));
     if (!main_memory || !far || main_last != main_memory + bytes - 1 || far_last != far + bytes - 1) {
@@ -230,6 +255,10 @@ static void accelerator_dma(void) {
       memmove(main_memory, far, bytes);
     } else {
       memmove(far, main_memory, bytes);
+      uint32_t mirrored = far_address < AR_MIRROR_BYTES ? AR_MIRROR_BYTES - far_address : 0;
+      if (gamecube_mode && (get(AR_INFO, 2) & 0xf) == AR_INFO_MIRRORED && mirrored) {
+        memmove(far + AR_MIRROR_BYTES, main_memory, bytes < mirrored ? bytes : mirrored);
+      }
     }
   }
   put(AR_DMA_MAIN_ADDRESS, main_address + bytes, 4);
@@ -319,7 +348,9 @@ uint32_t hw_read(uint32_t address, int bytes) {
   else if (address == PI_HARDWARE_REVISION) value = HARDWARE_REVISION;
   else if (address == DSP_CONTROL) value = (value & ~DSP_CONTROL_OWN) | (dsp_control_read() & DSP_CONTROL_OWN);
   else if (dsp_read(address, bytes, &value) || audio_dma_read(address, bytes, &value)) {}
-  else if (!si_read(address, &value) && !exi_read(address, &value) && !ipc_read(address, &value)) graphics_read(address, &value);
+  else if (!di_read(address, &value) && !si_read(address, &value) && !exi_read(address, &value) && !ipc_read(address, &value)) {
+    graphics_read(address, &value);
+  }
   note_unmodelled(address, READS, first_touch("read ", address, value));
   return value;
 }
@@ -338,7 +369,10 @@ void hw_write(uint32_t address, uint32_t value, int bytes) {
     cause &= ~value;
     return;
   }
-  if (si_write(address, value) || exi_write(address, value) || ipc_write(address, value) || graphics_write(address, value, bytes)) return;
+  if (di_write(address, value) || si_write(address, value) || exi_write(address, value) || ipc_write(address, value) ||
+      graphics_write(address, value, bytes)) {
+    return;
+  }
   if (is_register(address, AI_CONTROL)) {
     audio_control_write(value);
     return;

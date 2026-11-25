@@ -14,6 +14,7 @@
 #include "cpu.h"
 #include "debug.h"
 #include "dsp.h"
+#include "dsp_accelerator.h"
 #include "gaps.h"
 #include "zelda.h"
 
@@ -416,9 +417,11 @@ static void store_vpb(uint16_t voice_id, Vpb *vpb) {
 }
 
 // The "ARAM" sample sources. On a Wii, Dolphin reads them from main memory at the base
-// that command 0E set, whatever the program's version, and so do we.
+// that command 0E set, whatever the program's version, and so do we. A GameCube game's
+// are in its audio memory, which never needs a base.
 static uint8_t *aram_range(uint32_t offset, uint32_t bytes) {
   if (!bytes) return 0;
+  if (dsp_accelerator_uses_aram()) return memory_range(MEM2_START | (offset & (ARAM_BYTES - 1)), bytes);
   return memory_range(r.aram_base_addr + offset, bytes);
 }
 

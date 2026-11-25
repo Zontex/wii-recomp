@@ -73,9 +73,9 @@ class Masking(unittest.TestCase):
 class Resolving(unittest.TestCase):
     TARGET = [ADD, NOP, ADD, BLR]
 
-    def resolve(self, placed, entries, data=b""):
+    def resolve(self, placed, entries, data=b"", gamecube=False):
         program = FakeProgram(placed, data)
-        return resolve(program, program.functions, entries)
+        return resolve(program, program.functions, entries, gamecube=gamecube)
 
     def test_same_function_at_another_address_is_found(self):
         entries = [entry("panic", self.TARGET, body="guest_panic();")]
@@ -103,6 +103,25 @@ class Resolving(unittest.TestCase):
         with self.assertRaises(SystemExit):
             self.resolve({0x9000: [BLR]}, entries, BOARD_LIBRARY)
 
+    def test_wii_libraries_are_required_from_a_wii_program(self):
+        entries = [entry("remote", self.TARGET, gamecube="skip", body="")]
+        with self.assertRaises(SystemExit):
+            self.resolve({0x9000: [BLR]}, entries)
+
+    def test_wii_libraries_are_skipped_for_a_gamecube_program(self):
+        entries = [entry("remote", self.TARGET, gamecube="skip", body="")]
+        replaced, _, _ = self.resolve({0x9000: [BLR]}, entries, gamecube=True)
+        self.assertEqual(replaced, {})
+
+    def test_a_gamecube_program_may_lack_a_newer_function(self):
+        entries = [entry("fatal", self.TARGET, gamecube="warn", body="")]
+        with self.assertRaises(SystemExit):
+            self.resolve({0x9000: [BLR]}, entries)
+        replaced, _, _ = self.resolve({0x9000: [BLR]}, entries, gamecube=True)
+        self.assertEqual(replaced, {})
+        replaced, _, _ = self.resolve({0x5000: self.TARGET}, entries, gamecube=True)  # Replaced when it's there.
+        self.assertEqual(list(replaced), [0x5000])
+
     def test_function_beside_a_found_one(self):
         entries = [entry("check", [BLR], beside={"name": "send", "offset": -0x40}, body="x();"), entry("send", self.TARGET, body="")]
         replaced, _, _ = self.resolve({0x4fc0: [BLR], 0x5000: self.TARGET}, entries)
@@ -118,6 +137,12 @@ class Resolving(unittest.TestCase):
 
     def test_idle_loop_is_the_wait_near_its_offset(self):
         scheduler = [ADD, NOP, load_small(0, -25312), 0x2c000000, 0x4182fff8, BLR]  # The wait is 8 bytes in.
+        entries = [entry("scheduler", scheduler, idle_offset=12)]
+        _, idle_loops, _ = self.resolve({0x5000: scheduler}, entries)
+        self.assertEqual(list(idle_loops), [0x5008])
+
+    def test_idle_loop_compared_unsigned(self):
+        scheduler = [ADD, NOP, load_small(0, -22776), 0x28000000, 0x4182fff8, BLR]  # cmplwi, as the GameCube's libraries have it.
         entries = [entry("scheduler", scheduler, idle_offset=12)]
         _, idle_loops, _ = self.resolve({0x5000: scheduler}, entries)
         self.assertEqual(list(idle_loops), [0x5008])

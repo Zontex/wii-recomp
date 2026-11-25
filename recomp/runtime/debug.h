@@ -5,7 +5,9 @@
 enum { STAGE_STREAM, STAGE_PRESENT, STAGE_DISC, STAGE_AUDIO, STAGE_IDLE, STAGE_HANDED, STAGE_COUNT };
 // STAGE_HANDED is the game's thread waiting for the graphics thread to do something for it at
 // once: read a pixel, the bounding box or a held picture copy. Each such wait is noted by kind.
-enum { NOTE_PEEK, NOTE_POKE, NOTE_BOX, NOTE_TOUCH, NOTE_COUNT };
+// NOTE_TOKEN_READ is the game reading the draw-sync token: a game that spins on it until
+// the chip reports its frame done reads it thousands of times in a frame it waits long for.
+enum { NOTE_PEEK, NOTE_POKE, NOTE_BOX, NOTE_TOUCH, NOTE_TOKEN_READ, NOTE_COUNT };
 void stage_note(int kind);
 void stage_add(int stage, uint64_t ticks);
 void stage_frame(float gap_ms);

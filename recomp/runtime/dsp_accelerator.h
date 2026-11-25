@@ -60,6 +60,13 @@ void dsp_accelerator_set_input(DspAccelerator *accelerator, uint16_t input);
 // set come from MEM2, others from MEM1. Writes always go to MEM2, as Dolphin's do (it notes
 // this isn't checked on a Wii). Bytes outside memory read as 0 and are reported.
 // The physical address a byte comes from (or goes to, with write set), as host() takes it.
+// In GameCube mode every address is in the audio memory (ARAM) instead.
 uint32_t dsp_accelerator_wii_physical(uint32_t address, int write);
+
+// A GameCube's 16 MB of audio memory, which the console keeps at the start of MEM2, where
+// a GameCube game never looks. Addresses wrap at its end, as Dolphin's ARAM mask has them.
+#define ARAM_BYTES 0x01000000u
+void dsp_accelerator_use_aram(int on);  // GameCube mode: samples come from ARAM.
+int dsp_accelerator_uses_aram(void);
 uint8_t dsp_accelerator_wii_read(DspAccelerator *accelerator, uint32_t address);
 void dsp_accelerator_wii_write(DspAccelerator *accelerator, uint32_t address, uint8_t value);

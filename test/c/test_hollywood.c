@@ -12,6 +12,8 @@ void raise_irq(int bit) { irq_up = 1; }
 void clear_irq(int bit) { irq_up = 0; }
 int irq_pending(void) { return irq_up; }
 int drive_has_disc(void) { return disc_in; }
+int drive_is_gamecube(void) { return 0; }
+int ios_trace_all(void) { return 0; }
 int drive_read(uint64_t o, uint32_t b, uint8_t *out) { return 1; }
 int drive_read_raw(uint64_t o, uint32_t b, uint8_t *out) { return 1; }
 size_t drive_tmd(uint8_t *out, size_t limit) { return 0; }

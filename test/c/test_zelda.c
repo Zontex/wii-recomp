@@ -6,6 +6,7 @@
 #include <string.h>
 
 uint32_t hw_read(uint32_t address, int bytes) { (void)address; (void)bytes; return 0; }
+int dsp_accelerator_uses_aram(void) { return 0; }
 void hw_write(uint32_t address, uint32_t value, int bytes) { (void)address; (void)value; (void)bytes; }
 
 static struct { uint32_t mail; int interrupt; } sent[64];

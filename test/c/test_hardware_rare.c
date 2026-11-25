@@ -22,6 +22,12 @@ int audio_dma_write(uint32_t a, uint32_t v, int n) { return 0; }
 void audio_dma_reset(void) { dma_resets++; }
 int si_read(uint32_t a, uint32_t *v) { return 0; }
 int si_write(uint32_t a, uint32_t v) { return 0; }
+int di_read(uint32_t a, uint32_t *v) { return 0; }
+int di_write(uint32_t a, uint32_t v) { return 0; }
+void di_start(void) {}
+void exi_start(void) {}
+int gamecube_mode;
+void dsp_accelerator_use_aram(int on) {}
 int exi_read(uint32_t a, uint32_t *v) { return 0; }
 int exi_write(uint32_t a, uint32_t v) { return 0; }
 int ipc_read(uint32_t a, uint32_t *v) { return 0; }
@@ -124,6 +130,29 @@ static void test_accelerator_dma(void) {
   CHECK_EQ(gaps, 0);
 }
 
+// In GameCube mode the far side is the 16 MB of audio memory at the start of MEM2: past
+// it is the empty expansion port, where nothing moves; its setup registers say it's ready;
+// and in the mirrored layout a write to the first 4 MB lands 4 MB on too.
+static void test_gamecube_audio_memory(void) {
+  gamecube_mode = 1;
+  hardware_start();
+  CHECK_EQ(hw_read(0xcc005016u, 2), 1);  // Ready, which ARInit waits for.
+  for (uint32_t i = 0; i < 32; i++) wr8(0x80003000u + i, 0xa5);
+  hw_write(0xcc005020u, 0x00003000u, 4);
+  hw_write(0xcc005024u, 0x01000000u, 4);  // Just past the audio memory.
+  hw_write(0xcc005028u, 32, 4);
+  CHECK_EQ(rd32(0x91000000u), 0);
+  hw_write(0xcc005012u, 4, 2);  // The mirrored layout.
+  hw_write(0xcc005020u, 0x00003000u, 4);
+  hw_write(0xcc005024u, 0x00000100u, 4);
+  hw_write(0xcc005028u, 32, 4);
+  CHECK_EQ(rd32(0x90000100u), 0xa5a5a5a5u);
+  CHECK_EQ(rd32(0x90400100u), 0xa5a5a5a5u);
+  hw_write(DSP, 0x20, 2);
+  CHECK_EQ(gaps, 0);
+  gamecube_mode = 0;
+}
+
 // The processor's own bits go to dsp.c. Its mail interrupt shares the line, and a reset
 // stops audio DMA, as Dolphin's DSP.cpp does.
 static void test_dsp_control(void) {
@@ -162,6 +191,7 @@ int main(void) {
   test_reset_button();
   test_audio_interrupt();
   test_accelerator_dma();
+  test_gamecube_audio_memory();
   test_dsp_control();
   test_serial_buffer();
   test_dtv_status();
