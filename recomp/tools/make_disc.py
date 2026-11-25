@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pack an extracted Wii disc and its native code into one recompiled disc image.
+"""Pack an extracted Wii or GameCube disc and its native code into one recompiled disc image.
 
 make_disc.py <extracted folder> <image.wrd> --native <platform>=<title library> [--native ...]
 
@@ -16,12 +16,19 @@ Layout, little-endian:
 Kinds: 1 partition data at a disc offset, 2 the disc's unencrypted area at a raw offset,
 3 ticket, 4 TMD, 5 certificates, 6 native code (name: platform), 7 shader recipes for
 any platform (recomp/runtime/gx_recipes.c). Native code and recipes come last.
+
+A GameCube disc has no partitions, no unencrypted area apart from its data, and no
+ticket or TMD: its files are one partition at their own disc offsets, and its ID (in
+boot.bin, at disc offset 0) is what tells the console it's a GameCube disc.
 """
 import argparse
 import os
 import struct
 import sys
 from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "translate"))
+import discs  # noqa: E402
 
 MAGIC, VERSION = b"WIIRDISC", 1
 HEADER = struct.Struct("<8sIIQ40x")
@@ -40,12 +47,14 @@ def word(data, at):
 
 
 def partition_files(extracted):
-    """(disc offset, path) for everything in the data partition, from its own file table."""
+    """(disc offset, path) for everything in the data partition, from its own file table.
+    A Wii disc gives offsets in 4-byte words, a GameCube disc in bytes."""
     system = extracted / "sys"
     boot = (system / "boot.bin").read_bytes()
     table = (system / "fst.bin").read_bytes()
+    shift = 0 if discs.is_gamecube(boot) else 2
     found = [(0, system / "boot.bin"), (BI2_AT, system / "bi2.bin"), (APPLOADER_AT, system / "apploader.img"),
-             (word(boot, BOOT_DOL_OFFSET) << 2, system / "main.dol"), (word(boot, BOOT_FST_OFFSET) << 2, system / "fst.bin")]
+             (word(boot, BOOT_DOL_OFFSET) << shift, system / "main.dol"), (word(boot, BOOT_FST_OFFSET) << shift, system / "fst.bin")]
     total = word(table, 8)
     names = table[total * 12:]
 
@@ -57,7 +66,7 @@ def partition_files(extracted):
             if entry[0]:
                 index = walk(index + 1, word(entry, 8), folder / name)
             else:
-                found.append((word(entry, 4) << 2, folder / name))
+                found.append((word(entry, 4) << shift, folder / name))
                 index += 1
         return index
 
@@ -78,9 +87,10 @@ def write_image(extracted, output, natives, shaders=None):
     check_no_overlap(files)
     disc = extracted / "disc"
     pieces = [(PARTITION, offset, path, path.name) for offset, path in files]
-    pieces += [(RAW, 0, disc / "header.bin", "header.bin"), (RAW, REGION_AT, disc / "region.bin", "region.bin")]
-    pieces += [(TICKET, 0, extracted / "ticket.bin", "ticket.bin"), (TMD, 0, extracted / "tmd.bin", "tmd.bin"),
-               (CERTIFICATES, 0, extracted / "cert.bin", "cert.bin")]
+    if not discs.is_gamecube_folder(extracted):
+        pieces += [(RAW, 0, disc / "header.bin", "header.bin"), (RAW, REGION_AT, disc / "region.bin", "region.bin")]
+        pieces += [(TICKET, 0, extracted / "ticket.bin", "ticket.bin"), (TMD, 0, extracted / "tmd.bin", "tmd.bin"),
+                   (CERTIFICATES, 0, extracted / "cert.bin", "cert.bin")]
     pieces += [(NATIVE, 0, Path(library), platform) for platform, library in natives]
     pieces += [(SHADERS, 0, Path(shaders), "shaders")] if shaders else []
     missing = [str(path) for _, _, path, _ in pieces if not path.is_file()]

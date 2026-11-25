@@ -99,6 +99,12 @@ class Runtime(unittest.TestCase):
     def test_clock_chip_on_the_expansion_bus(self):
         self.build_and_run([HERE / "c/test_exi.c"])
 
+    def test_gamecube_disc_drive_registers(self):
+        self.build_and_run([HERE / "c/test_di.c"])
+
+    def test_controller_ports(self):
+        self.build_and_run([HERE / "c/test_si.c"])
+
     def test_system_calls_and_floating_point_modes(self):
         self.build_and_run([HERE / "c/test_processor.c", RUNTIME / "processor.c"])
 

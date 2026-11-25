@@ -14,9 +14,13 @@
 #include "titles.h"
 
 #define MENU_TITLE 0x0000000100000002ull
+// The Wii Menu starts a GameCube disc by launching BC, with LAUNCH_BC or LAUNCH_TITLE,
+// which starts MIOS, which puts the Wii in GameCube mode and boots the disc.
+#define BC_TITLE 0x0000000100000100ull
+#define MIOS_TITLE 0x0000000100000101ull
 #define TMD_IOS_OFFSET 0x184
 
-enum { LAUNCH_TITLE = 0x08, DI_GET_TICKET_VIEW = 0x1b, GET_TITLE_DIR = 0x1d, GET_TITLE_ID = 0x20, CHECK_KOREA_REGION = 0x45, TITLE_ID_BYTES = 8, TITLE_DIR_BYTES = 30 };
+enum { LAUNCH_TITLE = 0x08, DI_GET_TICKET_VIEW = 0x1b, LAUNCH_BC = 0x25, GET_TITLE_DIR = 0x1d, GET_TITLE_ID = 0x20, CHECK_KOREA_REGION = 0x45, TITLE_ID_BYTES = 8, TITLE_DIR_BYTES = 30 };
 
 uint64_t es_read_title(uint32_t address) { return (uint64_t)rd32(address) << 32 | rd32(address + 4); }
 
@@ -67,18 +71,30 @@ static uint64_t disc_ios(void) {
 // jumping in: the reload is where the console hands over to the disc. Games go back to
 // the Wii Menu by launching it, and the menu starts channels the same way. A title
 // that isn't installed with native code can't run, so it's refused, and reported.
-// Without a console, a title started on its own has nothing to go to.
-static int launch_title(const IosVectors *vectors) {
-  uint32_t in = ios_in_sized(vectors, 0, TITLE_ID_BYTES);
-  if (!in) return ES_EINVAL;
-  uint64_t id = es_read_title(in);
+// Without a console, a title started on its own has nothing to go to. For a GameCube
+// disc the menu launches BC, and the console starts the disc in its GameCube mode, as
+// Dolphin does, rather than running BC and MIOS themselves.
+static int launch(uint64_t id) {
   fprintf(stderr, "es: launch %08x-%08x\n", (uint32_t)(id >> 32), (uint32_t)id);
   if (!console_running()) return ES_EINVAL;
   uint64_t running = (uint64_t)title->title_high << 32 | title->title_low;
   if (id == MENU_TITLE || console_has_title(id)) console_restart(id);
   if (running == MENU_TITLE && drive_has_disc() && id == disc_ios()) console_restart(CONSOLE_DISC);
-  gap_hit("ios.launch_untranslated_title", (uint32_t)id);
+  int gamecube_mode = id == BC_TITLE || id == MIOS_TITLE;
+  if (running == MENU_TITLE && gamecube_mode && drive_is_gamecube()) console_restart(CONSOLE_DISC);
+  gap_hit(gamecube_mode ? "ios.mios_gamecube_mode" : "ios.launch_untranslated_title", (uint32_t)id);
   return ES_EINVAL;
+}
+
+static int launch_title(const IosVectors *vectors) {
+  uint32_t in = ios_in_sized(vectors, 0, TITLE_ID_BYTES);
+  return in ? launch(es_read_title(in)) : ES_EINVAL;
+}
+
+// BC by its own request, as Dolphin's ES has it.
+static int launch_bc(const IosVectors *vectors) {
+  (void)vectors;
+  return launch(BC_TITLE);
 }
 
 // Whether this is a Korean console. The menu asks, to spot one changed to another region.
@@ -86,6 +102,7 @@ static int check_korea_region(const IosVectors *vectors) { return ES_EINVAL; }
 
 static const EsRequest requests[] = {
   {LAUNCH_TITLE, 2, 0, launch_title},
+  {LAUNCH_BC, 0, 0, launch_bc},
   {GET_TITLE_DIR, 1, 1, get_title_dir},
   {GET_TITLE_ID, 0, 1, get_title_id},
   {DI_GET_TICKET_VIEW, 1, 1, di_get_ticket_view},

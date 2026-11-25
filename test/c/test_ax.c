@@ -304,5 +304,12 @@ int main(void) {
   test_updates();
   test_aux_uploads_and_remotes();
   test_gamecube();
+  // In GameCube mode the accelerator's addresses are in the 16 MB of audio memory, kept
+  // at the start of MEM2.
+  dsp_accelerator_use_aram(1);
+  CHECK_EQ(dsp_accelerator_wii_physical(0x01234567u, 0), MEM2_START | 0x00234567u);
+  CHECK_EQ(dsp_accelerator_wii_physical(0x00000040u, 1), MEM2_START | 0x40u);
+  dsp_accelerator_use_aram(0);
+  CHECK_EQ(dsp_accelerator_wii_physical(0x00000040u, 0), 0x40u);
   return finish();
 }

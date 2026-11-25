@@ -3,8 +3,14 @@
 #include <stdint.h>
 
 enum {
-  IRQ_RESET_SWITCH = 1, IRQ_SI = 3, IRQ_EXI = 4, IRQ_AI = 5, IRQ_DSP = 6, IRQ_VI = 8, IRQ_PE_TOKEN = 9, IRQ_PE_FINISH = 10, IRQ_CP = 11, IRQ_IPC = 14,
+  IRQ_RESET_SWITCH = 1, IRQ_DI = 2, IRQ_SI = 3, IRQ_EXI = 4, IRQ_AI = 5, IRQ_DSP = 6, IRQ_VI = 8, IRQ_PE_TOKEN = 9, IRQ_PE_FINISH = 10, IRQ_CP = 11, IRQ_IPC = 14,
 };
+
+// The running game is a GameCube game, which the Wii plays in its GameCube mode: the game
+// reaches the disc drive, controllers, memory cards and audio memory itself, through
+// their registers, and its clocks are a GameCube's. Set from the disc it boots (loader.c).
+extern int gamecube_mode;
+void guest_memory_open_virtual(void);  // GameCube mode: 0x7e000000's 32 MB, as plain memory (guest_memory.c).
 
 void hardware_start(void);
 void raise_irq(int bit);
@@ -24,9 +30,16 @@ uint32_t hw_peek(uint32_t address, int bytes);
 void hw_poke(uint32_t address, uint32_t value, int bytes);
 
 // Blocks claim the registers they handle, and return 1 if they did.
+// The disc drive's registers, which only a GameCube game uses (di.c). Both answer 0 for
+// an address that isn't theirs, or outside GameCube mode.
+int di_read(uint32_t address, uint32_t *value);
+int di_write(uint32_t address, uint32_t value);
+void di_start(void);
 int si_read(uint32_t address, uint32_t *value);
+void si_poll(void);  // A field begins: in GameCube mode the controller ports are polled (vi.c).
 int si_write(uint32_t address, uint32_t value);
 int exi_read(uint32_t address, uint32_t *value);
+void exi_start(void);  // GameCube mode: puts the memory card in slot A (exi.c).
 int exi_write(uint32_t address, uint32_t value);
 int ipc_read(uint32_t address, uint32_t *value);
 int ipc_write(uint32_t address, uint32_t value);

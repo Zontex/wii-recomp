@@ -26,6 +26,7 @@ import sys
 from collections import Counter
 from pathlib import Path
 
+import discs
 from decode import Program, name_of
 import modules
 from functions import add_starts, add_unreached_code, branch_target, find_functions, read_starts, signed
@@ -41,8 +42,6 @@ REPLACED = {}
 IDLE_LOOPS = {}
 # Replacements that skip the game's Wii Remote code, for games not on virtual Bluetooth.
 DIRECT_INPUT = {"input_read();", "input_probe();"}
-IOS_OFFSET = 0x184  # The IOS the title asks for, in its TMD.
-TITLE_ID_OFFSET = 0x18c  # In the disc's tmd.bin.
 DECREMENTER = 22
 CACHE_DMA_LOW = 923
 WRITE_PIPE_ADDRESS = 921  # WPAR: where the CPU's write-gather pipe sends its bursts.
@@ -771,11 +770,10 @@ def picture_scale():
     return numerator, denominator
 
 
-def title_description(program_bytes, tmd, values, function_count, module_count, apploader, counting=False):
-    """What the console needs to know about this title, as the one symbol its library exports."""
-    high = int.from_bytes(tmd[TITLE_ID_OFFSET:TITLE_ID_OFFSET + 4], "big")
-    low = int.from_bytes(tmd[TITLE_ID_OFFSET + 4:TITLE_ID_OFFSET + 8], "big")
-    ios = int.from_bytes(tmd[IOS_OFFSET + 4:IOS_OFFSET + 8], "big")
+def title_description(program_bytes, title, values, function_count, module_count, apploader, counting=False):
+    """What the console needs to know about this title, as the one symbol its library
+    exports. `title` is (title ID high word, low word, IOS), from discs.title."""
+    high, low, ios = title
     return ('#include "../../runtime/title.h"\n'
             "extern const TitleFunction title_functions[];\n"
             "extern uint32_t title_counts[];\n"
@@ -1133,7 +1131,8 @@ def main():
         # What's dropped below needn't be found at all: a program may have no KPAD, as some
         # channels haven't, and nothing of it would be replaced anyway.
         entries = [dict(entry, group="optional") if virtual_bluetooth_keeps(entry) else entry for entry in entries]
-    replaced, idle_loops, values = resolve(program, functions, entries)
+    # A GameCube program has no Wii Remote library to stand in for.
+    replaced, idle_loops, values = resolve(program, functions, entries, gamecube=discs.is_gamecube_folder(dol.parent.parent))
     if "--virtual-bluetooth" in sys.argv:
         # The program's own controller code runs, including an older KPADRead left as a stub,
         # and so does its board code, which the simulated board answers. WPADRead reads the
@@ -1187,7 +1186,7 @@ def main():
     print("not yet translated:", unknown.most_common(40))
     module_count = write_modules(found, out, exports, starts, module_counts)
     apploader = emit_apploader(dol.parent, out, program)
-    write_if_changed(out / "title.c", title_description(dol.read_bytes(), (dol.parent.parent / "tmd.bin").read_bytes(), values,
+    write_if_changed(out / "title.c", title_description(dol.read_bytes(), discs.title(dol.parent.parent), values,
                                                         len(addresses), module_count, apploader, counting))
 
 

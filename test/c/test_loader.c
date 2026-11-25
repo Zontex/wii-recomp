@@ -38,6 +38,7 @@ static uint32_t written(uint32_t address) {
 }
 
 static uint8_t table[100];
+extern int gamecube_mode;
 
 static void start(const char *game_id) {
   Boot boot = {.table = table, .table_bytes = sizeof table};
@@ -85,5 +86,31 @@ int main(void) {
   video_setting = "NTSC";
   start("RMCP01");
   CHECK_EQ(rd32(0x800000cc), 0);
+
+  // A GameCube disc: its own ID with the GameCube mark, the file table at the top of main
+  // memory with the arena below it, 16 MB of audio memory, a GameCube's clocks, and
+  // nothing of the Wii's.
+  video_setting = 0;
+  memset(host(0x80003100u), 0, 0x100);
+  memset(host(0x80003800u), 0, 0x100);
+  gamecube_mode = 1;
+  Boot boot = {.table = table, .table_bytes = sizeof table};
+  memcpy(boot.header, "GTSE01", 6);
+  boot.header[0x1c] = 0xc2, boot.header[0x1d] = 0x33, boot.header[0x1e] = 0x9f, boot.header[0x1f] = 0x3d;
+  set_up_low_memory(&boot);
+  CHECK_EQ(rd32(0x8000001c), 0xc2339f3du);
+  CHECK_EQ(rd32(0x80000018), 0);
+  CHECK_EQ(rd32(0x8000002c), 0x10000006u);
+  CHECK_EQ(rd32(0x800000d0), 0x01000000u);
+  CHECK_EQ(rd32(0x800000f8), 162000000u);
+  CHECK_EQ(rd32(0x800000fc), 486000000u);
+  CHECK_EQ(rd32(0x800000cc), 0);  // An American disc: NTSC.
+  table_at = (0x81800000u - (uint32_t)sizeof table) & ~31u;
+  CHECK_EQ(rd32(0x80000038), table_at);
+  CHECK_EQ(rd32(0x80000034), table_at);
+  CHECK(!memcmp(host(table_at), table, sizeof table));
+  CHECK_EQ(rd32(0x80003100), 0);  // No Wii memory sizes, IOS or settings.
+  CHECK_EQ(rd32(0x80003140), 0);
+  CHECK_EQ(rd8(0x80003800u), 0);
   return finish();
 }

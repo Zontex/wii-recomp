@@ -12,6 +12,9 @@
 int drive_insert(const char *path);
 void drive_eject(void);
 int drive_has_disc(void);
+// Whether the disc in the drive is a GameCube disc (its ID's mark at 0x1c), which the
+// console plays in GameCube mode. Its "data partition" is then the whole disc.
+int drive_is_gamecube(void);
 
 // Reads the data partition, at its own offsets. Returns 0 if any of it can't be read.
 int drive_read(uint64_t offset, uint32_t bytes, uint8_t *out);

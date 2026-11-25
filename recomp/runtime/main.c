@@ -151,7 +151,8 @@ static void use_folders_beside(const char *program) {
   const char *names[][2] = {{"WII_RECOMP_SAVES", "saves"}, {"WII_RECOMP_SHADER_CACHE", "shader-cache"},
                             {"WII_RECOMP_TITLE_DATA", "title-data"}, {"WII_RECOMP_CACHE", "native-cache"},
                             {"WII_RECOMP_GAPS", "gaps.txt"}, {"WII_RECOMP_REMOTE_SLOTS", "remotes.txt"},
-                            {"WII_RECOMP_CONTROLLERS", "controllers.ini"}, {"WII_RECOMP_CERTIFICATES", "certificates"}};
+                            {"WII_RECOMP_CONTROLLERS", "controllers.ini"}, {"WII_RECOMP_CERTIFICATES", "certificates"},
+                            {"WII_RECOMP_MEMORY_CARD_A", "memory-card-a.raw"}};
   for (size_t i = 0; i < sizeof names / sizeof *names; i++) {
     snprintf(path, sizeof path, "%s/%s", folder, names[i][1]);
     setenv(names[i][0], path, 0);
@@ -224,6 +225,7 @@ int main(int count, char **arguments) {
   gx_choose_scale();
   profile_start();
   guest_memory_init();
+  if (gamecube_mode) guest_memory_open_virtual();
   time_start();
   hardware_start();
   dsp_start();
@@ -231,11 +233,14 @@ int main(int count, char **arguments) {
   files_start(count > 2 ? arguments[2] : count == 2 ? default_storage() : 0);
   system_files_make();
   console_settings_make((char)boot.header[3]);
-  files_make_title_folders((uint64_t)title->title_high << 32 | title->title_low);
+  if (!gamecube_mode) files_make_title_folders((uint64_t)title->title_high << 32 | title->title_low);  // Wii storage, which a GameCube game never uses.
   pthread_attr_t attributes;
   pthread_attr_init(&attributes);
   pthread_attr_setstacksize(&attributes, STACK_BYTES);
   controllers_start();
+  // In GameCube mode a controller maps as a Classic Controller, whose buttons sit where a
+  // GameCube controller's do, and si.c reads player 1 as one.
+  if (gamecube_mode) input_attach(0, ATTACHMENT_CLASSIC);
   window_create();
   pads_start();  // On this thread, which the Mac's controller frameworks need, as the window does.
   if (getenv("WII_RECOMP_CONTROL")) input_start_control_pipe(getenv("WII_RECOMP_CONTROL"));

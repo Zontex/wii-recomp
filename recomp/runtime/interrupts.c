@@ -9,6 +9,7 @@
 
 #include "timeline.h"
 #include "audio.h"
+#include "host_sleep.h"
 #include "bluetooth.h"
 #include "title.h"
 #include "cpu.h"
@@ -83,7 +84,12 @@ void time_start(void) {
 
 uint64_t time_base(void) { return monotonic_ticks() + time_base_offset; }
 
-uint64_t guest_time_base(void) { return time_base() + guest_time_offset; }
+// In GameCube mode the game's clock runs at a GameCube's 40.5 MHz, two thirds of the
+// Wii's 60.75: its time base and decrementer, and nothing else. The console's own
+// deadlines stay on time_base.
+static uint64_t guest_ticks(uint64_t ticks) { return gamecube_mode ? ticks * 2 / 3 : ticks; }
+
+uint64_t guest_time_base(void) { return guest_ticks(time_base()) + guest_time_offset; }
 
 // A game setting the clock moves what it reads and nothing else. Every deadline here
 // runs on time_base, and the decrementer doesn't follow the time base on real hardware.
@@ -94,11 +100,15 @@ void guest_time_base_set(int high_half, uint32_t value) {
 }
 
 void decrementer_set(uint32_t value) {
-  decrementer_deadline = time_base() + (int32_t)value;
+  int64_t ticks = (int32_t)value;
+  decrementer_deadline = time_base() + (uint64_t)(gamecube_mode ? ticks * 3 / 2 : ticks);
   decrementer_armed = 1;
 }
 
-uint32_t decrementer_get(void) { return (uint32_t)(decrementer_deadline - time_base()); }
+uint32_t decrementer_get(void) {
+  int64_t left = (int64_t)(decrementer_deadline - time_base());
+  return (uint32_t)(gamecube_mode ? left * 2 / 3 : left);
+}
 
 // One waiting, or a timer that ran out while interrupts were off, is taken right here, as
 // the processor takes it the moment mtmsr turns them on. Mario & Sonic at the London 2012
@@ -173,9 +183,8 @@ void idle_wait(void) {
   // sleeping past a timer that's due could put it off for good.
   int timer_due = decrementer_armed && decrementer_deadline <= now;
   if (!irq_pending() && !timer_due) {
-    struct timespec pause = {0, (long)(wait * NANOSECONDS / TIME_BASE_HZ)};
     TIMELINE_BEGIN("game idle");
-    nanosleep(&pause, 0);
+    host_sleep(wait * NANOSECONDS / TIME_BASE_HZ);  // Not a plain nanosleep, which a Mac can stretch (host_sleep.h).
     TIMELINE_END("game idle");
     stage_add(STAGE_IDLE, time_base() - now);
   }

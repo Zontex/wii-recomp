@@ -4,6 +4,7 @@
 #include <unistd.h>
 #include "../harness.h"
 void debug_poll(uint64_t s) {}
+int gamecube_mode;
 const Title *title = &(Title){0};
 void bluetooth_update(uint64_t now) {}
 void stage_add(int s, uint64_t t) {}
@@ -55,6 +56,16 @@ int main(void) {
   CHECK(runtime_after - runtime_before < TIME_BASE_HZ);
   left = decrementer_get();
   CHECK(left <= TIME_BASE_HZ && left > TIME_BASE_HZ / 2);
+  // In GameCube mode the game's clock runs at 40.5 MHz, two thirds of the Wii's, and its
+  // decrementer counts the same ticks.
+  gamecube_mode = 1;
+  uint64_t wii = time_base(), cube = guest_time_base() - guest_time_offset;
+  CHECK(cube >= wii * 2 / 3 && cube < wii * 2 / 3 + TIME_BASE_HZ / 100);
+  decrementer_set(40500000);  // A GameCube second.
+  left = decrementer_get();
+  CHECK(left <= 40500000 && left > 40500000 / 2);
+  CHECK(decrementer_deadline - time_base() > TIME_BASE_HZ / 2);  // A second of the console's own clock.
+  gamecube_mode = 0;
   (void)before;
   return finish();
 }

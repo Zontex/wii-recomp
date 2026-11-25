@@ -103,6 +103,14 @@ void dispatch_forget_module(uint32_t address, int module) {
 }
 
 static __attribute__((noinline)) void run_untranslated(uint32_t address) {
+  // Code reached with address translation off, as by the rfi into real mode that the
+  // GameCube SDK's memory-mapping set-up makes: with flat memory, a physical address
+  // holds the same code as its cached address in MEM1 or MEM2. Low memory isn't code, so
+  // a call through a null pointer still stops below.
+  if (((address >> 28 == 0 && address >= 0x3100u) || address >> 28 == 1) && host(address | 0x80000000u)) {
+    dispatch(address | 0x80000000u);
+    return;
+  }
   // A module the program just linked, or a disc's apploader, translated ahead of time.
   if (modules_bind(address) || apploader_bind(address)) {
     GuestFunction run = translated_at(address);

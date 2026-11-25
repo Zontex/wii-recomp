@@ -1,4 +1,7 @@
-// The expansion bus's clock chip, through the real exi.c, driven as the SDK drives it.
+// The expansion bus's clock chip, through the real exi.c, driven as the SDK drives it,
+// and in GameCube mode the memory card in slot A, in a file of its own.
+#include <stdio.h>
+#include <unistd.h>
 #include "../harness.h"
 
 uint32_t hw_read(uint32_t address, int bytes) { (void)address; (void)bytes; return 0; }
@@ -20,6 +23,7 @@ int files_system_setting(const char *name, uint8_t *out, size_t limit) {
 const unsigned char data_font_western[64] = "Yay0, a western font made up for the test";
 const unsigned char data_font_japanese[64] = "Yay0, a Japanese font made up for the test";
 const unsigned data_font_western_bytes = 64, data_font_japanese_bytes = 64;
+int gamecube_mode;
 #include "exi.c"
 
 enum { EXI = 0xcd006800u, CLOCK_CHIP = 2u << 7, BUFFER = 0x80001000u };
@@ -128,6 +132,97 @@ static void test_boot_rom_fonts(void) {
   CHECK(gaps > before);
 }
 
+enum { CARD = 1u << 7, CARD_BUFFER = 0x80002000u, CARD_AT = 0x6000 };
+
+static uint8_t card_exchange(uint8_t out) {
+  uint32_t value;
+  exi_write(EXI + 0x10, (uint32_t)out << 24);
+  exi_write(EXI + 0x0c, control(0, READ_WRITE, 1));
+  exi_read(EXI + 0x10, &value);
+  return (uint8_t)(value >> 24);
+}
+
+// Selects the card, sends a command with its address, and leaves the card selected.
+static void card_command(uint8_t command, uint32_t address, int address_bytes) {
+  exi_write(EXI + 0x00, 0);
+  exi_write(EXI + 0x00, CARD);
+  uint8_t bytes[5] = {command, (uint8_t)(address >> 17), (uint8_t)(address >> 9), (uint8_t)(address >> 7 & 3), (uint8_t)(address & 0x7f)};
+  for (int i = 0; i < 1 + address_bytes; i++) card_exchange(bytes[i]);
+}
+
+static void dma_with_card(int direction, uint32_t memory, uint32_t bytes) {
+  exi_write(EXI + 0x04, memory & 0x01ffffff);
+  exi_write(EXI + 0x08, bytes);
+  exi_write(EXI + 0x0c, control(1, direction, 1));
+}
+
+static uint8_t file_byte(const char *path, long at) {
+  FILE *file = fopen(path, "rb");
+  int value = -1;
+  if (file && !fseek(file, at, SEEK_SET)) value = fgetc(file);
+  if (file) fclose(file);
+  return (uint8_t)value;
+}
+
+static void test_memory_card(void) {
+  char path[] = "/tmp/wii-recomp-card-XXXXXX";
+  int handle = mkstemp(path);
+  CHECK(handle >= 0);
+  close(handle);
+  unlink(path);  // Not there yet: the console makes a blank one.
+  setenv("WII_RECOMP_MEMORY_CARD_A", path, 1);
+  gamecube_mode = 1;
+  int before = gaps;
+  exi_start();
+  FILE *file = fopen(path, "rb");
+  CHECK(file != 0);
+  if (file) {
+    fseek(file, 0, SEEK_END);
+    CHECK_EQ(ftell(file), 0x200000);  // A Memory Card 251: 16 Mbit.
+    fclose(file);
+  }
+  uint32_t status;
+  exi_read(EXI, &status);
+  CHECK(status & 1u << 12);  // A device is in slot A.
+  CHECK(status & 1u << 11);  // And the insertion interrupt is up for the SDK to look.
+
+  card_command(0x00, 0, 0);  // The card's ID: its size in megabits, after a dummy byte.
+  CHECK_EQ(card_exchange(0), 0x80);
+  uint8_t id[4];
+  for (int i = 0; i < 4; i++) id[i] = card_exchange(0);
+  CHECK_EQ(id[3], 16);
+  CHECK_EQ(id[0] | id[1] | id[2], 0);
+  card_command(0x83, 0, 0);
+  CHECK_EQ(card_exchange(0) & 0x41, 0x41);  // Ready, and unlocked.
+
+  card_command(0x81, 0, 0);  // Interrupts on, as the SDK asks.
+  card_exchange(1);
+  for (int i = 0; i < 0x80; i++) wr8(CARD_BUFFER + (uint32_t)i, (uint8_t)(i ^ 0x5a));
+  card_command(0xf2, CARD_AT, 4);  // Program a page.
+  dma_with_card(WRITE, CARD_BUFFER, 0x80);
+  exi_write(EXI + 0x00, 0);  // Letting the card go finishes the command.
+  CHECK_EQ(file_byte(path, CARD_AT + 3), 3 ^ 0x5a);  // On disk at once.
+  exi_read(EXI, &status);
+  CHECK(status & 1u << 1);  // The card's interrupt.
+  card_command(0x89, 0, 0);  // Clear status: the interrupt goes.
+  exi_write(EXI + 0x00, 1u << 1);
+  exi_read(EXI, &status);
+  CHECK_EQ(status & 1u << 1, 0);
+
+  for (int i = 0; i < 0x80; i++) wr8(CARD_BUFFER + 0x100 + (uint32_t)i, 0);
+  card_command(0x52, CARD_AT, 4);  // Read it back.
+  dma_with_card(READ, CARD_BUFFER + 0x100, 0x80);
+  exi_write(EXI + 0x00, 0);
+  CHECK(!memcmp(host(CARD_BUFFER), host(CARD_BUFFER + 0x100), 0x80));
+
+  card_command(0xf1, CARD_AT, 2);  // Erase its sector.
+  exi_write(EXI + 0x00, 0);
+  CHECK_EQ(file_byte(path, CARD_AT + 3), 0xff);
+  CHECK_EQ(gaps, before);
+  gamecube_mode = 0;
+  unlink(path);
+}
+
 int main(void) {
   memory_start();
   test_sram();
@@ -135,5 +230,6 @@ int main(void) {
   test_interrupt();
   test_no_device();
   test_boot_rom_fonts();
+  test_memory_card();
   return finish();
 }

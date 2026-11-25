@@ -205,7 +205,7 @@ class AddGame(Folder):
         disc = self.folder / "disc"
         made_up_disc(disc, game_id=b"TEST01")
         tmd = bytearray((disc / "tmd.bin").read_bytes())
-        struct.pack_into(">II", tmd, add_game.TITLE_ID_OFFSET, 0x00010000, 0x54455354)
+        struct.pack_into(">II", tmd, add_game.discs.TITLE_ID_OFFSET, 0x00010000, 0x54455354)
         (disc / "tmd.bin").write_bytes(tmd)
         add_game.check_disc(disc)
         self.assertEqual(add_game.game_id(disc), "TEST01")
@@ -215,6 +215,12 @@ class AddGame(Folder):
             add_game.game_id(disc)
         with self.assertRaises(SystemExit):
             add_game.check_disc(self.folder)
+
+    def test_a_gamecube_disc_needs_no_tmd(self):
+        disc = self.folder / "gamecube"
+        made_up_disc(disc, game_id=b"GTST01", gamecube=True)
+        add_game.check_disc(disc)
+        self.assertEqual(add_game.title_key(disc), "00010000-47545354")
 
     def test_profiles_from_every_console_add_up(self):
         first, second = self.folder / "a.txt", self.folder / "b.txt"

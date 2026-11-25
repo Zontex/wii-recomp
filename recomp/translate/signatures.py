@@ -15,6 +15,7 @@ import json
 import sys
 from pathlib import Path
 
+import discs
 from decode import Program
 from functions import find_functions
 
@@ -168,14 +169,15 @@ def find_one(finder, entry, found):
     return finder.similar(entry["hashes"])
 
 
-LOAD_WORD, COMPARE_IMMEDIATE, BRANCH_CONDITIONAL = 32, 11, 16
+LOAD_WORD, COMPARE_LOGICAL_IMMEDIATE, COMPARE_IMMEDIATE, BRANCH_CONDITIONAL = 32, 10, 11, 16
 BRANCH_IF_EQUAL = (12 << 21) | (2 << 16)  # BO "if true", BI cr0's equal bit.
 
 
 def idle_loop(program, body, hint):
     """Where a function waits for a small variable to change: a load through r13, a compare
     with 0, and a branch back to the load while it's equal. Libraries of different years
-    put it at slightly different places, so the hint only chooses between several."""
+    put it at slightly different places, so the hint only chooses between several. The
+    GameCube's libraries compare it unsigned, which is the same test against 0."""
     found = []
     for address in sorted(body):
         if address + 8 not in body:
@@ -183,18 +185,21 @@ def idle_loop(program, body, hint):
         load, compare, branch = (program.word(address + i * 4) for i in range(3))
         if fields(load)[0] != LOAD_WORD or fields(load)[2] != SMALL_DATA:
             continue
-        if fields(compare)[0] != COMPARE_IMMEDIATE or fields(compare)[2] != fields(load)[1] or compare & 0xffff:
+        if fields(compare)[0] not in (COMPARE_IMMEDIATE, COMPARE_LOGICAL_IMMEDIATE) or fields(compare)[2] != fields(load)[1] or compare & 0xffff:
             continue
         if branch >> 26 == BRANCH_CONDITIONAL and branch & 0x03ff0000 == BRANCH_IF_EQUAL and signed16(branch & 0xfffc) == -8:
             found.append(address)
     return min(found, key=lambda address: abs(address - hint)) if found else None
 
 
-def resolve(program, functions, entries):
-    """Returns (replaced, idle loops, values) for a game, or stops if anything is unclear."""
+def resolve(program, functions, entries, gamecube=False):
+    """Returns (replaced, idle loops, values) for a game, or stops if anything is unclear.
+    For a GameCube program (`gamecube`, from its disc: discs.is_gamecube), an entry's
+    "gamecube" says what changes: "skip" for the Wii's own libraries, such as the Wii
+    Remote's, and "warn" for functions older libraries may not have, such as OSFatal."""
     finder = Finder(program, functions)
     has_board = BOARD_LIBRARY in program.data
-    wanted = [e for e in entries if e["group"] != "board" or has_board]
+    wanted = [e for e in entries if (e["group"] != "board" or has_board) and not (gamecube and e.get("gamecube") == "skip")]
     found = {}
     progress = True
     while progress:  # A function placed beside another waits for that one.
@@ -209,7 +214,8 @@ def resolve(program, functions, entries):
                if entry["name"] not in found and entry["group"] != "optional" and entry.get("or") not in found]
     # An entry marked warn_only only makes things clearer when found (a panic reported and
     # stopped on); without it the game's own code runs, so the build goes on and says so.
-    for name in [m for m in missing if any(e["name"] == m and e.get("warn_only") for e in wanted)]:
+    for name in [m for m in missing if any(e["name"] == m and (e.get("warn_only") or (gamecube and e.get("gamecube") == "warn"))
+                                           for e in wanted)]:
         print(f"warning: {name} not found; the game's own code runs in its place", file=sys.stderr)
         missing.remove(name)
     if missing:
@@ -244,9 +250,10 @@ def load_entries():
 
 
 def main():
-    program = Program(Path(sys.argv[1]).read_bytes())
+    dol = Path(sys.argv[1])
+    program = Program(dol.read_bytes())
     functions, _ = find_functions(program)
-    replaced, idle_loops, values = resolve(program, functions, load_entries())
+    replaced, idle_loops, values = resolve(program, functions, load_entries(), gamecube=discs.is_gamecube_folder(dol.parent.parent))
     for address, (reason, _) in sorted(replaced.items()):
         print(f"0x{address:08x} {reason}")
     print("idle loops:", [hex(a) for a in idle_loops])

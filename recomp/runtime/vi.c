@@ -126,6 +126,7 @@ void vi_update(uint64_t now) {
   if (COMES(0) || COMES(timing.odd_half_lines)) {
     graphics_retrace(vi_field_rate());
     check_shown_picture();
+    si_poll();
   }
   for (int i = 0; i < INTERRUPT_COUNT; i++) {
     uint32_t value = reg32(VI_INTERRUPTS + (uint32_t)i * 4);

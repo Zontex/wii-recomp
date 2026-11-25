@@ -1,6 +1,9 @@
 // What's in the disc drive. A disc is a sorted list of pieces, each some bytes of the
 // data partition at its own offset, read from a file: the files of an extracted disc,
 // found through the disc's own file table, or the entries of a recompiled disc image.
+// A GameCube disc has no partitions: its pieces are the whole disc at its own offsets,
+// and its header and file table give those offsets in bytes, where a Wii disc's give
+// 4-byte words.
 #include <errno.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -24,6 +27,8 @@ enum {
   REGION_AT = 0x4e000, REGION_BYTES = 0x20, DATA_PARTITION_AT = 0xf800000,
   // Every Wii disc ends its region area with this word, and the Wii Menu checks it.
   REGION_MAGIC_AT = 0x4fffc, REGION_MAGIC = (int)0xc3f81a8e,
+  // A GameCube disc's ID says so here, where a Wii disc's has nothing.
+  GAMECUBE_MAGIC_AT = 0x1c, GAMECUBE_MAGIC = (int)0xc2339f3d, DISC_ID_BYTES = 0x20,
 };
 
 typedef struct {
@@ -43,6 +48,7 @@ static char *sources[MAX_PIECES];
 static int source_count;
 static int has_disc;
 static int is_image;
+static int is_gamecube;
 static Part ticket, tmd, native, shaders;  // In the image, or from the folder's own files.
 static char folder_ticket[NAME_LIMIT], folder_tmd[NAME_LIMIT];
 static uint8_t raw[RAW_BYTES];
@@ -80,13 +86,16 @@ void drive_eject(void) {
   open_file = 0;
   open_source = -1;
   for (int i = 0; i < source_count; i++) free(sources[i]);
-  piece_count = source_count = has_disc = is_image = 0;
+  piece_count = source_count = has_disc = is_image = is_gamecube = 0;
   ticket = tmd = native = shaders = (Part){0, 0};
   memset(raw, 0, sizeof raw);
   folder_ticket[0] = folder_tmd[0] = 0;
 }
 
 int drive_has_disc(void) { return has_disc; }
+int drive_is_gamecube(void) { return has_disc && is_gamecube; }
+
+static int gamecube_id(const uint8_t *id) { return big32(id + GAMECUBE_MAGIC_AT) == (uint32_t)GAMECUBE_MAGIC; }
 
 static int add_source(const char *path) {
   if (source_count == MAX_PIECES) return -1;
@@ -149,18 +158,19 @@ static int add_file(uint64_t offset, const char *path) {
   return source >= 0 && add_piece(offset, 0, (uint64_t)info.st_size, source);
 }
 
-// The table lists entries in order; a directory says where it ends.
-static int walk(const uint8_t *table, size_t table_bytes, const char *names, int index, int end, const char *folder) {
+// The table lists entries in order; a directory says where it ends. Offsets are words on
+// a Wii disc (`shift` 2), bytes on a GameCube disc (0).
+static int walk(const uint8_t *table, size_t table_bytes, const char *names, int index, int end, const char *folder, int shift) {
   while (index < end) {
     if ((size_t)(index + 1) * ENTRY_BYTES > table_bytes) return -1;
     const uint8_t *entry = table + (size_t)index * ENTRY_BYTES;
     char path[NAME_LIMIT];
     snprintf(path, sizeof path, "%s/%s", folder, names + (big32(entry) & 0xffffff));
     if (entry[0]) {
-      index = walk(table, table_bytes, names, index + 1, (int)big32(entry + 8), path);
+      index = walk(table, table_bytes, names, index + 1, (int)big32(entry + 8), path, shift);
       if (index < 0) return -1;
     } else {
-      if (!add_file((uint64_t)big32(entry + 4) << 2, path)) return -1;
+      if (!add_file((uint64_t)big32(entry + 4) << shift, path)) return -1;
       index++;
     }
   }
@@ -175,6 +185,8 @@ static int insert_folder(const char *folder) {
   snprintf(path, sizeof path, "%s/fst.bin", folder);
   uint8_t *table = load(path, &table_bytes);
   int ok = boot && table && boot_bytes >= BOOT_FST_OFFSET + 4 && table_bytes >= ENTRY_BYTES;
+  is_gamecube = ok && gamecube_id(boot);
+  int shift = is_gamecube ? 0 : 2;
   if (ok && big32(boot)) {  // A system title's folder has no game ID: the drive stays empty.
     snprintf(path, sizeof path, "%s/boot.bin", folder);
     ok = add_file(0, path);
@@ -184,13 +196,13 @@ static int insert_folder(const char *folder) {
     snprintf(path, sizeof path, "%s/apploader.img", folder);
     if (!stat(path, &info)) ok = ok && add_file(APPLOADER_AT, path);
     snprintf(path, sizeof path, "%s/main.dol", folder);
-    ok = ok && add_file((uint64_t)big32(boot + BOOT_DOL_OFFSET) << 2, path);
+    ok = ok && add_file((uint64_t)big32(boot + BOOT_DOL_OFFSET) << shift, path);
     snprintf(path, sizeof path, "%s/fst.bin", folder);
-    ok = ok && add_file((uint64_t)big32(boot + BOOT_FST_OFFSET) << 2, path);
+    ok = ok && add_file((uint64_t)big32(boot + BOOT_FST_OFFSET) << shift, path);
     int total = (int)big32(table + 8);
     snprintf(files, sizeof files, "%s/../files", folder);
     ok = ok && total > 0 && (size_t)total * ENTRY_BYTES <= table_bytes &&
-         walk(table, table_bytes, (const char *)table + (size_t)total * ENTRY_BYTES, 1, total, files) >= 0;
+         walk(table, table_bytes, (const char *)table + (size_t)total * ENTRY_BYTES, 1, total, files, shift) >= 0;
     memcpy(raw, boot, HEADER_BYTES);  // Replaced by the disc's own header where the extraction kept it.
     snprintf(path, sizeof path, "%s/../disc/header.bin", folder);
     read_whole_into(path, raw, HEADER_BYTES);
@@ -252,8 +264,13 @@ int drive_insert(const char *path) {
   int ok = S_ISDIR(info.st_mode) ? insert_folder(path) : insert_image(path);
   if (!ok) { drive_eject(); return 0; }
   qsort(pieces, (size_t)piece_count, sizeof *pieces, by_offset);
-  if (has_disc) write_partition_table();
-  if (has_disc) fprintf(stderr, "drive: %s, %d pieces\n", path, piece_count);
+  uint8_t id[DISC_ID_BYTES];
+  if (has_disc && is_image) is_gamecube = drive_read(0, sizeof id, id) && gamecube_id(id);
+  // A GameCube disc is unencrypted throughout, and has no partition table to make up:
+  // its start is read as it is.
+  if (has_disc && is_gamecube && !drive_read(0, RAW_BYTES, raw)) { drive_eject(); return 0; }
+  if (has_disc && !is_gamecube) write_partition_table();
+  if (has_disc) fprintf(stderr, "drive: %s, %s%d pieces\n", path, is_gamecube ? "a GameCube disc, " : "", piece_count);
   return 1;
 }
 

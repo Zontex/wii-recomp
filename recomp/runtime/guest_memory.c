@@ -8,6 +8,12 @@
 // silent. The handler only calls mprotect and stores to a fixed array, both safe in a
 // signal handler. A fault anywhere outside the window is a real crash and goes on to
 // whatever handler was there before.
+//
+// In GameCube mode, the 32 MB from 0x7e000000, which some GameCube games map through
+// page tables of their own, is plain memory from the start, as Dolphin's fake VMEM is
+// when it doesn't model the memory management unit.
+#define VIRTUAL_MEMORY 0x3e000000u  // 0x7e000000, with the window's top two bits cleared.
+#define VIRTUAL_MEMORY_SIZE (32u << 20)
 #ifdef _WIN32
 // Windows: the same, with a vectored exception handler in place of the signal handler.
 // It runs first for every access violation in the program, on the thread that faulted.
@@ -66,6 +72,12 @@ void guest_memory_init(void) {
   log_faults = getenv("WII_RECOMP_GUARD_LOG") != 0;
   watch_start(4096);
   AddVectoredExceptionHandler(1, on_fault);
+}
+
+void guest_memory_open_virtual(void) {
+  if (!VirtualAlloc(GUEST_BASE + VIRTUAL_MEMORY, VIRTUAL_MEMORY_SIZE, MEM_COMMIT, PAGE_READWRITE)) {
+    fprintf(stderr, "guest memory: can't open the virtual memory window (error %lu)\n", GetLastError());
+  }
 }
 
 void guest_memory_report(void) {
@@ -182,6 +194,10 @@ void guest_memory_init(void) {
   sigemptyset(&action.sa_mask);
   sigaction(SIGSEGV, &action, &before_segv);
   sigaction(SIGBUS, &action, &before_bus);  // macOS reports a protected page as SIGBUS.
+}
+
+void guest_memory_open_virtual(void) {
+  if (mprotect(GUEST_BASE + VIRTUAL_MEMORY, VIRTUAL_MEMORY_SIZE, PROT_READ | PROT_WRITE)) perror("guest memory: the virtual memory window");
 }
 
 void guest_memory_report(void) {
